@@ -38,7 +38,7 @@ Changed files:
 
 | File | Change |
 |---|---|
-| `state.js` | Tab names from the session title (`sessionTitle`, `sessionTopic`, keep/rename); the title symbols and ask marks as sub-statuses (`overlays`, `subStatus`, `SUB_GROUPS`, incl. "Waiting on a review"); terminal window sizes. |
+| `state.js` | Tab names from the session title (`sessionTitle`, `sessionTopic`, keep/rename); the title symbols and ask marks as sub-statuses (`overlays`, `subStatus`, `SUB_GROUPS`, incl. "Waiting on a review", and a merge watch still running after "merge" kept as working under "Merging"); terminal window sizes. |
 | `overview.js` | Status groups and sub-groups with waiting counts, Now/About lines, the Since-you-looked strip, the resume banner, pause notices, width fix. |
 | `needs.js` | Asks from replies, Extra round / Merge buttons (check the screen first), MCP input requests, waiting times. |
 | `top.js`, `side.js`, `termbar.js`, `menu.js`, `main.js` | Title tooltips, double-click to keep a name, hover labels, tab menu rows (Keep name, Name from session again, Move to, Summarize, Rewrite About line), the move badge, new views registered, the ticks (asks, about, history, resume, moves, patch check). |
