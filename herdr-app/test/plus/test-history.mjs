@@ -16,7 +16,7 @@ const h = await loadMod("history.js", {
   herdr: { ...st, agents: () => tabs, terminals: () => terms },
   // Live names carry the title's marks in front ("🛠✅ Webshop …"); the record keeps the plain name.
   "./state.js": { agentName: (a) => `🛠✅ ${a.name}`, needReason: (a) => info[a.address]?.need ?? null },
-  "./asks.js": { askOf: (x) => info[x]?.ask ?? null, askLine: (k) => k.line, bgOf: (x) => (info[x]?.ci ? { shells: 1, agents: 0, ci: true } : null), handoffOf: (x) => Boolean(info[x]?.handoff), prOf: (x) => info[x]?.pr ?? null },
+  "./asks.js": { askOf: (x) => info[x]?.ask ?? null, askLine: (k) => k.line, bgOf: (x) => (info[x]?.ci || info[x]?.review ? { shells: 1, agents: 0, ci: Boolean(info[x].ci), review: Boolean(info[x].review) } : null), handoffOf: (x) => Boolean(info[x]?.handoff), prOf: (x) => info[x]?.pr ?? null },
   "./ai.js": { aboutOf: (x) => info[x]?.about ?? null, accountFor: (x) => info[x]?.account ?? null, accountName: (x) => ({ WORK: "Work account (WORK)", HOME: "Personal account (HOME)" })[x] ?? "Unknown account", clockText: (at, n, off) => { const w = new Date(at + off * MIN); const hh = w.getUTCHours(); return `${hh % 12 || 12}:${String(w.getUTCMinutes()).padStart(2, "0")} ${hh < 12 ? "am" : "pm"}`; }, localOffset: () => OFF, agoText: (at, n) => `${Math.floor((n - at) / MIN)} min ago` },
 });
 
@@ -86,5 +86,18 @@ eq("baseline default: local midnight", h.dayStart(T0, OFF), Date.UTC(2026, 10, 1
 // Ring buffer: at most HISTORY_KEEP events, none older than 3 days.
 const many = Array.from({ length: h.HISTORY_KEEP + 50 }, (_, i) => ({ at: now - i, addr: "t1", text: "x" }));
 eq("keep: capped", h.keepEvents([], many, now).length, h.HISTORY_KEEP);
+// s15 (b): waiting on a review (a Codex / Fable review the session waits for in the background).
+eq("snap: review", h.snapOf({ status: "done", review: true }).state, "review");
+eq("snap: ci wins over review", h.snapOf({ status: "done", ci: true, review: true }).state, "ci");
+eq("snap: needs wins over review", h.snapOf({ status: "done", need: "merge", review: true }).state, "needs");
+eq("diff: → review", h.diffSnap(s({ state: "working" }), s({ state: "review" })).map((e) => [e.kind, e.text]), [["review", "waiting on a review"]]);
+eq("diff: review → review is not news", h.diffSnap(s({ state: "review" }), s({ state: "review" })), []);
+eq("diff: review → finished", h.diffSnap(s({ state: "review" }), s({ state: "finished" })).map((e) => e.text), ["finished"]);
+// Through the tick: the background reader's `review` flag becomes the event.
+now += MIN; tabs[0].status = "working"; info.t1 = { account: "WORK" };
+h.historyTick();
+now += MIN; info.t1.review = true;
+h.historyTick();
+eq("tick: review event recorded", h.history().events.at(-1).text, "waiting on a review");
 eq("keep: old dropped", h.keepEvents([{ at: now - 4 * 86_400_000, text: "old" }], [{ at: now, text: "new" }], now).map((e) => e.text), ["new"]);
 process.exit(bad ? 1 : 0);

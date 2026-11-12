@@ -135,4 +135,22 @@ eq("now: last words + helper", nowDoing(`⏺ Bash(git push)\n  ⎿ ok\n\n⏺ Rou
 eq("now: a spinner naming a step wins", nowDoing(`⏺ Update(a.js)\n\n✻ Running the unit tests… (2m · ↓ 1k tokens)\n\n${box()}`).now, "Running the unit tests");
 eq("now: a one-word spinner says nothing", nowDoing(`⏺ Update(a.js)\n\n✽ Perusing… (16s)\n\n${box()}`).now, "editing a.js");
 eq("now: nothing on screen", nowDoing(box()), null);
+
+// s15 live hot-fix (#299 tab, 19:05): Claude Code may print "(disable recaps in /config)" after the reply's last line.
+const HEAD = "  Head ca9448d05d74 · items none · repo acme/app";
+eq("recap hint after the merge marker", pendingAsk(`${HEAD}\n  🔀 Ready to merge #13 — say "merge" (disable recaps in /config)\n\n${box()}`), { kind: "merge", pr: 13 });
+eq("recap hint after the round line", pendingAsk(`  🔁 Extra review round needed #13: round 2 · head abc · repo acme/app (disable recaps in /config)\n\n${box()}`), { kind: "round", pr: 13, round: 2 });
+eq("other words after the marker are not the hint", pendingAsk(`${HEAD}\n  Ready to merge #13 — say "merge" (or not)\n\n${box()}`)?.kind, "reply");
+
+// The workflow switches (config pipeline_asks / worth_considering): off, the pipeline's lines are plain text and an
+// "Also worth considering" list is read like any other paragraph.
+const OFF = { pipeline: false, worth: true };
+eq("pipeline off: round line is no round ask", pendingAsk(`${ROUND}\n\n${box()}`, OFF), null);
+eq("pipeline off: merge marker is read as a reply ask", pendingAsk(`  🔀 Ready to merge #1818 — say "merge"\n\n${box()}`, OFF)?.kind, "reply");
+eq("pipeline off: go migration is read as a reply ask", pendingAsk(`${GO}\n\n${box()}`, OFF)?.kind, "reply");
+eq("pipeline off: a plain question still counts", pendingAsk(`  Want me to open the follow-up PR now?\n\n${box()}`, OFF), { kind: "question", text: "Want me to open the follow-up PR now?" });
+const WC = `  Done.\n\n  Also worth considering\n  - Dark mode: want it next?\n\n${box()}`;
+eq("worth on: suggestion list asks nothing", pendingAsk(WC, { pipeline: true, worth: true }), null);
+eq("worth off: the list's question is an ask", pendingAsk(WC, { pipeline: true, worth: false })?.kind, "question");
+eq("defaults: both on", pendingAsk(`${ROUND}\n\n${box()}`, {}), { kind: "round", pr: 1803, round: 6 });
 process.exit(bad ? 1 : 0);
