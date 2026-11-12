@@ -19,8 +19,11 @@ export const STOPPED_ANSWER = "Flockbook stopped: the screen no longer matched t
 // digits, space and the unshifted symbols. The sidecar refuses any other character before the first key ("the typed
 // answer has characters Herdr cannot type yet … answer in the terminal": flockbook-helper-fixes.patch, can_type).
 const TYPEABLE = /^[A-Za-z0-9 ',.;\/\-=[\]\\`]$/;
-// The characters of the own answers Herdr can't type, each once ("!?é"), or "" when all can go.
-export function untypeable(others = new Map()) {
+// The characters of the own answers Herdr can't type, each once ("!?é"), or "" when all can go. Only a picker's
+// answers are typed key by key: a question answered by a message (`q.delivery` "message", Codex) goes as text, so
+// any character goes (herdr-core question::answer_question sends it before the key check).
+export function untypeable(others = new Map(), q = null) {
+  if (q?.delivery === "message") return "";
   const bad = new Set();
   for (const v of others.values()) for (const ch of String(v ?? "").trim()) if (!TYPEABLE.test(ch)) bad.add(ch);
   return [...bad].join("");
@@ -234,7 +237,7 @@ export class Cards {
       if (this.typingIn !== null) { this.typingIn = null; this.focus?.focus(); }
       cx.notify(); return true;
     }
-    if (answersFor(c.question, en.picks, en.others) && !reviewBlocked(c.question, en.others) && !untypeable(en.others)) { cx.spawn((cx) => this.answer(cx, address)); return true; }
+    if (answersFor(c.question, en.picks, en.others) && !reviewBlocked(c.question, en.others) && !untypeable(en.others, c.question)) { cx.spawn((cx) => this.answer(cx, address)); return true; }
     return false;
   }
 
@@ -283,7 +286,7 @@ export class Cards {
   answer(cx, address) {
     const e = this.entry(address);
     const answers = answersFor(e.card?.question, e.picks, e.others);
-    if (!answers || reviewBlocked(e.card?.question, e.others) || untypeable(e.others)) return;
+    if (!answers || reviewBlocked(e.card?.question, e.others) || untypeable(e.others, e.card?.question)) return;
     return this.act(cx, address, (c) => sidecar.answer(address, c.request, answers), STOPPED_ANSWER);
   }
 
@@ -387,7 +390,7 @@ export class Cards {
         .child(div().text_size(12.5).text_color(t.muted)
           .child(`${c.unread} more question${c.unread === 1 ? " follows" : "s follow"}. Answer them all here, then send.`)));
     } else {
-      const cant = untypeable(e.others);
+      const cant = untypeable(e.others, q);
       // An own answer Herdr can't type blocks like an own answer the review screen can't show.
       const blocked = reviewBlocked(q, e.others) ?? (cant ? "type" : null);
       const ready = Boolean(answersFor(q, e.picks, e.others)) && !blocked;

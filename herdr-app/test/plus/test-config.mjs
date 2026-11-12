@@ -17,6 +17,8 @@ eq("accounts: duplicate marks", V.accounts([WORK, { ...HOME, mark: "WORK" }]), f
 eq("accounts: two on the default folder", V.accounts([HOME, { mark: "B", name: "Other" }]), false);
 eq("accounts: mark with a space", V.accounts([{ ...HOME, mark: "MY HOME" }]), false);
 eq("accounts: mark too long", V.accounts([{ ...HOME, mark: "X".repeat(25) }]), false);
+eq("accounts: mark is a number (Codex 11-12 P2)", V.accounts([{ ...HOME, mark: 123 }]), false);
+eq("accounts: mark is a list", V.accounts([{ ...HOME, mark: ["HOME"] }]), false);
 eq("accounts: no name", V.accounts([{ mark: "HOME" }]), false);
 eq("accounts: blank name", V.accounts([{ mark: "HOME", name: "  " }]), false);
 eq("accounts: config_dir not text", V.accounts([{ ...WORK, config_dir: 5 }]), false);

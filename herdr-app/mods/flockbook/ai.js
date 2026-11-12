@@ -118,12 +118,17 @@ function zoneOffset(name, now) {
 }
 // The time a usage limit resets, as ms since the epoch: "resets 1am (Europe/London)", "resets 3:30pm",
 // "resets Nov 14, 1am (America/New_York)". A time with no date is its next coming; no zone = this Mac's
-// (`localOffsetMin`: minutes ahead of UTC). Null when it can't be read, is past, or is over 8 days off.
+// (`localOffsetMin`: minutes ahead of UTC, or a function of the time for a zone with daylight saving). Null when it
+// can't be read, is past, or is over 8 days off. The zone's offset is the one AT the reset (a daylight-saving change
+// between now and then moves it), not now's.
 export function parseReset(text, now, localOffsetMin) {
   const m = /resets?\s+(?:on\s+)?(?:([a-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b\s*(?:\(([^)]+)\))?/i.exec(String(text ?? ""));
   if (!m) return null;
-  const off = m[6] ? zoneOffset(m[6].trim(), now) : localOffsetMin;
+  const offAt = (t) => (m[6] ? zoneOffset(m[6].trim(), t) : typeof localOffsetMin === "function" ? localOffsetMin(t) : localOffsetMin);
+  const off = offAt(now);
   if (off == null || !Number.isFinite(off)) return null;
+  // A wall-clock time in that zone (ms, its UTC fields) → the instant: twice, so the offset is the reset's own.
+  const instant = (wallMs) => { let t = wallMs - off * 60_000; for (let i = 0; i < 2; i++) { const o = offAt(t); if (o == null || !Number.isFinite(o)) break; t = wallMs - o * 60_000; } return t; };
   let h = Number(m[3]) % 12; if (m[5].toLowerCase() === "pm") h += 12;
   const min = m[4] ? Number(m[4]) : 0;
   const wall = new Date(now + off * 60_000);   // its UTC fields = the wall clock in that zone
@@ -134,9 +139,9 @@ export function parseReset(text, now, localOffsetMin) {
     if (mi < 0) return null;
     mo = mi; d = Number(m[2]);
   }
-  let at = Date.UTC(y, mo, d, h, min) - off * 60_000;
-  if (dated && at < now - 86_400_000) at = Date.UTC(y + 1, mo, d, h, min) - off * 60_000;   // "Jan 2" seen on Dec 30
-  if (!dated && at <= now) at += 86_400_000;
+  let at = instant(Date.UTC(y, mo, d, h, min));
+  if (dated && at < now - 86_400_000) at = instant(Date.UTC(y + 1, mo, d, h, min));   // "Jan 2" seen on Dec 30
+  if (!dated && at <= now) at = instant(Date.UTC(y, mo, d + 1, h, min));
   if (at <= now || at - now > 8 * 86_400_000) return null;
   return at;
 }
@@ -199,6 +204,8 @@ export const SUMMARY_SYSTEM = "You explain a coding agent's work to a busy busin
 
 // This Mac's offset from UTC, in minutes ahead.
 export const localOffset = () => -new Date().getTimezoneOffset();
+// The same at time `t` (ms): a reset after a daylight-saving change has that day's offset (parseReset).
+export const localOffsetAt = (t) => -new Date(t).getTimezoneOffset();
 
 // The account remembered for a tab: for DISPLAY only (hover footer, pause banner, skipping a paused account early).
 // What is sent goes as the account read off the very screen being sent (sendAccount; s13 Codex P1).
@@ -293,7 +300,7 @@ export async function askHaiku(system, prompt, timeout = 60_000, account = null,
   }
   count(account, "fail");
   const f = classifyFailure(r);
-  const until = coolUntil(f.kind, f.raw, Date.now(), off);
+  const until = coolUntil(f.kind, f.raw, Date.now(), localOffsetAt);
   if (until) setShared(KEY_COOL, { ...(shared(KEY_COOL) ?? {}), [account]: { until, kind: f.kind, message: f.raw.slice(0, 200), at: Date.now() } });
   return { error: failureText(f.kind, who, until ?? 0, Date.now(), off, f.raw), kind: f.kind, ...(until ? { until } : {}) };
 }

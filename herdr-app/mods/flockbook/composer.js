@@ -498,7 +498,7 @@ export class Composer {
           const r2 = await hc(["read", a, "--json"]).catch(() => null);
           let screen = null; try { screen = JSON.parse(r2?.stdout ?? "")?.text; } catch { screen = null; }
           const w = r2?.code === 0 ? suggestedSlash(screen) : null;
-          if (w && this.address === a) this.note = { text: SUGGESTION_NOTE(w), bad: true, anyway: { address: a, text, files } };
+          if (w && this.address === a) this.note = { text: SUGGESTION_NOTE(w), bad: true, anyway: { address: a, text, files, seen: this.seen?.(a) ?? null } };
         }
       } else {
         // The owner answered: its ask leaves Needs you now, not at the next tick.
@@ -510,14 +510,22 @@ export class Composer {
 
   // "Send anyway" after a box_not_empty that looked like a suggestion: ctrl+e ctrl+u clears the box's line (a typed
   // "/word" goes; a dim suggestion is untouched), the screen is read again, and only a box down to one line gets the
-  // message (hc send pastes it over any dim text and presses Enter). Only for the same agent.
+  // message (hc send pastes it over any dim text and presses Enter). Only for the same agent AND conversation: hc
+  // send has no such check, so the terminal's log is looked up again before the box is cleared and before the send
+  // (a /clear, /resume or another agent in the same terminal since the refusal → nothing is typed).
   async sendAnyway(cx) {
     const n = this.note?.anyway, a = this.address;
     if (!n || this.sending || n.address !== a) return;
     this.sending = true; this.note = null;
     cx.notify();
+    const moved = async () => {
+      if (sidecar.sameConversation(n.seen, await sidecar.currentLog(a))) return false;
+      this.note = { text: "Not sent: this terminal is in another conversation now (a /clear or /resume?). Check the chat, then send again.", bad: true };
+      return true;
+    };
     try {
       const fail = (e) => ({ code: -1, stdout: "", stderr: String(e) });
+      if (await moved()) return;
       const k = await hc(["keys", a, "ctrl+e", "ctrl+u"]).catch(fail);
       await new Promise((res) => cx.timer.after(300, () => res()));
       const s = await hc(["read", a, "--json"]).catch(fail);
@@ -526,6 +534,7 @@ export class Composer {
         this.note = { text: "Not sent: the terminal's box still has text in it. Clear it in the terminal (ctrl-`), then send again.", bad: true };
         return;
       }
+      if (await moved()) return;
       const r = await hc(["send", a, withFiles(n.text, n.files), "--json"]).catch(fail);
       let o = null; try { o = JSON.parse(r.stdout); } catch { o = null; }
       if (r.code === 0 && o && o.started !== false) {

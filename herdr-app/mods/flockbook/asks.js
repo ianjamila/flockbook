@@ -534,13 +534,13 @@ export function askMark(ask) {
     title: `Asks you to say ${(ask.words ?? []).map((w) => `“${w}”`).join(" or ")}`, hint: "Its reply ends waiting for your answer." };
   return null;
 }
-// Whether `screen` still ends with the same ask (kind, PR and round): checked right before a button sends the
-// owner's words, so a round already granted, or a newer one, gets nothing.
+// Whether `screen` still ends with the same ask (kind, every PR it names, and round): checked right before a button
+// sends the owner's words, so a round already granted, a newer one, or a merge that now names more PRs gets nothing.
 // "#1864, #1867" for a merge of two, else "#1864".
 export function prList(ask) { return (ask?.prs ?? [ask?.pr]).map((n) => `#${n}`).join(", "); }
 export function stillAsks(screen, ask) {
   const now = pendingAsk(screen);
-  return Boolean(now && ask && now.kind === ask.kind && now.pr === ask.pr && (now.round ?? null) === (ask.round ?? null));
+  return Boolean(now && ask && now.kind === ask.kind && now.pr === ask.pr && prList(now) === prList(ask) && (now.round ?? null) === (ask.round ?? null));
 }
 export function askDetail(ask) {
   if (ask?.kind === "reply") return `Its turn ended waiting for your answer: “${ask.text}” Reply in its chat.`;

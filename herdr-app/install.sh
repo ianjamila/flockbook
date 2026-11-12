@@ -81,9 +81,15 @@ copy_only() {
   fi
   stamp="$(date +%Y%m%d-%H%M%S)-$$"
   backup="$app_home/flockbook/backups/$stamp"
-  mkdir -p "$backup"
-  [ -d "$app_home/mods/flockbook" ] && cp -R "$app_home/mods/flockbook" "$backup/mod"
-  [ -f "$app_home/layouts/flockbook.json" ] && cp "$app_home/layouts/flockbook.json" "$backup/"
+  mkdir -p "$backup/themes" || die "could not make the backup folder $backup. Nothing was copied."
+  # Everything that gets replaced is backed up first (the mod, the layout, each Flockbook theme of the same name);
+  # a backup that fails stops before anything is overwritten.
+  if [ -d "$app_home/mods/flockbook" ]; then cp -R "$app_home/mods/flockbook" "$backup/mod" || die "could not back up the mod. Nothing was copied."; fi
+  if [ -f "$app_home/layouts/flockbook.json" ]; then cp "$app_home/layouts/flockbook.json" "$backup/" || die "could not back up the layout. Nothing was copied."; fi
+  for f in "$here"/themes/flockbook*.json; do
+    old="$app_home/themes/$(basename "$f")"
+    if [ -f "$old" ]; then cp "$old" "$backup/themes/" || die "could not back up $old. Nothing was copied."; fi
+  done
   mkdir -p "$app_home/mods" "$app_home/layouts" "$app_home/themes"
   rm -rf "$app_home/mods/flockbook.new"
   cp -R "$here/mods/flockbook" "$app_home/mods/flockbook.new"
@@ -129,6 +135,12 @@ else
 fi
 if [ -z "$exe" ] || [ ! -x "$exe" ]; then
   if [ "$copy" = yes ]; then copy_only; put_extras; switch_layout; exit 0; fi
+  # A dry run builds nothing (a build writes xplat/target and may download crates): it says what would happen.
+  if [ "$dry" = yes ] && [ "$build" != no ] && [ -f "$here/../xplat/Cargo.toml" ]; then
+    echo "Dry run: would build the helper from this checkout (cargo build --release -p flockbook-modfeed$([ "$build" = ask ] && echo ", after asking")),"
+    echo "then install it with the mod, layout, themes and keys into ${app_home:-the Herdr app home}. Nothing built or written."
+    exit 0
+  fi
   # A git checkout: build the helper when asked, or when a person at a terminal says yes.
   if [ "$build" = ask ] && [ -t 0 ] && [ -t 1 ] && [ -f "$here/../xplat/Cargo.toml" ]; then
     printf "No helper here (this is a git checkout). Build it from this checkout now? It needs Rust's cargo. [Y/n] "

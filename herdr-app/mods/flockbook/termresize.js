@@ -215,7 +215,8 @@ export class TermResize {
     // The size goes to the top bar's command loop ("flockbook.term-rect:…", top.js command), which outlives this
     // overlay: work spawned here dies when it closes (11-12 tries 5–6: "up → apply" logged, config unchanged;
     // the same box through the command saved at once).
-    if (r) run(`flockbook.term-rect:${r.x},${r.y},${r.w},${r.h}`);
+    // "|<terminal>": the window this grip belongs to, so the command resizes that one, not whichever agent is selected.
+    if (r) run(`flockbook.term-rect:${r.x},${r.y},${r.w},${r.h}${p.terminal ? `|${p.terminal}` : ""}`);
     if (p.overlay) closeOverlay(p.overlay);
   }
 

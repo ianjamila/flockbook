@@ -6,7 +6,7 @@ import { h_flex } from "gpui-base";
 import { theme, layout, window, settings, openOverlay, run, setAgentOrder, nextCommand, shared, setShared, props } from "herdr";
 import { openMenu, tabItems, openMoveMenu } from "./menu.js";
 import { spaceAgents, spaceTabs, activeTab, currentAgent, currentTerminal, tabLabel, plainLabel, sessionTitle, subStatus, withAsk, keepOrRename, screenFor, showTab, closeTab, openTerminal, showNeeds, icon, tabAgents, shownScreen,
-  SPIN_MS, FADE, sidebarShown, toggleSidebar, loadSidebar, showScreen, showOverview, showSettings, watchEdge, noteWindowHeight, applyTermRect, agentName, tabStatus, tablistShown, toggleTablist, watchGrace } from "./state.js";
+  SPIN_MS, FADE, sidebarShown, toggleSidebar, loadSidebar, showScreen, showOverview, showSettings, watchEdge, noteWindowHeight, applyTermRect, termShown, agentName, tabStatus, tablistShown, toggleTablist, watchGrace } from "./state.js";
 import { loadConfig, pollUpdate, updateDot, stepTextSize } from "./config.js";
 import { checkHelperPatch } from "./patchcheck.js";
 import { asksTick, TICK_MS as ASKS_MS } from "./asks.js";
@@ -55,10 +55,15 @@ const KEY_CMD = "flockbook.command";   // the last key command and when, so two 
 export function command(c) {
   const tabs = spaceTabs(), tab = activeTab(), i = tabs.findIndex((x) => x.id === tab?.id);
   if (c === "terminal") return openTerminal(currentTerminal());
-  // "term-rect:x,y,w,h": the terminal window to that box, as a drag on its edges leaves it (a test hook, and a key can use it).
+  // "term-rect:x,y,w,h[|terminal]": the terminal window to that box, as a drag on its edges leaves it (a test hook,
+  // and a key can use it). The grip names its window's terminal; without one, the open window's, else the selected agent's.
   if (typeof c === "string" && c.startsWith("term-rect:")) {
-    const [x, y, w, h] = c.slice(10).split(",").map(Number), a = currentTerminal();
-    if (a && [x, y, w, h].every(Number.isFinite)) return applyTermRect({ x, y, w: Math.round(w), h: Math.round(h) }, a.address, agentName(a), true);
+    const [box, named] = c.slice(10).split("|");
+    const [x, y, w, h] = box.split(",").map(Number), shown = termShown();
+    const cur = named || shown ? null : currentTerminal();
+    const address = named || shown?.address || cur?.address;
+    const name = shown?.address === address ? shown.name : cur ? agentName(cur) : address;
+    if (address && [x, y, w, h].every(Number.isFinite)) return applyTermRect({ x, y, w: Math.round(w), h: Math.round(h) }, address, name, true);
     return;
   }
   // The tab menu's "Move to …": "move-to:<terminal>:<space id>" (menu.js).

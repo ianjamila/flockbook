@@ -16,6 +16,10 @@ eq("inner new line", untypeable(m("a\nb")), "\n");
 eq("edge spaces trimmed", untypeable(m("  ok  ")), "");
 eq("colon quote paren", untypeable(m('x: "y" (z)')), ':"()');
 eq("empty map", untypeable(new Map()), "");
+// Codex 11-12 P2: a question answered by a message (Codex) goes as text, so nothing is untypeable there.
+eq("message delivery: any character", untypeable(m("yes!", "café"), { delivery: "message" }), "");
+eq("picker delivery: still checked", untypeable(m("yes!"), { delivery: "picker" }), "!");
+eq("no question given: checked", untypeable(m("yes!"), null), "!");
 eq("message names chars", UNTYPEABLE("!\n").startsWith("Herdr can't type “!” a new line yet"), true);
 eq("helper refusal seen", cannotType("the typed answer has characters Herdr cannot type yet (!): answer in the terminal"), true);
 eq("other note", cannotType("It changed on screen."), false);

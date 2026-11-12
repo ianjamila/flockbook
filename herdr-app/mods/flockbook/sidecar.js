@@ -89,6 +89,21 @@ export const agentChanged = (done) => done?.result === "changed" && /another age
 export const conversationChanged = (done) => done?.result === "changed" && /conversation/i.test(done?.message ?? "");
 export const NEW_CONVERSATION = "This terminal is in a new conversation now (after a /clear?). The chat shows it now: press Send again.";
 export const CONVERSATION_PENDING = "This terminal's conversation changed (a /clear?) and the chat has not caught up yet. Wait a few seconds, then press Send again.";
+// The agent and log a terminal has NOW ({ kind, path }), or null when it can't be told: its cached log is marked
+// stale, `status` looks it up again and writes the cache, and the entry is read back. For sends that skip the
+// sidecar's own agent / conversation check (composer.js sendAnyway).
+export async function currentLog(terminal) {
+  try {
+    await recheckLog(terminal);
+    await status(terminal);
+    const text = await readTextFile(cachePath());
+    const e = text ? JSON.parse(text)?.entries?.[terminal] : null;
+    return e && typeof e.kind === "string" ? { kind: e.kind, path: typeof e.path === "string" ? e.path : null } : null;
+  } catch { return null; }
+}
+// Whether `now` (currentLog) is still what the chat showed (`seen`: { agent, path }); nothing seen = nothing to compare.
+export const sameConversation = (seen, now) =>
+  !seen || (!seen.agent && !seen.path) || Boolean(now && (!seen.agent || now.kind === seen.agent) && (!seen.path || now.path === seen.path));
 // Marks the terminal's cached log as checked long ago, so the next `feed` looks for its log again. Only when the
 // file did not change meanwhile (the sidecar may be writing it); false when nothing was marked.
 export async function recheckLog(terminal) {

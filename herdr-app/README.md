@@ -77,15 +77,21 @@ file by file, is in [`CHANGELOG-plus.md`](CHANGELOG-plus.md).
   for you, "at a glance", in plain English.
 
 **Chat**
-- **Send anyway** when Claude Code shows a dim "/" suggestion in its box, so a message isn't swallowed by it.
+- **Send anyway** when Claude Code shows a dim "/" suggestion in its box, so a message isn't swallowed by it
+  (only into the same conversation: after a `/clear` or `/resume` meanwhile it types nothing).
 - After `/clear`, a send goes to the new conversation (the chat follows it).
-- Answers Claude Code can't take typed (some symbols) say so and offer the terminal; drafts are kept per agent.
+- Answers Claude Code can't take typed (some symbols) say so and offer the terminal (a Codex question answered
+  by a message takes any text); drafts are kept per agent.
 - Selected text in the reply and answer boxes is highlighted in the theme's selection blue.
 - Optional: each session's own **status line** in the chat header (see "Status line" below).
 
 **Terminal window**
 - Drag its right or bottom edge or corner to any size (kept), or pick Small / Default / Large / Full in
   Settings or with the − + buttons on its title bar; double-click the bar for full size.
+
+**Keys** (in this build's `keys.json`, installed with the helper)
+- ⌥⌘B shows or hides the tab list; ⌘⇧K keeps the shown tab's topic as its name; ⌘⇧M opens its
+  **Move to …** rows. `--copy-only` keeps your `keys.json`: add these three there by hand if you want them.
 
 **Workspaces** (off until set up, see Settings)
 - The tab menu's **Move to <workspace>** moves a session's tab without switching your view.

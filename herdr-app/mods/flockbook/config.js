@@ -28,7 +28,7 @@ const pattern = (v) => { if (v == null) return true; if (!text(v, 200)) return f
 export const VALID = {
   terminal_px: (v) => Array.isArray(v) && v.length === 2 && v.every((n) => Number.isInteger(n) && n >= 100 && n <= 20000),
   accounts: (v) => Array.isArray(v) && v.length >= 1 && v.length <= 8
-    && v.every((a) => a && typeof a === "object" && /^[\w.@-]{1,24}$/.test(a.mark ?? "") && text(a.name, 60) && (a.config_dir == null || text(a.config_dir, 300)))
+    && v.every((a) => a && typeof a === "object" && typeof a.mark === "string" && /^[\w.@-]{1,24}$/.test(a.mark) && text(a.name, 60) && (a.config_dir == null || text(a.config_dir, 300)))
     && new Set(v.map((a) => a.mark)).size === v.length && v.filter((a) => a.config_dir == null).length <= 1,
   projects: (v) => Array.isArray(v) && v.length <= 16
     && v.every((p) => p && typeof p === "object" && text(p.workspace, 60) && text(p.folder, 300) && pattern(p.title) && (p.suggest_only == null || typeof p.suggest_only === "boolean")),

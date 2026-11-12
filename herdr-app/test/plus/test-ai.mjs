@@ -62,6 +62,18 @@ eq("reset 1am Singapore = next 1am", parseReset("resets 1am (Asia/Singapore)", n
 eq("reset with a date", parseReset("resets Nov 14, 1am (Asia/Singapore)", now, 480), Date.UTC(2026, 10, 13, 17, 0));
 eq("reset later today, local zone", parseReset("resets 3:30pm", now, 480), Date.UTC(2026, 10, 12, 7, 30));
 eq("reset time passed today = tomorrow", parseReset("resets 2pm", now, 480), Date.UTC(2026, 10, 13, 6, 0));
+// Codex 11-12 P2: the offset is the reset's own, not now's. New York leaves daylight saving on Sun Nov 1, 2026 (2am).
+const oct31 = Date.UTC(2026, 9, 31, 16, 0);   // Sat Oct 31, 12 noon New York (EDT, UTC-4)
+eq("DST end: Nov 1, 3am New York = 08:00Z (EST)", parseReset("resets Nov 1, 3am (America/New_York)", oct31, 0), Date.UTC(2026, 10, 1, 8, 0));
+eq("DST end: no date, 3am New York tomorrow", parseReset("resets 3am (America/New_York)", oct31, 0), Date.UTC(2026, 10, 1, 8, 0));
+eq("before the change: 1am Nov 1 still EDT = 05:00Z", parseReset("resets Nov 1, 1am (America/New_York)", oct31, 0), Date.UTC(2026, 10, 1, 5, 0));
+// Spring forward (Sun Mar 8, 2026, 2am → 3am): 4am that day is EDT.
+const mar7 = Date.UTC(2026, 2, 7, 17, 0);   // Sat Mar 7, 12 noon EST
+eq("DST start: Mar 8, 4am New York = 08:00Z (EDT)", parseReset("resets Mar 8, 4am (America/New_York)", mar7, 0), Date.UTC(2026, 2, 8, 8, 0));
+// The Mac's own zone with daylight saving: the offset as a function of time.
+const ny = (t) => (t >= Date.UTC(2026, 10, 1, 6, 0) ? -300 : -240);
+eq("local zone as a function: 3am after the change", parseReset("resets 3am", oct31, ny), Date.UTC(2026, 10, 1, 8, 0));
+eq("local zone as a number still works", parseReset("resets 3am", oct31, -240), Date.UTC(2026, 10, 1, 7, 0));
 eq("reset in another machine zone", parseReset("resets 1am (UTC)", now, -480), Date.UTC(2026, 10, 13, 1, 0));
 eq("any IANA zone (Intl): New York 1am", parseReset("resets 1am (America/New_York)", now, 480), Date.UTC(2026, 10, 13, 6, 0));
 eq("any IANA zone (Intl): half-hour zone", parseReset("resets 9am (Asia/Kolkata)", now, 480), Date.UTC(2026, 10, 12, 3, 30) + 86_400_000);

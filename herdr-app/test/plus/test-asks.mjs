@@ -84,8 +84,8 @@ eq("log keeps the newest 500 (s13)", keepLog(Array.from({ length: 500 }, (_, i) 
 eq("log ends with the new line", keepLog("a\nb\n", ["c"]), "a\nb\nc\n");
 eq("empty log", keepLog(null, ["c"]), "c\n");
 // s9: the Needs you "Extra round" button sends only while the screen still ends with that same round's ask.
-const si = src.indexOf("export function stillAsks"), sj = src.indexOf("export function askDetail");
-const stillAsks = new Function("pendingAsk", src.slice(si, sj).replace("export ", "") + "; return stillAsks;")(pendingAsk);
+const si = src.indexOf("export function prList"), sj = src.indexOf("export function askDetail");
+const stillAsks = new Function("pendingAsk", src.slice(si, sj).replaceAll("export ", "") + "; return stillAsks;")(pendingAsk);
 const ASK6 = { kind: "round", pr: 1803, round: 6 };
 eq("stillAsks: same round", stillAsks(`${ROUND}\n\n${box()}`, ASK6), true);
 eq("stillAsks: newer round", stillAsks(`${ROUND}\n\n${box()}`, { ...ASK6, round: 5 }), false);
@@ -97,6 +97,9 @@ const TWO = '  🔀 Ready to merge #1864, #1867 — say "merge"';
 eq("two-PR merge", pendingAsk(`${TWO}\n\n${box()}`), { kind: "merge", pr: 1864, prs: [1864, 1867] });
 eq("one-PR merge unchanged", pendingAsk(`  🔀 Ready to merge #5 — say "merge"\n\n${box()}`), { kind: "merge", pr: 5 });
 eq("stillAsks two-PR merge", stillAsks(`${TWO}\n\n${box()}`, { kind: "merge", pr: 1864, prs: [1864, 1867] }), true);
+// Codex 11-12 P1: the button showed "#1864" but the screen now asks to merge "#1864, #1867" → nothing sent.
+eq("stillAsks: merge now names more PRs", stillAsks(`${TWO}\n\n${box()}`, { kind: "merge", pr: 1864 }), false);
+eq("stillAsks: merge now names fewer PRs", stillAsks(`  🔀 Ready to merge #1864 — say "merge"\n\n${box()}`, { kind: "merge", pr: 1864, prs: [1864, 1867] }), false);
 eq("stillAsks merge after a round ask replaced it", stillAsks(`${ROUND}\n\n${box()}`, { kind: "merge", pr: 1803 }), false);
 const pl = src.indexOf("export function prList"), pe = src.indexOf("export function stillAsks");
 const prList = new Function(src.slice(pl, pe).replace("export ", "") + "; return prList;")();

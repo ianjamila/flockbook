@@ -52,7 +52,8 @@ Changed files:
 |---|---|
 | `layouts/flockbook.json` | A top bar per screen, the tab-list column, the terminal grips. |
 | `themes/flockbook.json`, `themes/flockbook-light.json` | VS Code–style palette; a visible `selection` colour. |
-| `install.sh` | From a git checkout: builds the helper (`--build-helper`, asks in a terminal) or copies over an existing install (`--copy-only`); switches to the layout (`--no-layout`); copies the status-line wrapper. The release-zip path is unchanged. |
+| `install.sh` | From a git checkout: builds the helper (`--build-helper`, asks in a terminal) or copies over an existing install (`--copy-only`, which backs up the mod, layout and each theme it replaces first and stops if a backup fails); switches to the layout (`--no-layout`); copies the status-line wrapper. `--dry-run` never builds. The release-zip path is unchanged. |
+| `keys.json` | ⌥⌘B tab list, ⌘⇧K keep the tab's name, ⌘⇧M its Move to … rows. |
 | `extras/` | `flockbook-statusline` (status-line wrapper) and `enable-statusline.mjs` (turns it on / off in a Claude Code settings.json). |
 | `test/stub/ui.mjs` | Fakes for `HoverCard`, `ScrollHandle`, `set_theme`. |
 | `test/*.test.mjs` | Upstream tests updated where this build changes behaviour on purpose. |

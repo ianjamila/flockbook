@@ -401,6 +401,9 @@ export function showSpace(id) {
 // The agent's own terminal in a floating window, for anything the chat cannot do. A title bar
 // (view "termbar") closes it, because Esc goes to the terminal. Opening it again replaces it.
 export const KEY_TERM = "flockbook.terminal";   // the open terminal window's overlay id
+const KEY_TERM_FOR = "flockbook.terminal.for";  // { address, name }: whose terminal that window shows
+// The terminal the open terminal window shows ({ address, name }), or null when none is open.
+export const termShown = () => (shared(KEY_TERM) ? shared(KEY_TERM_FOR) ?? null : null);
 
 // Herdr's windows have no resize edges of their own, so the window draws grips on its edges
 // (termresize.js): a drag there saves the size as terminal_size "custom" + terminal_px. The title bar's
@@ -418,6 +421,7 @@ export function termDims(size, px) {
 // `at`: the top left. Herdr uses it only for a window it has no spot for yet (one never dropped);
 // else the window opens where it was last put (tested 11-11).
 function terminalWindow(address, name, at = null) {
+  setShared(KEY_TERM_FOR, { address, name });
   const [width, height] = termDims(setting("terminal_size"), setting("terminal_px"));
   const grip = (edge) => ({ mod: "flockbook", props: { view: "termgrip", edge, terminal: address, name } });
   const inner = { type: "column", resizable: false, children: [
@@ -482,8 +486,10 @@ export async function resizeTerminal(address, name, how) {
   if (shared(KEY_TERM)) setShared(KEY_TERM, terminalWindow(address, name));
 }
 // A drag on the window's edge let go: save the size and reopen the window at it (`r` {x, y, w, h}),
-// in its place (`at` keeps a window that was never dropped from re-centering).
+// in its place (`at` keeps a window that was never dropped from re-centering). Only the window that was dragged is
+// reopened: when it shows another terminal now (closed and opened for another agent meanwhile), the size is saved
+// and that window is left alone.
 export async function applyTermRect(r, address, name, moved) {
   await setSettings({ terminal_size: "custom", terminal_px: [r.w, r.h] });
-  if (shared(KEY_TERM)) setShared(KEY_TERM, terminalWindow(address, name, moved ? { x: r.x, y: r.y } : null));
+  if (termShown()?.address === address) setShared(KEY_TERM, terminalWindow(address, name, moved ? { x: r.x, y: r.y } : null));
 }
