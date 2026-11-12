@@ -1,0 +1,22 @@
+// Tests for cards.js untypeable/UNTYPEABLE/cannotType (the card's copy of the helper's can_type rule).
+import { MOD } from "./paths.mjs";
+import fs from "node:fs";
+const src = fs.readFileSync(MOD + "cards.js", "utf8");
+const a = src.indexOf("const TYPEABLE"), b = src.indexOf("const reviewMark");
+const { untypeable, UNTYPEABLE, cannotType } = new Function(src.slice(a, b).replaceAll("export ", "") + "; return { untypeable, UNTYPEABLE, cannotType };")();
+let bad = 0;
+const eq = (n, got, want) => { const ok = got === want; if (!ok) bad++; console.log(ok ? "PASS" : "FAIL", n, ok ? "" : `→ ${JSON.stringify(got)}`); };
+const m = (...v) => new Map(v.map((x, i) => [i, x]));
+eq("plain words", untypeable(m("Olives Please")), "");
+eq("all allowed symbols", untypeable(m("a1 ',.;/-=[]\\`")), "");
+eq("! and ?", untypeable(m("yes!", "why?")), "!?");
+eq("each once", untypeable(m("a!b!")), "!");
+eq("accent", untypeable(m("café")), "é");
+eq("inner new line", untypeable(m("a\nb")), "\n");
+eq("edge spaces trimmed", untypeable(m("  ok  ")), "");
+eq("colon quote paren", untypeable(m('x: "y" (z)')), ':"()');
+eq("empty map", untypeable(new Map()), "");
+eq("message names chars", UNTYPEABLE("!\n").startsWith("Herdr can't type “!” a new line yet"), true);
+eq("helper refusal seen", cannotType("the typed answer has characters Herdr cannot type yet (!): answer in the terminal"), true);
+eq("other note", cannotType("It changed on screen."), false);
+process.exit(bad ? 1 : 0);

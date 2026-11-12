@@ -1,0 +1,28 @@
+// Tests for patchcheck.js due/verdict (the "update replaced the patched helper" warning).
+import { MOD } from "./paths.mjs";
+import fs from "node:fs";
+const src = fs.readFileSync(MOD + "patchcheck.js", "utf8");
+const a = src.indexOf("const EVERY_MS"), b = src.indexOf("export async function checkHelperPatch");
+const { due, verdict, patchedFrom, missingFrom, MARKS } = new Function(src.slice(a, b).replaceAll("export ", "") + "; return { due, verdict, patchedFrom, missingFrom, MARKS };")();
+let bad = 0;
+const eq = (n, got, want) => { const ok = got === want; if (!ok) bad++; console.log(ok ? "PASS" : "FAIL", n, ok ? "" : `→ ${got}`); };
+const now = 1_000_000_000;
+eq("first check due", due(undefined, now), true);
+eq("5 min later not due", due({ at: now - 5 * 60_000 }, now), false);
+eq("10 min later due", due({ at: now - 10 * 60_000 }, now), true);
+eq("patched: no warning", verdict({}, "4946512 1762850100", true), null);
+eq("official: warn", verdict({}, "4800000 1762900000", false), "warn");
+eq("same file warned once", verdict({ warned: "4800000 1762900000" }, "4800000 1762900000", false), null);
+eq("another official file warns again", verdict({ warned: "4800000 1762900000" }, "4900000 1763000000", false), "warn");
+eq("unreadable: no verdict", verdict({}, "1 2", null), null);
+eq("no stat: no warning", verdict({}, null, false), null);
+eq("two marks", MARKS.length, 2);
+eq("both marks found → patched", patchedFrom([0, 0]), true);
+eq("PR 2 mark missing (PR #12-only build) → not patched", patchedFrom([0, 1]), false);
+eq("both missing (official) → not patched", patchedFrom([1, 1]), false);
+eq("one unreadable → no verdict", patchedFrom([0, 2]), null);
+eq("no codes → no verdict", patchedFrom([]), null);
+eq("missing names the PR 2 fix", missingFrom([0, 1]).join("|"), MARKS[1].fix);
+eq("missing names both", missingFrom([1, 1]).length, 2);
+eq("PR #12-only helper warns", verdict({}, "4800000 1762900000", patchedFrom([0, 1])), "warn");
+process.exit(bad ? 1 : 0);

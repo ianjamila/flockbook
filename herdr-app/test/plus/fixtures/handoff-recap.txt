@@ -1,0 +1,50 @@
+  ▎ approvals existed, then use it to land Webshop #1448 and #1533.
+  ▎ Read first: plan ~/code/tools/docs/plans/2026-11-12-past-round-grants.md (rev 3;
+  ▎ untracked in the main checkout, so move it into the build worktree) and memory
+  ▎ project_pr1448_followups (webshop), section "HAND-OFF 2026-11-12 s2".
+  ▎ Decisions (11-12): a distinct past-round line and past-round record kind (an additive hook
+  ▎ change); the published-history fix in the same tools PR (the baseline file,
+  ▎ historyPreserved in publishTriage, published-history checks in codex-review). The plan reviews are
+  ▎ done: two Codex passes and one more are already folded in, so no more plan review. Build it with the review
+  ▎ skill in tools. Open tools PRs #266 and #269 touch two grants files; they belong
+  ▎ to other sessions, so rebase around them and don't edit them.
+  ▎ Then in the webshop repo:
+  ▎ (1) #1533 (wt .worktrees/agent-unit-test-no-network, HEAD 0b9a3a3c4, R7 fixes marked): request
+  ▎ the round → extra round granted → codex-review --round 8 --base 5b349f30c --head 0b9a3a3c4
+  ▎ at medium → arbiter → fixes.
+  ▎ (2) After the tools fix is installed: past-round approvals for #1448 R5 and R6 and #1533 R5 →
+  ▎ review-complete → ready / ci-wait → migration go via a question (#1448: 20261010110000 right
+  ▎ before merge; #1533: 20261019121500…122200 in order) → merge dry run
+  ▎ closing lines.
+  ▎ #1448 is at wt .worktrees/agent-streaming-followups, HEAD e591e8d6c, review clean. The merge queue
+  ▎ is on. Also: suggest landing #1502 (closes #1493 and #1850), and consider the 45-day transcript limit
+  ▎ on proving grants. Remove eligible worktrees at the end.
+  ▎ Constraints: prod read-only; never push the database by hand; never stop shared stacks; the owner applies
+  ▎ migrations and merges. Effort high (opus); use Sonnet for sub-agents.
+
+✻ Brewed for 2h 26m 48s · done 1:36 PM
+
+※ recap: Goal: land Webshop PRs #1448 and #1533; both are reviewed and fixed but blocked by a pipeline
+  bug with old review rounds. Next: start a fresh session with my re-entry prompt to build the planned
+  pipeline fix. (disable recaps in /config)
+  ⎿  Referenced file webshop/project_pr1448_followups.md
+  ⎿  Read ../code/tools/docs/plans/2026-11-12-past-round-grants.md (113 lines)
+  ⎿  Read ../../../tmp/review-aaaaaa/review.md (71
+     lines)
+  ⎿  Read ../../../tmp/scratch/plan/context-recheck.md (17 lines)
+  ⎿  Read ../../../tmp/review-bbbbbb/review.md (71
+     lines)
+  ⎿  Skills restored (review)
+
+⏺ Compacted while idle, before the prompt cache expired · turn off with "idleCompaction": false in
+  settings.json
+Good moment to hand off now (context past 200K): type /handoff                                        [-]
+(Tab, then Enter takes the suggestion)
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ /handoff
+──────────────────────────────────────────────────────────────────────────────────────────────────────────
+  you:\~/notes | WORK work@example.com | pipeline 0.1.0+4ab8df4
+  Opus 5.5 | effort:high | ctx:0% ░░░░░░░░░░ | 7d:8% ↻1d12h | cache:cold
+  ⎇ main | +399/-176 | ~$28.74
+  ⏵⏵ auto mode on (shift+tab to cycle)

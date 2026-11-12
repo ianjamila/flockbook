@@ -3,11 +3,14 @@ import assert from "node:assert/strict";
 import { fake, log, reset } from "./stub/herdr.mjs";
 import { textOf, byId } from "./stub/ui.mjs";
 import { fakeCx } from "./fake-cx.mjs";
-import { agent, space } from "./fixtures.mjs";
+import { agent, space, passBlockGrace } from "./fixtures.mjs";
 import { TopView } from "../mods/flockbook/top.js";
 import { KEY_AGENT } from "../mods/flockbook/state.js";
 
 const tab = (id, index, extra = {}) => ({ id, index, name: String(index), named: false, active: false, status: null, panes: 1, zoomed: false, settled: false, settled_at: null, changed_at: null, working_since: null, ...extra });
+
+// plus build: the terminal window's column (bar + terminal) sits inside a frame of resize grips (termresize.js gripFrame): top band, middle row [grip, column, grip], bottom band.
+const termInner = (o) => o.layout.children[1].children[1];
 
 beforeEach(() => {
   reset();
@@ -16,6 +19,18 @@ beforeEach(() => {
   fake.agents = [agent("t1", "working", { tab_name: "api" }), agent("t2", "done"), agent("t3", "blocked", { codex: true, program: { key: "codex", name: "Codex", icon: "icons/codex.svg", tint: true, agent: true } }),
     agent("t9", "idle", { space: "sp2" })];
   fake.layout = { id: "root", traffic_lights: [18, 22], children: [{ id: "sidebar", hidden: true }, { id: "screen", active: "chat" }] };
+  // plus build: the tab list on the right (tabs.js) is on by default and then the bar shows only the shown tab's name, so these tests turn it off to look at the pills.
+  fake.shared["flockbook.tablist"] = false;
+  passBlockGrace();   // plus build: t3 is blocked past the grace
+});
+
+// plus build: with the tab list on the right showing, the bar holds only the shown tab's name (no pills, no close button).
+test("tab list on: the bar shows just the shown tab's name, and the list button", () => {
+  fake.shared["flockbook.tablist"] = true;
+  const el = new TopView(fakeCx()).render(fakeCx());
+  assert.equal(byId(el, "tab-tb-t2"), null, "no pills");
+  assert.match(textOf(byId(el, "tab-title")), /api/);
+  assert.ok(byId(el, "tablist"));
 });
 
 test("one tab per tab of the shown space: named, else its agent, else its number", () => {
@@ -69,7 +84,7 @@ test("key commands: move the tab, open the terminal, Needs you", () => {
   top.command("move-left");
   assert.deepEqual(log.run, [], "the first tab cannot move left");
   top.command("terminal");
-  assert.deepEqual(log.overlays.at(-1).layout.children[1].content, { terminal: "t1" });
+  assert.deepEqual(termInner(log.overlays.at(-1)).children[1].content, { terminal: "t1" });
   top.command("needs");
   assert.deepEqual(log.run.at(-1), ["layout.select", { stack: "screen", child: "needs" }]);
 });
@@ -126,13 +141,13 @@ test("Terminal opens the agent's own terminal in a window with a Close bar", asy
   byId(el, "terminal")._h.on_click({}, fakeCx());
   const o = log.overlays.at(-1);
   assert.equal(o.kind, "window"); assert.equal(o.key, "flockbook-terminal");
-  assert.deepEqual(o.layout.children[1].content, { terminal: "t1" });
-  assert.deepEqual(o.layout.children[0].content.props, { view: "termbar", terminal: "t1", name: "api" });
+  assert.deepEqual(termInner(o).children[1].content, { terminal: "t1" });
+  assert.deepEqual(termInner(o).children[0].content.props, { view: "termbar", terminal: "t1", name: "api" });
   const { TermBar } = await import("../mods/flockbook/termbar.js");
   fake.props = { view: "termbar", name: "api", overlay: "o9" };
   const bar = new TermBar(fakeCx()).render(fakeCx());
   assert.match(textOf(bar), /api.*Terminal/);
-  assert.equal(o.layout.children[1].padding, undefined, "no inset around the terminal");
+  assert.equal(termInner(o).children[1].padding, undefined, "no inset around the terminal");
   assert.equal(o.frame, "none"); assert.equal(o.layout.radius, 16);
   assert.ok(byId(bar, "term-close"));
 });

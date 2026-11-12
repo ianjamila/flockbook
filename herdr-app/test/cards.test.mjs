@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { fake, log, reset } from "./stub/herdr.mjs";
 import { textOf, byId } from "./stub/ui.mjs";
 import { fakeCx } from "./fake-cx.mjs";
-import { agent, space } from "./fixtures.mjs";
+import { agent, space, passBlockGrace } from "./fixtures.mjs";
 import { Cards, wanted, answersFor } from "../mods/flockbook/cards.js";
 import { NeedsView } from "../mods/flockbook/needs.js";
 
@@ -21,6 +21,7 @@ beforeEach(() => {
   reset(); acts = []; cardNow = approval;
   fake.spaces = [space()];
   fake.agents = [agent("t1", "blocked")];
+  passBlockGrace();   // plus build: blocked counts as Needs you only once it has lasted the grace (state.js BLOCK_GRACE_MS)
   fake.exec = (_c, args) => {
     if (args[0] === "card") return jl(header("card"), cardNow ?? { type: "card" }, end);
     if (args[0] === "approve" || args[0] === "answer") { acts.push(args); const r = fake.result ?? "sent"; if (r === "sent") cardNow = null; return jl(header(args[0]), { type: "done", result: r, message: fake.message ?? null }, end); }
@@ -197,8 +198,11 @@ test("own answer: a row like the options; clicks and keys in it stay in the text
   assert.match(textOf(row), /3/, "numbered after the options");
   let stopped = 0; const ecx = { ...cx, stop_propagation() { stopped++; } };
   row._h.on_mouse_down?.({}, ecx);
-  row._h.on_key_down({ key: "1", modifiers: {} }, ecx);
-  assert.equal(stopped, 2, "the card neither takes the focus nor picks option 1");
+  assert.equal(stopped, 1, "the card does not take the focus");
+  // plus build: the row no longer stops keys (a stopped key never reaches the box as typed text); the card's own key handler skips them while the box has the keyboard.
+  assert.equal(row._h.on_key_down, undefined);
+  c.typingIn = 0;
+  assert.equal(c.key_down({ key: "1", modifiers: {} }, ecx, "t1"), false, "the card does not pick option 1");
   assert.equal(c.byAgent.get("t1").picks.size, 0);
 });
 
