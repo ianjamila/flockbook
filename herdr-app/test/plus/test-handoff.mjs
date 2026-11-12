@@ -34,6 +34,6 @@ eq("Hand-off given sub-group ranks above Merging and results", (() => {
   const i = st.indexOf('["handoff", "Hand-off given"]'), m = st.indexOf('["merging", "Merging"]'), r = st.indexOf('["results", "Review results waiting"]');
   return i > 0 && i < m && i < r;
 })(), true);
-eq("hand-off only when no agent, CI wait or review wait runs behind the turn", /if \(a && a\.status !== "working" && a\.status !== "blocked" && !b\?\.agents && !b\?\.ci && !b\?\.review && handoffOf\(a\.address\)\)/.test(st), true);
+eq("hand-off only when no agent or wait (CI, review, merge) runs behind the turn", /if \(a && a\.status !== "working" && a\.status !== "blocked" && !b\?\.agents && !out\.some\(\(o\) => o\.wait\) && handoffOf\(a\.address\)\)/.test(st), true);
 eq("hand-off waits on the owner", /o\.group === "handoff"/.test(st.slice(st.indexOf("owner:"), st.indexOf("owner:") + 200)), true);
 process.exit(bad ? 1 : 0);

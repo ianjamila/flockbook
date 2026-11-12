@@ -56,8 +56,9 @@ eq("no merge on screen", mergedHint(`  #1816 is ready.\n${box()}`), null);
 
 // Work still running after the turn ended (owner 18:18): the footer under the input box.
 const FOOT = (extra) => `⏺ #1825 is first in the merge queue.\n\n✻ Brewed for 20s · done 6:17 PM · 1 shell still running\n\n${R}\n❯ \n${R}\n  you:\\~ | HOME x\n  Opus 5.5 | effort:high\n${extra}`;
-eq("1 shell in the footer (t10 18:19)", backgroundWork(FOOT("  ⏵⏵ auto mode on · 1 shell · ← 4 agents")), { shells: 1, agents: 0 });
-eq("2 shells and a running agent row", backgroundWork(FOOT("  ▶▶ auto mode on · 2 shells · ← 4 agents\n\n  ● main\n  ○ implementer  Running verify.mjs quick check        7m 0s · ↓ 73.3k tokens")), { shells: 2, agents: 1 });
+// Owner 11-12 22:15: a reply that says the PR is in the merge queue, with a shell, is a merge wait (`merge`).
+eq("1 shell in the footer (t10 18:19)", backgroundWork(FOOT("  ⏵⏵ auto mode on · 1 shell · ← 4 agents")), { shells: 1, agents: 0, merge: true });
+eq("2 shells and a running agent row", backgroundWork(FOOT("  ▶▶ auto mode on · 2 shells · ← 4 agents\n\n  ● main\n  ○ implementer  Running verify.mjs quick check        7m 0s · ↓ 73.3k tokens")), { shells: 2, agents: 1, merge: true });
 eq("only finished agents (← N agents)", backgroundWork(FOOT("  ⏵⏵ auto mode on · ← 4 agents")), null);
 eq("no footer work", backgroundWork(FOOT("  ⏵⏵ auto mode on")), null);
 eq("no box", backgroundWork("1 shell"), null);

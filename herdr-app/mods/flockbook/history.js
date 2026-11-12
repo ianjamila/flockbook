@@ -8,7 +8,7 @@
 // in its key. A snap = { label, account, state: working | finished | needs | ci | review, ask, about, pr, handoff, needsAt,
 // needsKnown }. Events stay HISTORY_DAYS (closed tabs' too, with the name they had), at most HISTORY_KEEP.
 import { agents, terminals, shared, setShared } from "herdr";
-import { agentName, needReason } from "./state.js";
+import { agentName, needReason, overlays } from "./state.js";
 import { askOf, askLine, bgOf, handoffOf, prOf } from "./asks.js";
 import { aboutOf, accountFor, accountName, clockText, localOffset } from "./ai.js";
 
@@ -23,8 +23,8 @@ const GAP_MS = 5 * 60_000;
 const PER_TAB = 6;
 // The state that matters to the owner: asking them something, waiting on CI or on a review (a Codex / Fable review its
 // turn ended on, asks.js backgroundWork), working, or finished.
-export function snapOf({ label = null, account = null, status, need = null, askText = null, ci = false, review = false, handoff = false, about = null, pr = null }) {
-  const state = need ? "needs" : ci ? "ci" : review ? "review" : status === "working" ? "working" : "finished";
+export function snapOf({ label = null, account = null, status, need = null, askText = null, ci = false, review = false, merging = false, handoff = false, about = null, pr = null }) {
+  const state = need ? "needs" : ci ? "ci" : merging ? "merging" : review ? "review" : status === "working" ? "working" : "finished";
   return { label, account, state, ask: need ? askText ?? "waits for your answer or approval" : null, about, pr: pr?.state ? { pr: pr.pr, state: pr.state } : null, handoff: Boolean(handoff) };
 }
 // The events between two snapshots of one tab: [{ kind, text }]. Going back to work is not news.
@@ -34,6 +34,7 @@ export function diffSnap(prev, next) {
     if (next.state === "finished") out.push({ kind: "finished", text: "finished" });
     if (next.state === "needs") out.push({ kind: "needs", text: next.ask });
     if (next.state === "ci") out.push({ kind: "ci", text: "waiting on CI" });
+    if (next.state === "merging") out.push({ kind: "merging", text: "merging (the PR is in the merge queue)" });
     if (next.state === "review") out.push({ kind: "review", text: "waiting on a review" });
   }
   if (next.handoff && !prev.handoff) out.push({ kind: "handoff", text: "gave a hand-off" });
@@ -82,7 +83,7 @@ export function historyTick() {
     const ask = askOf(a.address), need = needReason(a);
     // The plain name: without the title's marks in front ("🛠✅ Webshop …").
     const snap = snapOf({ label: String(agentName(a) ?? "").replace(/^[^\p{L}\p{N}#~/]+/u, "").trim() || a.address, account: accountFor(a.address), status: a.status, need, askText: ask ? askLine(ask) : null,
-      ci: Boolean(bgOf(a.address)?.ci), review: Boolean(bgOf(a.address)?.review), handoff: handoffOf(a.address), about: aboutOf(a.address), pr: prOf(a.address) });
+      ci: Boolean(bgOf(a.address)?.ci), review: Boolean(bgOf(a.address)?.review), merging: overlays(a).some((o) => o.group === "merging" && o.wait), handoff: handoffOf(a.address), about: aboutOf(a.address), pr: prOf(a.address) });
     const prev = h.last?.[a.address] ?? null;
     // Since when it waits on the owner: kept while it keeps waiting; unknown when it already waited at the first look.
     if (snap.state === "needs") Object.assign(snap, prev?.state === "needs" ? { needsAt: prev.needsAt, needsKnown: prev.needsKnown } : { needsAt: now, needsKnown: !first && !gap && Boolean(prev) });

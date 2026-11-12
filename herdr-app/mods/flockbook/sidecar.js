@@ -91,14 +91,20 @@ export const NEW_CONVERSATION = "This terminal is in a new conversation now (aft
 export const CONVERSATION_PENDING = "This terminal's conversation changed (a /clear?) and the chat has not caught up yet. Wait a few seconds, then press Send again.";
 // The agent and log a terminal has NOW ({ kind, path }), or null when it can't be told: its cached log is marked
 // stale, `status` looks it up again and writes the cache, and the entry is read back. For sends that skip the
-// sidecar's own agent / conversation check (composer.js sendAnyway).
+// sidecar's own agent / conversation check (composer.js sendAnyway). Fails closed (Codex recheck 11-12 P1): a
+// `status` that failed, or an entry not looked up during THIS call (its `checked`, in seconds, is older than the
+// call: the mark did not stick or nothing re-located it), is null, never the stale cached log.
 export async function currentLog(terminal) {
   try {
+    const start = Date.now();
     await recheckLog(terminal);
-    await status(terminal);
+    const r = await status(terminal);
+    if (r?.error || !r?.end) return null;
     const text = await readTextFile(cachePath());
     const e = text ? JSON.parse(text)?.entries?.[terminal] : null;
-    return e && typeof e.kind === "string" ? { kind: e.kind, path: typeof e.path === "string" ? e.path : null } : null;
+    // 1 ms of slack: the helper writes seconds as a float.
+    if (!e || typeof e.kind !== "string" || typeof e.checked !== "number" || e.checked * 1000 < start - 1) return null;
+    return { kind: e.kind, path: typeof e.path === "string" ? e.path : null };
   } catch { return null; }
 }
 // Whether `now` (currentLog) is still what the chat showed (`seen`: { agent, path }); nothing seen = nothing to compare.

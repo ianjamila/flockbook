@@ -129,6 +129,17 @@ export function parseReset(text, now, localOffsetMin) {
   if (off == null || !Number.isFinite(off)) return null;
   // A wall-clock time in that zone (ms, its UTC fields) → the instant: twice, so the offset is the reset's own.
   const instant = (wallMs) => { let t = wallMs - off * 60_000; for (let i = 0; i < 2; i++) { const o = offAt(t); if (o == null || !Number.isFinite(o)) break; t = wallMs - o * 60_000; } return t; };
+  // Every instant a wall time is, earliest first (Codex recheck 11-12 P2): two in the hour a fall-back repeats
+  // ("1am" New York on Nov 1 is 05:00Z, then 06:00Z), one otherwise. Each offset in force a day either side is tried
+  // and kept when the zone really has it at that instant; none for a time the spring-forward skips → `instant`.
+  const instants = (wallMs) => {
+    const offs = new Set([off]);
+    for (const probe of [wallMs - 86_400_000, wallMs + 86_400_000]) { const o = offAt(probe); if (o != null && Number.isFinite(o)) offs.add(o); }
+    const out = [...offs].map((o) => wallMs - o * 60_000).filter((t, k) => offAt(t) === [...offs][k]);
+    return out.length ? [...new Set(out)].sort((p, q) => p - q) : [instant(wallMs)];
+  };
+  // The first of them still to come, else the first.
+  const next = (wallMs) => { const all = instants(wallMs); return all.find((t) => t > now) ?? all[0]; };
   let h = Number(m[3]) % 12; if (m[5].toLowerCase() === "pm") h += 12;
   const min = m[4] ? Number(m[4]) : 0;
   const wall = new Date(now + off * 60_000);   // its UTC fields = the wall clock in that zone
@@ -139,9 +150,9 @@ export function parseReset(text, now, localOffsetMin) {
     if (mi < 0) return null;
     mo = mi; d = Number(m[2]);
   }
-  let at = instant(Date.UTC(y, mo, d, h, min));
-  if (dated && at < now - 86_400_000) at = instant(Date.UTC(y + 1, mo, d, h, min));   // "Jan 2" seen on Dec 30
-  if (!dated && at <= now) at = instant(Date.UTC(y, mo, d + 1, h, min));
+  let at = next(Date.UTC(y, mo, d, h, min));
+  if (dated && at < now - 86_400_000) at = next(Date.UTC(y + 1, mo, d, h, min));   // "Jan 2" seen on Dec 30
+  if (!dated && at <= now) at = next(Date.UTC(y, mo, d + 1, h, min));
   if (at <= now || at - now > 8 * 86_400_000) return null;
   return at;
 }

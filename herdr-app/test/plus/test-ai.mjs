@@ -77,6 +77,15 @@ eq("local zone as a number still works", parseReset("resets 3am", oct31, -240), 
 eq("reset in another machine zone", parseReset("resets 1am (UTC)", now, -480), Date.UTC(2026, 10, 13, 1, 0));
 eq("any IANA zone (Intl): New York 1am", parseReset("resets 1am (America/New_York)", now, 480), Date.UTC(2026, 10, 13, 6, 0));
 eq("any IANA zone (Intl): half-hour zone", parseReset("resets 9am (Asia/Kolkata)", now, 480), Date.UTC(2026, 10, 12, 3, 30) + 86_400_000);
+// Codex recheck 11-12 P2: the repeated hour of a fall-back. At 05:30Z on Nov 1 New York's 1am-2am EDT hour is half
+// gone and repeats as EST: "resets 1am" is 06:00Z (the second 1am), not 1am the next day.
+const nov1 = Date.UTC(2026, 10, 1, 5, 30);
+eq("DST repeated hour: 1am New York in the first 1am = the second 1am (06:00Z)", parseReset("resets 1am (America/New_York)", nov1, 0), Date.UTC(2026, 10, 1, 6, 0));
+eq("DST repeated hour: dated the same", parseReset("resets Nov 1, 1am (America/New_York)", nov1, 0), Date.UTC(2026, 10, 1, 6, 0));
+eq("DST repeated hour: before both, the first (05:00Z)", parseReset("resets 1am (America/New_York)", Date.UTC(2026, 10, 1, 4, 0), 0), Date.UTC(2026, 10, 1, 5, 0));
+eq("DST repeated hour: after both = the next day (EST)", parseReset("resets 1am (America/New_York)", Date.UTC(2026, 10, 1, 6, 30), 0), Date.UTC(2026, 10, 2, 6, 0));
+eq("DST repeated hour, local zone as a function", parseReset("resets 1:30am", nov1, ny), Date.UTC(2026, 10, 1, 5, 30) + 3600_000);
+eq("DST gap: 2:30am New York on Mar 8 (skipped) still reads", typeof parseReset("resets Mar 8, 2:30am (America/New_York)", mar7, 0), "number");
 eq("unknown zone = unreadable", parseReset("resets 1am (Mars/Base)", now, 480), null);
 eq("no time = unreadable", parseReset("You've hit your limit", now, 480), null);
 eq("far date = unreadable", parseReset("resets Dec 30, 1am (Asia/Singapore)", now, 480), null);

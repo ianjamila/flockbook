@@ -133,6 +133,8 @@ export function suggestedSlash(screen) {
   return word;
 }
 export const SUGGESTION_NOTE = (w) => `Not sent: the terminal's box shows “${w}” (most likely Claude's dim suggestion). Send anyway clears that line, typed or not, and sends your message.`;
+// A terminal on another machine ("box/t7"; local ones are "t7").
+export const isRemote = (address) => String(address ?? "").includes("/");
 
 export function withFiles(text, files) {
   if (!files.length) return text;
@@ -480,8 +482,11 @@ export class Composer {
     b.setText(""); b.files = [];
     this.keepSoon(cx);
     cx.notify();
+    // The conversation the chat showed when Send was pressed: the send checks it, and a "Send anyway" offer keeps
+    // the SAME one (read again after the awaits, a chat that caught up with a /clear would hand the new log over).
+    const seen = this.seen?.(a) ?? null;
     try {
-      const r = await sidecar.send(a, withFiles(text, files), files, this.seen?.(a) ?? null);
+      const r = await sidecar.send(a, withFiles(text, files), files, seen);
       const done = r.lines.find((l) => l.type === "done");
       const fresh = sidecar.conversationChanged(done);
       const moved = !fresh && sidecar.agentChanged(done);
@@ -493,12 +498,14 @@ export class Composer {
         // A new conversation in the same terminal (a /clear): the chat reads it now, so Send again goes to it.
         const shown = fresh && await sidecar.recheckLog(a) && await this.onNewConversation?.(a, cx);
         this.note = { text: shown ? sidecar.NEW_CONVERSATION : fresh ? sidecar.CONVERSATION_PENDING : moved ? sidecar.AGENT_CHANGED : (r.error?.message ?? done?.message) || "The message was not sent.", bad: true };
-        // Only a lone "/word" with no command list above the box: offer to type over it (sendAnyway).
-        if (done?.result === "box_not_empty" && this.address === a) {
+        // Only a lone "/word" with no command list above the box: offer to type over it (sendAnyway). Not for a
+        // terminal on another machine ("box/t7"): its log is looked up there, so sendAnyway could never confirm the
+        // conversation here; the sidecar's own note (clear the box in the terminal) stays.
+        if (done?.result === "box_not_empty" && this.address === a && !isRemote(a)) {
           const r2 = await hc(["read", a, "--json"]).catch(() => null);
           let screen = null; try { screen = JSON.parse(r2?.stdout ?? "")?.text; } catch { screen = null; }
           const w = r2?.code === 0 ? suggestedSlash(screen) : null;
-          if (w && this.address === a) this.note = { text: SUGGESTION_NOTE(w), bad: true, anyway: { address: a, text, files, seen: this.seen?.(a) ?? null } };
+          if (w && this.address === a) this.note = { text: SUGGESTION_NOTE(w), bad: true, anyway: { address: a, text, files, seen } };
         }
       } else {
         // The owner answered: its ask leaves Needs you now, not at the next tick.
@@ -515,7 +522,7 @@ export class Composer {
   // (a /clear, /resume or another agent in the same terminal since the refusal → nothing is typed).
   async sendAnyway(cx) {
     const n = this.note?.anyway, a = this.address;
-    if (!n || this.sending || n.address !== a) return;
+    if (!n || this.sending || n.address !== a || isRemote(a)) return;
     this.sending = true; this.note = null;
     cx.notify();
     const moved = async () => {

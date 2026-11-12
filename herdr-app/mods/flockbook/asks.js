@@ -256,11 +256,15 @@ export function backgroundWork(screen) {
   if (!shells) return { shells, agents };
   const reply = lastReply(lines, box - 1);
   if (CI_WAIT.test(reply)) return { shells, agents, ci: true };
+  // A shell behind a reply that says the PR is going through the merge queue / gate (owner 11-12 22:15: "why is this
+  // done" — "its still merging"): `merge`, so the Overview keeps it under "Merging", working, until the merge lands.
+  if (MERGE_WAIT.test(reply)) return { shells, agents, merge: true };
   // A shell behind a reply that waits on a Codex review / recheck (owner 11-12 s14: "this is waiting on codex
   // recheck not me"): `review`, so the Overview keeps it under "In review", working.
   return REVIEW_WAIT.test(reply) ? { shells, agents, review: true } : { shells, agents };
 }
 const REVIEW_WAIT = /\bwait(?:ing)?\s+(?:for|on)\s+(?:the\s+)?(?:Codex|Fable)\b|\b(?:Codex|Fable)\s+(?:review|recheck|round|rerun)\b[^.\n]{0,60}?\b(?:still running|is running|running in the background|in progress)\b/i;
+const MERGE_WAIT = /\b(?:in(?:to)?|through|joins?|joined|entered)\s+(?:GitHub's\s+|the\s+)?(?:merge\s+)?queue\b|\bonce\s+(?:#\d+|it|they|both|the PRs?)\s+(?:merges?|lands?|is merged|are merged)\b|\bmerge queue\b[^.\n]{0,60}?\b(?:now|running|still|in progress|pending)\b|\bwait(?:ing)?\s+(?:for|on)\s+(?:the\s+)?(?:merge|merges)\b|\b(?:both\s+)?merges?\s+once\b|\bstill merging\b|\bis merging\b/i;
 const CI_WAIT = /\bwait(?:ing)?\s+(?:for|on)\s+(?:the\s+)?CI\b|\bCI\b[^.\n]{0,80}?\b(?:still running|is running|in progress|pending|to finish)\b|\bwhile CI runs\b/i;
 // The last reply of the turn above the input box (`top`: the box's top rule): its last "⏺ " text that is not a tool
 // call ("⏺ Bash(…)") or a background notice, with its wrapped lines AND its later paragraphs (indented text after

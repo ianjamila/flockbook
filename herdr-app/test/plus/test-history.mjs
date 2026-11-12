@@ -15,7 +15,7 @@ const info = {};   // per address: { ask, need, ci, handoff, about, pr, account 
 const h = await loadMod("history.js", {
   herdr: { ...st, agents: () => tabs, terminals: () => terms },
   // Live names carry the title's marks in front ("🛠✅ Webshop …"); the record keeps the plain name.
-  "./state.js": { agentName: (a) => `🛠✅ ${a.name}`, needReason: (a) => info[a.address]?.need ?? null },
+  "./state.js": { agentName: (a) => `🛠✅ ${a.name}`, needReason: (a) => info[a.address]?.need ?? null, overlays: () => [] },
   "./asks.js": { askOf: (x) => info[x]?.ask ?? null, askLine: (k) => k.line, bgOf: (x) => (info[x]?.ci || info[x]?.review ? { shells: 1, agents: 0, ci: Boolean(info[x].ci), review: Boolean(info[x].review) } : null), handoffOf: (x) => Boolean(info[x]?.handoff), prOf: (x) => info[x]?.pr ?? null },
   "./ai.js": { aboutOf: (x) => info[x]?.about ?? null, accountFor: (x) => info[x]?.account ?? null, accountName: (x) => ({ WORK: "Work account (WORK)", HOME: "Personal account (HOME)" })[x] ?? "Unknown account", clockText: (at, n, off) => { const w = new Date(at + off * MIN); const hh = w.getUTCHours(); return `${hh % 12 || 12}:${String(w.getUTCMinutes()).padStart(2, "0")} ${hh < 12 ? "am" : "pm"}`; }, localOffset: () => OFF, agoText: (at, n) => `${Math.floor((n - at) / MIN)} min ago` },
 });

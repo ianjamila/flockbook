@@ -230,6 +230,8 @@ export function overlays(a) {
   // the title (11-12: an extra-round ask showed nowhere outside the terminal). `ask`: from the reply, not the title.
   const m = askMark(askOf(a?.address));
   if (m) out.push({ glyph: m.glyph, group: m.group, word: m.word, tip: m.tip, ask: true });
+  // The turn ended but a background shell or agent still runs (asks.js reads it off the screen).
+  const b = a && a.status !== "working" && a.status !== "blocked" ? bgOf(a.address) : null;
   for (const ch of (a?.title ?? "").replace(AGENT_MARK, "")) {
     if (ch === "️" || ch === "‍" || ch === " ") continue;   // 🛠️ carries a variation selector
     const o = OVERLAY[ch];
@@ -242,13 +244,14 @@ export function overlays(a) {
       const p = prOf(a?.address);
       if (p?.state === "MERGED") return [{ glyph: ch, group: "merged", word: `merged #${p.pr}`, tip: `#${p.pr} is merged` }];
       if (p?.state === "CLOSED") return [{ glyph: ch, group: "closed", word: `closed #${p.pr}`, tip: `#${p.pr} was closed without merging` }];
-      out.push({ glyph: ch, group: "merging", word: "merging", tip: "it is merging (you said merge; the merge queue or gate runs)" });
+      // A shell still running behind the finished turn is the merge watch (owner 11-12 22:15: "its still merging"):
+      // working, so the tab stays under "CI / Final Review / Merging", not Done, until the merge lands. Not after a
+      // hand-off: that turn is over for good (the owner clears it), so its shells are leftovers (owner 11-12 16:45).
+      out.push({ glyph: ch, group: "merging", word: "merging", tip: "it is merging (you said merge; the merge queue or gate runs)", ...(b?.shells && !handoffOf(a?.address) ? { wait: true } : {}) });
       continue;
     }
     out.push({ glyph: ch, group: o[0], word: o[1], tip: o[2] });
   }
-  // The turn ended but a background shell or agent still runs (asks.js reads it off the screen).
-  const b = a && a.status !== "working" && a.status !== "blocked" ? bgOf(a.address) : null;
   // Only a background AGENT keeps the tab working (it reports back and the turn goes on); leftover shells alone
   // (a dev server, a forgotten watch) leave it Done with this hint (owner 11-12 16:45; real CI waits carry ⏳).
   // A shell behind a reply that says it waits on CI (asks.js backgroundWork `ci`) is a CI watch: "Waiting on CI",
@@ -256,9 +259,14 @@ export function overlays(a) {
   if (b?.ci) out.unshift({ glyph: "⏳", group: "ci", word: "waiting on CI", tip: "its turn ended while it waits on CI (a CI watch runs in the background)", wait: true });
   // The same for a Codex review / recheck it waits on (owner 11-12 s14): "Waiting on a review", working.
   if (b?.review) out.unshift({ glyph: "🔍", group: "reviewwait", word: "waiting on a review", tip: "its turn ended while a Codex review runs in the background", wait: true });
+  // A reply that says the PR goes through the merge queue, with no 🔀 in the title (the hook did not mark it): the same.
+  if (b?.merge && !handoffOf(a?.address) && !out.some((o) => o.group === "merging")) {
+    const p = prOf(a?.address);
+    if (p?.state !== "MERGED" && p?.state !== "CLOSED") out.unshift({ glyph: "🔀", group: "merging", word: "merging", tip: "its turn ended while its PR goes through the merge queue (a merge watch runs in the background)", wait: true });
+  }
   if (b) out.push({ glyph: "⚙", group: "background", word: bgWords(b), tip: `its turn ended, but ${bgWords(b)} in the background`, agents: b.agents ?? 0 });
   // Finished with a hand-off (asks.js handoffGiven), nothing running behind it: the Overview's "Hand-off given".
-  if (a && a.status !== "working" && a.status !== "blocked" && !b?.agents && !b?.ci && !b?.review && handoffOf(a.address)) out.push({ glyph: "🤝", group: "handoff", word: "hand-off given", tip: "it finished and gave a hand-off: start a fresh session with its re-entry prompt (or /clear there and paste it)" });
+  if (a && a.status !== "working" && a.status !== "blocked" && !b?.agents && !out.some((o) => o.wait) && handoffOf(a.address)) out.push({ glyph: "🤝", group: "handoff", word: "hand-off given", tip: "it finished and gave a hand-off: start a fresh session with its re-entry prompt (or /clear there and paste it)" });
   return out;
 }
 // The status a tab's mark shows: working while a shell or agent still runs behind a finished turn.
