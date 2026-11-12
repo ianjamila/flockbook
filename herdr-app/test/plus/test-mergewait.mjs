@@ -17,6 +17,7 @@ const q1 = `⏺ PR #1922 is going into GitHub's merge queue now, behind #1916. B
 const q2 = `⏺ #1891's folder holds a local-only settings file. I'll ask about both folders together once #1899 merges.\n\n${foot(" · 1 shell")}`;
 eq("merge queue reply + shell: merge", backgroundWork(q1), { shells: 1, agents: 0, merge: true });
 eq("'once #N merges' + shell: merge", backgroundWork(q2), { shells: 1, agents: 0, merge: true });
+eq("merge job still running (t1f 22:16)", backgroundWork(`⏺ The #1922 merge job is still running its pre-queue checks. Its background wait will report when it finishes.\n\n${foot(" · 1 shell")}`)?.merge, true);
 eq("following through the queue", backgroundWork(`⏺ #1891 is merged. Now following #1899 through the queue.\n\n${foot(" · 1 shell")}`)?.merge, true);
 eq("merge wait without a shell: nothing", backgroundWork(`⏺ PR #3 is in the merge queue now.\n\n${foot()}`), null);
 eq("merged, shell left: no merge wait", backgroundWork(`⏺ #3 is merged and the worktree is removed.\n\n${foot(" · 1 shell")}`), { shells: 1, agents: 0 });
