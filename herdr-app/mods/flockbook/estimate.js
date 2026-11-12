@@ -130,7 +130,10 @@ export function lineHeight(size, zoom = 1) {
 export function markdownHeight(text, width, spans = null, k = 1, zoom = 1) {
   const CODE_LH = lineHeight(13 * k, zoom);    // TextView at 13 px (Menlo): its own line height
   const CELL_LH = lineHeight(13.5 * k, zoom);  // table text at 13.5 px (measured 11-10)
-  const fs = FS * k, lh = lineHeight(fs, zoom), up = Math.max(1, k);
+  // Prose (TextView) under a zoom below 1 draws at its unzoomed line height while the list's rows shrink
+  // (Herdr 0.1.15, measured 11-12 at zoom 0.9: 26 pt a line = 29 row px, not 23.5): a long reply lost its last
+  // lines, the merge or extra-round ask among them. So the taller of the two is counted.
+  const fs = FS * k, lh = Math.max(lineHeight(fs, zoom), lineHeight(fs, 1) / zoom), up = Math.max(1, k, 1 / zoom);
   let h = 0, p = 0, prevBlank = true;  // h: drawn exactly; p: prose, wraps
   // A blank line is a 10 px paragraph gap, but not next to a code box or table: their margin is the gap.
   let gap = 0;

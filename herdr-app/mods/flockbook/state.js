@@ -1,7 +1,9 @@
 // What every view agrees on: the agent shown in the chat, and the screen in the stack.
 // Kept in shared() so the copies of this mod (one per layout block) see the same value.
-import { agents, focused, shared, setShared, run, spaces, openOverlay, closeOverlay, appHome, readTextFile } from "herdr";
-import { loadConfig, updateSeen } from "./config.js";
+import { agents, focused, shared, setShared, run, spaces, openOverlay, closeOverlay, appHome, readTextFile, panes } from "herdr";
+import { loadConfig, updateSeen, setting, setSetting, setSettings } from "./config.js";
+import { gripFrame, geom } from "./termresize.js";
+import { askOf, prOf, bgOf, bgWords, askMark, handoffOf } from "./asks.js";
 
 export const KEY_AGENT = "flockbook.agent";
 // The screen in the stack, as this mod last selected it (layout() is the file, not the live tree).
@@ -41,6 +43,14 @@ export function toggleSidebar() {
   setShared(KEY_SIDEBAR, show);
   run(show ? "layout.show" : "layout.hide", { id: "sidebar" });
 }
+// Whether the tab list on the right shows (tabs.js), kept the same way; shown unless hidden by hand.
+export const KEY_TABLIST = "flockbook.tablist";
+export const tablistShown = () => shared(KEY_TABLIST) !== false;
+export function toggleTablist() {
+  const show = !tablistShown();
+  setShared(KEY_TABLIST, show);
+  run(show ? "layout.show" : "layout.hide", { id: "tablist" });
+}
 // The pointer at the window's left edge floats the sidebar over the content (a frameless popup that
 // the side view draws as a panel), so the content does not move. It closes when the pointer leaves
 // it, on Esc or on a click beside it. KEY_PEEK holds the popup's id while it is open.
@@ -75,15 +85,20 @@ export function peekClosed(id) {
 // Adds the edge watch to a view's root.
 export const watchEdge = (el) => el.on_mouse_move((e) => peekAtEdge(e));
 
-export async function loadSidebar() {
-  if (shared(KEY_SIDEBAR) !== undefined) return;
-  let hidden = true;
+// Reads, once, whether layout node `id` shows (the app's saved clicks), into shared `key`; `hidden`: the
+// file's default.
+async function loadShown(id, key, hidden) {
+  if (shared(key) !== undefined) return;
   try {
     const text = await readTextFile(`${appHome()}/layouts/.state/flockbook.json`);
-    const v = text ? JSON.parse(text)?.nodes?.sidebar?.hidden : undefined;
+    const v = text ? JSON.parse(text)?.nodes?.[id]?.hidden : undefined;
     if (typeof v === "boolean") hidden = v;
   } catch { /* no saved state: the file's default */ }
-  if (shared(KEY_SIDEBAR) === undefined) setShared(KEY_SIDEBAR, !hidden);
+  if (shared(key) === undefined) setShared(key, !hidden);
+}
+export async function loadSidebar() {
+  await loadShown("sidebar", KEY_SIDEBAR, true);
+  await loadShown("tablist", KEY_TABLIST, false);
 }
 
 // The agents of the shown space, in herdr's order.
@@ -111,10 +126,24 @@ export function currentAgent() {
     ?? list[0] ?? null;
 }
 
+// What the terminal button and ⌃` open: the shown agent, else the shown tab's own terminal (the focused pane's,
+// else its first). An agent that stopped reporting its status (OSC 7501) is no agent to Herdr, and the tab then
+// had no terminal to open. The stand-in has what openTerminal and agentName read.
+export function currentTerminal() {
+  const a = currentAgent();
+  if (a) return a;
+  const tab = activeTab();
+  if (!tab) return null;
+  const ps = panes().filter((p) => p.tab === tab.id && p.terminal);
+  const p = ps.find((x) => x.focused) ?? ps[0];
+  return p ? { address: p.terminal, tab: tab.id, tab_name: tab.name, title: p.title, app: "Terminal" } : null;
+}
+
 // A tab's label: its name when someone named it, else its agent's name, else its number ("3").
+// A tab named just like its program ("Claude Code") counts as unnamed, as in Herdr's agents list.
 export function tabLabel(tab) {
-  if (tab.named) return tab.name;
   const a = tabAgents(tab.id)[0];
+  if (!autoNamed(tab, a)) return tab.name;
   return a ? agentName(a) : tab.name;
 }
 
@@ -134,11 +163,157 @@ export function closeTab(id) {
 }
 export const closeAgent = (a) => closeTab(a.tab);
 
-// A label for people: the tab's name when someone named it, else the program ("Claude Code").
+// A label for people: the tab's name when someone named it, else what the session is about (the
+// title the agent set, e.g. Claude Code's conversation summary, as VS Code's tabs show it), else
+// the program ("Claude Code").
 export function agentName(a) {
   if (!a) return "";
-  if (a.tab_name && !/^\d+$/.test(a.tab_name) && !/^tb\d+$/.test(a.tab_name)) return a.tab_name;
-  return a.program?.name ?? a.app ?? "Agent";
+  const named = a.tab_name && !/^\d+$/.test(a.tab_name) && !/^tb\d+$/.test(a.tab_name);
+  if (named && a.tab_name !== programName(a)) return a.tab_name;
+  return sessionTitle(a) ?? programName(a);
+}
+const programName = (a) => a.program?.name ?? a.app ?? "Agent";
+
+// Claude Code's own working/idle marker (✳, spinner frames, braille) and the VS Code tab hook's ▲
+// (waiting on a prompt: tab-prompt.mjs; it can outlive the prompt). Flockbook draws that status
+// itself, so drop them — but keep other leading emoji (🔍 🔀 ⏳ ✅ …: background-work overlays).
+const AGENT_MARK = /^[\s✳✢✶✻✽·◐◑◒◓◴◵◶◷*▲⠀-⣿]+/u;
+// The agent's title, or null when it says nothing the program name doesn't: empty, the program's
+// own name, a folder path, user@host (the same rules as Herdr's shipped agents list).
+export function sessionTitle(a) {
+  const shown = (a?.title ?? "").replace(AGENT_MARK, "").trim();
+  const words = shown.replace(/^[^\p{L}\p{N}]+/u, "").trim();
+  const path = /^[~/]|^[A-Za-z]:\\/.test(shown.replace(/^[^\p{L}\p{N}~/]+/u, ""));
+  const telling = words && words !== a?.program?.name && !path && !words.includes("@") && words.toLowerCase() !== a?.program?.key;
+  return telling ? shown : null;
+}
+// The background-work symbols an optional tab-title hook (a Claude Code hook that sets the terminal title; the
+// README's "Tab-title symbols") puts in front of a session's title, in its order: ⏳ 🔍 review dots, agent kinds, ✅, 🔀.
+// Without such a hook a title has none of them and none of this applies.
+// Each belongs to one sub-status; a tab with several sits under the first of SUB_GROUPS it has.
+const OVERLAY = {
+  "⏳": ["ci", "CI running", "a merge gate or CI watch is running"],
+  "🔍": ["review", "Codex review", "a Codex review is running"],
+  "🟣": ["review", "Fable review", "a Fable review agent is running"],
+  "🟠": ["review", "Opus review", "an Opus review agent is running"],
+  "🔵": ["review", "Sonnet review", "a Sonnet review agent is running"],
+  "🟢": ["review", "Haiku review", "a Haiku review agent is running"],
+  "⚪": ["review", "review agent", "a review agent is running"],
+  "🛠": ["agents", "building", "a build agent is running"],
+  "🧪": ["agents", "tests", "a test agent is running"],
+  "📐": ["agents", "planning", "a planning agent is running"],
+  "🧭": ["agents", "lookup", "a lookup agent is running"],
+  "✅": ["results", "results waiting", "a review finished; its results wait for you (clears when you open the tab)"],
+  "🔀": ["merge", "ready to merge", "it handed you a merge decision"],
+};
+// Sub-groups inside an Overview status group, most in need of the owner first.
+export const SUB_GROUPS = [
+  ["merge", "Ready to merge"],
+  ["round", "Extra round asked"],
+  ["migration", "Migration go asked"],
+  ["reply", "Asks you to reply"],
+  ["handoff", "Hand-off given"],
+  ["merging", "Merging"],
+  ["results", "Review results waiting"],
+  ["ci", "Waiting on CI"],
+  // A finished turn waiting on a Codex / Fable review it started (asks.js backgroundWork `review`; owner 11-12 s14:
+  // its own heading, as CI waits have), apart from tabs where a review agent runs now ("In review").
+  ["reviewwait", "Waiting on a review"],
+  ["review", "In review"],
+  ["agents", "Agents at work"],
+  ["background", "Running in the background"],
+];
+// The symbols in front of an agent's title: [{ glyph, group, word, tip }], [] for none.
+export function overlays(a) {
+  const out = [];
+  // What its reply ends asking for (asks.js) comes first, so a round or merge ask shows even with no symbol in
+  // the title (11-12: an extra-round ask showed nowhere outside the terminal). `ask`: from the reply, not the title.
+  const m = askMark(askOf(a?.address));
+  if (m) out.push({ glyph: m.glyph, group: m.group, word: m.word, tip: m.tip, ask: true });
+  for (const ch of (a?.title ?? "").replace(AGENT_MARK, "")) {
+    if (ch === "️" || ch === "‍" || ch === " ") continue;   // 🛠️ carries a variation selector
+    const o = OVERLAY[ch];
+    if (!o) break;
+    if (out.some((x) => x.glyph === ch)) continue;
+    // 🔀 stays in the title after the owner said "merge" (the hook keeps it while the merge queue / gate runs).
+    // It asks the owner only while the reply still ENDS with the hand-off (asks.js); otherwise it is merging.
+    if (ch === "🔀" && askOf(a?.address)?.kind !== "merge") {
+      // GitHub says the PR is merged (or closed): the work is over, and every symbol left is stale.
+      const p = prOf(a?.address);
+      if (p?.state === "MERGED") return [{ glyph: ch, group: "merged", word: `merged #${p.pr}`, tip: `#${p.pr} is merged` }];
+      if (p?.state === "CLOSED") return [{ glyph: ch, group: "closed", word: `closed #${p.pr}`, tip: `#${p.pr} was closed without merging` }];
+      out.push({ glyph: ch, group: "merging", word: "merging", tip: "it is merging (you said merge; the merge queue or gate runs)" });
+      continue;
+    }
+    out.push({ glyph: ch, group: o[0], word: o[1], tip: o[2] });
+  }
+  // The turn ended but a background shell or agent still runs (asks.js reads it off the screen).
+  const b = a && a.status !== "working" && a.status !== "blocked" ? bgOf(a.address) : null;
+  // Only a background AGENT keeps the tab working (it reports back and the turn goes on); leftover shells alone
+  // (a dev server, a forgotten watch) leave it Done with this hint (owner 11-12 16:45; real CI waits carry ⏳).
+  // A shell behind a reply that says it waits on CI (asks.js backgroundWork `ci`) is a CI watch: "Waiting on CI",
+  // working, ahead of the title's ✅ / 🔀 (owner 11-12 16:49: it sat in Done while CI ran).
+  if (b?.ci) out.unshift({ glyph: "⏳", group: "ci", word: "waiting on CI", tip: "its turn ended while it waits on CI (a CI watch runs in the background)", wait: true });
+  // The same for a Codex review / recheck it waits on (owner 11-12 s14): "Waiting on a review", working.
+  if (b?.review) out.unshift({ glyph: "🔍", group: "reviewwait", word: "waiting on a review", tip: "its turn ended while a Codex review runs in the background", wait: true });
+  if (b) out.push({ glyph: "⚙", group: "background", word: bgWords(b), tip: `its turn ended, but ${bgWords(b)} in the background`, agents: b.agents ?? 0 });
+  // Finished with a hand-off (asks.js handoffGiven), nothing running behind it: the Overview's "Hand-off given".
+  if (a && a.status !== "working" && a.status !== "blocked" && !b?.agents && !b?.ci && !b?.review && handoffOf(a.address)) out.push({ glyph: "🤝", group: "handoff", word: "hand-off given", tip: "it finished and gave a hand-off: start a fresh session with its re-entry prompt (or /clear there and paste it)" });
+  return out;
+}
+// The status a tab's mark shows: working while a shell or agent still runs behind a finished turn.
+export const tabStatus = (tab) => {
+  // Blocked only past the grace (needReason): a permission check auto mode settles shows as working.
+  if (tab.status === "blocked") return tabAgents(tab.id).some((a) => reallyBlocked(a)) ? "blocked" : "working";
+  return tab.status !== "working" && subStatus(tab)?.background ? "working" : tab.status;
+};
+// A tab's sub-status: { key, title, glyphs, hint, tip } from its first agent's symbols, or null.
+// hint is short ("🛠 building · ✅ results waiting"); tip says it in words.
+export function subStatus(tab) {
+  const list = overlays(tabAgents(tab.id)[0]);
+  if (!list.length) return null;
+  // A live CI wait leads (it is what the tab does now); else the first of SUB_GROUPS it has.
+  const live = list.find((o) => o.wait);
+  const [key, title] = (live && SUB_GROUPS.find(([k]) => k === live.group)) ?? SUB_GROUPS.find(([k]) => list.some((o) => o.group === k)) ?? [list[0].group, ""];
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  return {
+    key, title,
+    glyphs: list.map((o) => o.glyph).join(""),
+    hint: list.map((o) => `${o.glyph} ${o.word}`).join(" · "),
+    tip: list.map((o) => `${cap(o.tip)}.`).join(" "),
+    owner: list.some((o) => o.group === "merge" || o.group === "results" || o.group === "handoff" || o.ask),
+    // The ask's symbol (🔁 🔀 🗄 💬), for labels that show the title's own symbols but not this one.
+    askGlyph: list.find((o) => o.ask)?.glyph ?? null,
+    // Work still running behind a finished turn: the tab shows as working.
+    background: list.some((o) => (o.group === "background" && o.agents > 0) || o.wait),
+  };
+}
+// A label with the ask's symbol in front when the label doesn't show it yet (`ss`: subStatus): a title's own
+// symbols (✅ …) are in the label, the ask's (🔁 extra round, 🔀 merge) come from the reply, not the title.
+export const withAsk = (ss, label) => (ss?.askGlyph && !String(label).includes(ss.askGlyph) ? `${ss.askGlyph} ${label}` : label);
+// A tab's label without the symbols in front (the Overview shows them as a hint of their own).
+export function plainLabel(tab) {
+  const label = tabLabel(tab);
+  return label.replace(/^[^\p{L}\p{N}]+/u, "").trim() || label;
+}
+
+// The topic alone, for keeping as a tab's name: the title without the session-state emoji in
+// front (🔍 🔀 … come and go; a kept name shouldn't carry one).
+export function sessionTopic(a) {
+  return sessionTitle(a)?.replace(/^[^\p{L}\p{N}]+/u, "").trim() || null;
+}
+// Whether the tab's label comes from its session (nobody named it, or it is named just like its
+// program), so tabLabel follows the topic.
+export function autoNamed(tab, a = tabAgents(tab.id)[0]) {
+  return !tab.named || Boolean(a && tab.name === programName(a));
+}
+// Double-click on a tab: an auto-named tab keeps its current topic as its name; a tab someone
+// named (or one without a topic) gets Herdr's rename box.
+export function keepOrRename(tab) {
+  const a = tabAgents(tab.id)[0];
+  const topic = sessionTopic(a);
+  if (autoNamed(tab, a) && topic) run("tab.rename", { id: tab.id, name: topic });
+  else run("tab.rename", { id: tab.id });
 }
 
 export function showAgent(address) {
@@ -173,9 +348,47 @@ export function openTab(spaceId, tab) {
   showScreen(screenFor(tab));
 }
 
-// Agents that wait for the owner, in every space.
+// Agents that wait for the owner, in every space: a question or approval (blocked), an ask its reply ended
+// with (asks.js: an extra review round, a merge hand-off), or a turn that ended handing over a merge (the
+// tab-title hook's 🔀; a working session is busy again).
+// <grace> A permission prompt that auto mode settles by itself ("Wants to use …" for a few seconds) also reports
+// "blocked" (owner 11-12: "asked for a needs you but didn't actually need me"). Blocked counts only once it has
+// lasted BLOCK_GRACE_MS. Herdr gives no time for a status, so each copy notes when it first saw it.
+export const BLOCK_GRACE_MS = 10_000;
+// `seen`: { [address]: first ms it was seen blocked }; `list`: agents. Updates `seen` (drops the unblocked) and
+// says which addresses are past the grace at `now`.
+export function blockedPast(seen, list, now, grace = BLOCK_GRACE_MS) {
+  const past = new Set();
+  for (const k of Object.keys(seen)) if (!list.some((a) => a.address === k && a.status === "blocked")) delete seen[k];
+  for (const a of list) {
+    if (a.status !== "blocked") continue;
+    seen[a.address] ??= now;
+    if (now - seen[a.address] >= grace) past.add(a.address);
+  }
+  return past;
+}
+// </grace>
+const blockedSeen = {};
+export const reallyBlocked = (a) => Boolean(a) && a.status === "blocked" && blockedPast(blockedSeen, agents(), Date.now()).has(a.address);
+// Some agent is blocked but still inside its grace: views redraw each second meanwhile, so it shows once it lasts.
+export const inGrace = () => agents().some((a) => a.status === "blocked" && !reallyBlocked(a));
+// For a view's 1 s timer: redraw while some agent is in its grace, and once more when the grace ends.
+export function graceRedraw(view) {
+  const g = inGrace(), was = view.graceWas;
+  view.graceWas = g;
+  return g || Boolean(was);
+}
+export const watchGrace = (cx, view) => cx?.timer?.every(1000, (cx) => { if (graceRedraw(view)) cx.notify(); });
+
+export function needReason(a) {
+  if (!a) return null;
+  if (a.status === "blocked") return reallyBlocked(a) ? "question" : null;
+  const ask = askOf(a.address);
+  if (ask) return ask.kind;
+  return null;   // a 🔀 alone is merging (the hand-off was answered): the Overview's Merging group, not Needs you
+}
 export function needing() {
-  return agents().filter((a) => a.status === "blocked");
+  return agents().filter((a) => needReason(a));
 }
 
 // Shows a space's chat. The pick is cleared, so the chat starts at the space's focused or first agent.
@@ -189,19 +402,88 @@ export function showSpace(id) {
 // (view "termbar") closes it, because Esc goes to the terminal. Opening it again replaces it.
 export const KEY_TERM = "flockbook.terminal";   // the open terminal window's overlay id
 
+// Herdr's windows have no resize edges of their own, so the window draws grips on its edges
+// (termresize.js): a drag there saves the size as terminal_size "custom" + terminal_px. The title bar's
+// buttons step through the preset sizes (shares of the main window); the window reopens in its place
+// at the new size (same key).
+export const TERM_SIZES = { small: 0.55, default: 0.7, large: 0.85, full: 0.97 };
+export const TERM_ORDER = ["small", "default", "large", "full"];
+const KEY_TERM_BACK = "flockbook.terminal.back";   // the size before ⤢ (full), for the way back
+// The window's width and height: px for a dragged size, else a share of the main window.
+export function termDims(size, px) {
+  if (size === "custom" && px) return [px[0], px[1]];
+  const s = TERM_SIZES[size] ?? TERM_SIZES.default;
+  return [s, s];
+}
+// `at`: the top left. Herdr uses it only for a window it has no spot for yet (one never dropped);
+// else the window opens where it was last put (tested 11-11).
+function terminalWindow(address, name, at = null) {
+  const [width, height] = termDims(setting("terminal_size"), setting("terminal_px"));
+  const grip = (edge) => ({ mod: "flockbook", props: { view: "termgrip", edge, terminal: address, name } });
+  const inner = { type: "column", resizable: false, children: [
+    { type: "block", size: { px: 42 }, content: { mod: "flockbook", props: { view: "termbar", terminal: address, name } } },
+    { type: "block", content: { terminal: address } },
+  ] };
+  return openOverlay({
+    // Our own frame (rounder than Herdr's): the root paints the terminal's background, so the bar, the
+    // terminal's square corners and the grips around them sit inside the rounded edge.
+    kind: "window", key: "flockbook-terminal", width, height, frame: "none", ...(at ? { at } : {}),
+    layout: { type: "column", resizable: false, background: "background", radius: 16, border: { width: 1, color: "border" }, shadow: "lg",
+      children: gripFrame(inner, grip) },
+  });
+}
+
 // ctrl-` and the Terminal button: open the agent's terminal window, or close it when it is open.
 export function openTerminal(a) {
   const open = shared(KEY_TERM);
   if (open) { setShared(KEY_TERM, null); closeOverlay(open); return; }
   if (!a) return;
-  const id = openOverlay({
-    // Our own frame (rounder than Herdr's): the root paints the terminal's background, so the bar and
-    // the terminal's square corners sit inside the rounded edge. No inset around the terminal.
-    kind: "window", key: "flockbook-terminal", width: 0.7, height: 0.7, frame: "none",
-    layout: { type: "column", background: "background", radius: 16, border: { width: 1, color: "border" }, shadow: "lg", children: [
-      { type: "block", size: { px: 42 }, content: { mod: "flockbook", props: { view: "termbar", terminal: a.address, name: agentName(a) } } },
-      { type: "block", content: { terminal: a.address } },
-    ] },
-  });
-  setShared(KEY_TERM, id);
+  setShared(KEY_TERM, terminalWindow(a.address, agentName(a)));
+}
+// Opens `a`'s terminal window, never closes it (the sidebar's 🔌, s10): another agent's open window makes way.
+export function answerInTerminal(a) {
+  if (!a) return;
+  const open = shared(KEY_TERM);
+  if (open) { setShared(KEY_TERM, null); closeOverlay(open); }
+  setShared(KEY_TERM, terminalWindow(a.address, agentName(a)));
+}
+// The size the title bar asks for: "smaller", "larger", or "toggle" (full ⇄ the size before; a
+// double-click on the bar). `share`: how big a custom (dragged) size is, as a share of the main window
+// (null when not known yet); `back`: the size before full.
+export function nextTermSize(cur, how, share = null, back = null) {
+  if (how === "reset") return "default";   // the title bar's ↺ (a dragged size stays saved for Settings)
+  if (how === "toggle") return cur === "full" ? (back && back !== "full" ? back : "default") : "full";
+  if (cur === "custom") {
+    if (share == null) return how === "larger" ? "large" : "small";
+    const bigger = TERM_ORDER.find((k) => TERM_SIZES[k] > share + 0.02);
+    const smaller = [...TERM_ORDER].reverse().find((k) => TERM_SIZES[k] < share - 0.02);
+    return (how === "larger" ? bigger : smaller) ?? cur;
+  }
+  const i = Math.max(0, TERM_ORDER.indexOf(cur));
+  return TERM_ORDER[Math.max(0, Math.min(TERM_ORDER.length - 1, i + (how === "larger" ? 1 : -1)))];
+}
+// A custom size's share of the main window, once a drag has measured the main window.
+export function termShare() {
+  const px = setting("terminal_px");
+  const app = geom.app;
+  return px && app?.width > 0 && app?.height > 0 ? Math.max(px[0] / app.width, px[1] / app.height) : null;
+}
+// What the bar's buttons would pick (the same as now: that button is off).
+export function termSizeFor(how) {
+  const back = shared(KEY_TERM_BACK);
+  return nextTermSize(setting("terminal_size"), how, termShare(), back === "custom" && !setting("terminal_px") ? null : back);
+}
+export async function resizeTerminal(address, name, how) {
+  const cur = setting("terminal_size");
+  const to = termSizeFor(how);
+  if (to === cur) return;
+  if (to === "full") setShared(KEY_TERM_BACK, cur);
+  await setSetting("terminal_size", to);
+  if (shared(KEY_TERM)) setShared(KEY_TERM, terminalWindow(address, name));
+}
+// A drag on the window's edge let go: save the size and reopen the window at it (`r` {x, y, w, h}),
+// in its place (`at` keeps a window that was never dropped from re-centering).
+export async function applyTermRect(r, address, name, moved) {
+  await setSettings({ terminal_size: "custom", terminal_px: [r.w, r.h] });
+  if (shared(KEY_TERM)) setShared(KEY_TERM, terminalWindow(address, name, moved ? { x: r.x, y: r.y } : null));
 }

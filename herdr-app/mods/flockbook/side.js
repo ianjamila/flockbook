@@ -4,7 +4,9 @@ import { div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { theme, spaces, run, openOverlay, closeOverlay, props } from "herdr";
 import { openMenu, spaceItems } from "./menu.js";
-import { needing, showNeeds, showOverview, showSettings, shownScreen, icon, showSpace, toggleSidebar, sidebarShown, peekClosed, PEEK_W, PEEK_GAP, SPRING } from "./state.js";
+import { watchGrace, needing, showNeeds, showOverview, showSettings, shownScreen, icon, showSpace, toggleSidebar, sidebarShown, peekClosed, PEEK_W, PEEK_GAP, SPRING, tabLabel, subStatus, tabAgents, tabStatus, answerInTerminal } from "./state.js";
+import { elicitOf } from "./asks.js";
+import { movedBadge, badgeTip } from "./automove.js";
 import { statusMark, lightsRoom, BAR_H } from "./top.js";
 import { updateLine } from "./settings.js";
 import { updateSeen } from "./config.js";
@@ -35,6 +37,7 @@ export class SideView {
     this.floating = props()?.peek === true;
     // Slide in: the first frame left of its spot, then a spring to it.
     this.slid = !this.floating;
+    watchGrace(cx, this);   // the Needs you count once a blocked agent outlasts its grace
     if (!this.slid) cx?.timer?.after?.(16, (cx2) => { this.slid = true; cx2?.notify?.(); });
   }
 
@@ -94,7 +97,27 @@ export class SideView {
           .bg(t.raised).border(1).border_color(t.border).text_color(t.muted).child(monogram(s.name)))
         .child(div().flex_1().min_w(0).truncate().text_size(13).text_color(s.active ? t.foreground : t.muted).child(s.name))
         .child(h_flex().gap(4).items_center().flex_none()
-          .children(shown.map((tab) => statusMark(tab.status, t) ?? div().size(6).rounded(3).bg(t.dim)))
+          // Hovering a tab's mark names it: the session's topic, else its name ("Tab 2" for a bare number).
+          .children(shown.map((tab) => {
+            const label = tabLabel(tab);
+            // Background work: its words in the hover label, and a small dot on the mark when it waits
+            // on the owner (ready to merge, review results waiting).
+            const ss = subStatus(tab);
+            const name = /^\d+$/.test(label) ? `Tab ${label}` : label;
+            // Moved here by the auto-mover in the last few minutes: the tab bar's arrow, small, after the mark.
+            const moved = movedBadge(tabAgents(tab.id)[0]?.address);
+            // Blocked on an MCP server's input request (owner 11-12): 🔌 after the mark; a click opens its terminal to answer.
+            const mcp = tabAgents(tab.id).find((x) => x.status === "blocked" && elicitOf(x.address)) ?? null;
+            const tip = [name, mcp ? `MCP “${elicitOf(mcp.address).server}” asks for input: click to answer in its terminal` : ss?.hint, moved ? badgeTip(moved) : null].filter(Boolean).join(" — ");
+            return div().id(`mark-${s.id}-${tab.id}`).relative().flex_none().flex().gap(2).items_center().tooltip(tip)
+              .when(Boolean(mcp), (el) => el.cursor_pointer().on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); answerInTerminal(mcp); }))
+              .child(statusMark(tabStatus(tab), t) ?? div().size(6).rounded(3).bg(t.dim))
+              // A round or merge ask (owner 11-12): its 🔁 / 🔀 after the mark; other owner waits keep the dot.
+              .when(Boolean(mcp), (el) => el.child(div().flex_none().text_size(10).child("🔌")))
+              .when(Boolean(ss?.askGlyph) && !mcp, (el) => el.child(div().flex_none().text_size(10).child(ss.askGlyph)))
+              .when(Boolean(ss?.owner) && !ss?.askGlyph && !mcp, (el) => el.child(div().absolute().top(-2).right(-2).size(5).rounded(3).bg(t.accent)))
+              .when(Boolean(moved), (el) => el.child(svg(icon("moved")).size(10).flex_none().text_color(t.accent)));
+          }))
           .when(more > 0, (el) => el.child(div().text_size(11).text_color(t.muted).child(`+${more}`))));
     };
 

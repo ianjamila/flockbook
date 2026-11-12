@@ -20,8 +20,9 @@ import { textScale } from "./config.js";
 const appZoom = () => { const z = Number(settings?.()?.zoom); return z > 0 ? z : 1; };
 import { openMenu } from "./menu.js";
 import { Cards, wanted } from "./cards.js";
-import { startTop, overBar, BAR_H } from "./top.js";
+import { startTop, overBar, BAR_H, barOver, barRoom, noteScreenHeight } from "./top.js";
 import { HelperUI, isRemoteProblem } from "./helpercard.js";
+import { askOf, askMark } from "./asks.js";
 
 export const POLL_MS = 2000;
 const CHECK_MS = 400;
@@ -79,12 +80,23 @@ export class ChatView {
     this.lastPoll = 0;
     this.composer = new Composer(cx);
     this.composer.seen = (address) => { const f = this.feeds.get(address); return f ? { agent: f.agent ?? null, path: f.path ?? null } : null; };
-    this.top = {}; startTop(cx, this.top);
+    // After `send` refused a new conversation and its log was marked for a new look: read it now. True when the
+    // chat follows another log than before.
+    this.composer.onNewConversation = async (address, cx) => {
+      const f = this.feeds.get(address);
+      if (!f || address !== this.address) return false;
+      const before = f.path;
+      // A poll already running (with the old log) would make this one skip: wait for it, at most a second.
+      for (let i = 0; i < 10 && this.busy; i++) await new Promise((r) => cx.timer.after(100, () => r()));
+      this.lastPoll = 0; await this.poll(cx);
+      return f.path !== before;
+    };
+    this.barOver = barOver();
+    this.top = {}; if (this.barOver) startTop(cx, this.top);
     this.appear = new Appear();
     this.cards = new Cards(cx);
     this.helper = new HelperUI();
     this.refresh = (cx) => { this.lastPoll = 0; return this.poll(cx); };
-    this.composer.onNewConversation = (_address, cx) => this.refresh(cx);
     this.cards.canFocus = () => this.composer?.empty !== false;
     this.switchTo(currentAgent()?.address ?? null);
     cx.spawn((cx) => this.poll(cx));
@@ -264,7 +276,7 @@ export class ChatView {
     const w = this.colWidth();
     const at = typeof y0 !== "number" ? null : row.k === "assistant" ? { y: y0 - ROW_PAD_Y, w }
       : row.from == null ? { y: y0 - ROW_PAD_Y - BUBBLE_PAD_Y, w: bubbleTextWidth(w) } : null;
-    const code = at ? codeBlockAt(row.text || "", at.w, at.y - (i === 0 ? BAR_H : 0), textScale(), appZoom()) : null;
+    const code = at ? codeBlockAt(row.text || "", at.w, at.y - (i === 0 ? barRoom(this.barOver) : 0), textScale(), appZoom()) : null;
     if (code !== null) items.push({ label: "Copy code", act: "copy", args: { text: code } });
     items.push({ label: "Copy message", act: "copy", args: { text: row.text || "" } });
     return openMenu(items);
@@ -305,8 +317,8 @@ export class ChatView {
 
   list(t, f) {
     const rows = f.rows, n = rows.length;
-    // The first row starts below the bar; the rest scroll up under it.
-    const sizes = rows.map((r, i) => this.height(r) + (i === 0 ? BAR_H : 0));
+    // The first row starts below the bar; the rest scroll up under it (no room when the bar is outside).
+    const sizes = rows.map((r, i) => this.height(r) + (i === 0 ? barRoom(this.barOver) : 0));
     const box = v_flex().relative().flex_1().min_h(0)
       .on_scroll_wheel((e, cx) => {
         const up = e?.delta?.y > 0;
@@ -324,7 +336,7 @@ export class ChatView {
           this.autoOlder++; this.wantOlder = true;
         }
         const out = [];
-        for (let i = range.start; i < range.end; i++) out.push(i === 0 ? div().w_full().pt(BAR_H).child(this.item(rows[i], t)) : this.item(rows[i], t));
+        for (let i = range.start; i < range.end; i++) out.push(i === 0 ? div().w_full().pt(barRoom(this.barOver)).child(this.item(rows[i], t)) : this.item(rows[i], t));
         record("chat.rows", now() - t0, range.end - range.start);
         return out;
       }).track_scroll(this.scroll).on_item_click((key, cx) => this.click(key, cx))
@@ -341,7 +353,7 @@ export class ChatView {
           .child(svg(icon("arrow-down")).size(15))));
     }
     // While older rows load: a small note under the bar's tabs. Drawn only then: a hidden spinner still costs frames.
-    if (this.olderBusy) box.child(h_flex().absolute().top(BAR_H + 6).left(0).right(0).justify_center()
+    if (this.olderBusy) box.child(h_flex().absolute().top(barRoom(this.barOver) + 6).left(0).right(0).justify_center()
       .child(h_flex().id("older").h(26).px(12).gap(6).items_center().rounded(13).bg(t.raised).border(1).border_color(t.border)
         .text_size(12).text_color(t.muted)
         .child(svg(icon("spinner")).size(11).spin(SPIN_MS)).child("Loading earlier messages")));
@@ -364,23 +376,34 @@ export class ChatView {
     else main = this.list(t, f);
     const stop = (_e, cx) => cx.stop_propagation();
     return watchEdge(v_flex().id("root").relative().size_full().min_w(0).bg(t.background))
-      .on_size_change((size, cx) => { noteWindowHeight(size); if (Math.abs(size.width - this.width) >= 1) { this.width = size.width; cx.notify(); } })
+      .on_size_change((size, cx) => { noteScreenHeight(size, this.barOver); if (Math.abs(size.width - this.width) >= 1) { this.width = size.width; cx.notify(); } })
       .on_drop((e, cx) => this.composer.addFiles(e?.paths, cx))
       // The chat input keeps ⌘⌥↑/↓ from the app's keys, so the chat switches spaces itself.
       .on_key_down((e, cx) => { const go = spaceKey(e); if (go) { cx.stop_propagation?.(); run(go); } })
       // Another agent's chat fades in; a new card fades in and rises into place.
       // No press stop on the content: under Herdr 0.1.13 an ancestor's stop_propagation on the left press
-      // makes TextView text unselectable. Put the stop back (so content presses don't drag the window; the
-      // block has window_drag for the bar) once Herdr fixes that. The reply box and the cards keep theirs.
+      // makes TextView text unselectable. So with the bar drawn over the chat (its block has window_drag),
+      // a drag on the text moves the window. The layout puts the bar outside (props.bar) so it does not.
+      // The reply box and the cards keep their stops.
       .child(v_flex().flex_1().min_h(0)
         .child(this.appear.wrap(main, "chat-body", this.address, cx).flex_1().min_h(0).flex().flex_col()))
       .when(Boolean(this.helper.removeCard(t, this.refresh)), (el) => el.child(h_flex().w_full().px(16).pt(8).justify_center()
         .on_mouse_down("left", stop).child(this.helper.removeCard(t, this.refresh))))
       .when(Boolean(f) && f.error?.code !== "not-agent" && !isRemoteProblem(f.error), (el) => {
         const card = this.cards.view(this.address, t, "chat-card");
+        // What the reply ends asking for (an extra round, a merge, a migration go), as a strip over the reply box: the
+        // ask's line is easy to miss at the end of a long reply (owner 11-12). Not while a question card shows.
+        const mark = card ? null : askMark(askOf(this.address));
+        if (mark) el.child(h_flex().w_full().px(16).pt(8).justify_center().on_mouse_down("left", stop)
+          .child(h_flex().id("chat-ask").w_full().max_w(800).px(14).py(8).gap(10).items_center().rounded(12)
+            .bg(t.raised).border(1).border_color(t.accent)
+            .child(div().flex_none().text_size(18).child(mark.glyph))
+            .child(v_flex().flex_1().min_w(0)
+              .child(div().truncate().text_size(13.5).font_semibold().text_color(t.foreground).child(mark.title))
+              .child(div().text_size(12).text_color(t.muted).child(mark.hint)))));
         if (card) el.child(this.appear.wrap(h_flex().w_full().px(16).pt(8).justify_center().on_mouse_down("left", stop).child(card), "chat-card-in", `${this.address}:${this.cards.key?.(this.address) ?? ""}`, cx, 10));
         return el.child(div().w_full().on_mouse_down("left", stop).child(this.composer.render(currentAgent(), t)));
       })
-      .child(overBar(t));
+      .when(this.barOver, (el) => el.child(overBar(t)));
   }
 }

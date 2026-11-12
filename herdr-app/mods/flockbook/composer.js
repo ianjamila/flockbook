@@ -2,10 +2,38 @@
 // box to reply in. Enter sends through the sidecar's `send`; "+" or a drop attaches files.
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, Textarea, TextareaState } from "gpui-base";
-import { theme, panes, home, exec, window } from "herdr";
+import { theme, panes, home, exec, window, hc, shared, setShared } from "herdr";
+
+// Unsent text survives the chat being rebuilt (owner 11-12: "the text sometimes clears when herdr replies in the
+// terminal or another terminal or sends me a notification"): a new chat view (a mod reload, a layout change) made a
+// new, empty box and lost the drafts. Every agent's draft is kept in shared state (persisted), written DRAFT_MS
+// after the last change; a new box starts from it.
+const KEY_DRAFTS = "flockbook.drafts";   // { [address]: { text, files } }, non-empty drafts only
+const DRAFT_MS = 300;
+// <drafts>
+// The drafts to keep: the agents not shown (`drafts`) and the shown one's box (`address`, `text`, `files`),
+// empty ones left out.
+export function draftsToKeep(drafts, address, text, files) {
+  const out = {};
+  for (const [k, d] of drafts) if (k && (d?.text?.trim() || d?.files?.length)) out[k] = { text: d.text ?? "", files: d.files ?? [] };
+  if (address) { if (String(text ?? "").trim() || files?.length) out[address] = { text: text ?? "", files: files ?? [] }; else delete out[address]; }
+  return out;
+}
+// </drafts>
+// The cursor comes back too (s10): a rebuilt box takes the keyboard when the old one had it. The box's focus and blur
+// are kept in shared state; a blur less than BLUR_GRACE_MS before the new box is the old box going away.
+const KEY_FOCUS = "flockbook.replyFocus";   // { on, at }
+const BLUR_GRACE_MS = 2000;
+// <refocus>
+export function refocusWanted(f, born) {
+  return Boolean(f && (f.on || born - f.at < BLUR_GRACE_MS));
+}
+// </refocus>
 import { agentName, icon, SPIN_MS } from "./state.js";
+import { answered } from "./asks.js";
 import * as sidecar from "./sidecar.js";
 import { setting } from "./config.js";
+import { readStatusLine, statusLineView } from "./statusline.js";
 
 export const STATUS_MS = 5000;
 
@@ -24,11 +52,18 @@ export function shortPath(path) {
 // The tags to show, in order: the sidecar's (model, effort, context, cost), then folder, branch, agent.
 // The sidecar's model, effort, context and cost (its other tags repeat what is added here),
 // then the folder, the branch and the agent. A text shown twice is shown once.
-const FROM_SIDECAR = ["model", "effort", "context", "cost"];
+// "own": the parts of the owner's own status line (through the flockbook-statusline wrapper) that do not repeat
+// those four, e.g. "7d:51% ↻1d10h", "cache:59m".
+const FROM_SIDECAR = ["model", "effort", "context", "cost", "own"];
 export function tagsFor(agent, status) {
-  const out = (status?.tags ?? []).filter((t) => FROM_SIDECAR.includes(t.kind))
-    .map((t) => ({ kind: t.kind, text: t.text, warn: Boolean(t.warn) }));
+  const facts = new Set((status?.tags ?? []).map((t) => t.kind));
   const pane = agent ? paneOf(agent.address) : null;
+  // An own part that says again what a chip shows: "effort:high", "ctx:30% ███", "~$10.68", "user:~/folder".
+  const repeats = (s) => (facts.has("effort") && /^effort\s*[:=]/i.test(s)) || (facts.has("context") && /^ctx\s*[:=]?\s*\d+%/i.test(s))
+    || (facts.has("cost") && /^~?\$\d[\d.,]*(\s*est\.?)?$/i.test(s)) || (Boolean(pane?.cwd) && /^[\w.-]+:\\?[~/]/.test(s));
+  const out = (status?.tags ?? []).filter((t) => FROM_SIDECAR.includes(t.kind))
+    .map((t) => ({ kind: t.kind, text: t.kind === "own" ? String(t.text ?? "").replace(/\s+/g, " ").trim() : t.text, warn: Boolean(t.warn) }))
+    .filter((t) => t.kind !== "own" || !repeats(t.text));
   if (pane?.cwd) out.push({ kind: "cwd", text: shortPath(pane.cwd), warn: false });
   if (pane?.branch) out.push({ kind: "branch", text: pane.branch, warn: false });
   if (agent) out.push({ kind: "agent", text: agentName(agent), warn: false });
@@ -62,6 +97,43 @@ export function quoted(path) {
 
 // The text to send: the typed text, then each attached file's path. The sidecar's `send --file`
 // expects the text to name every file (docs/protocol.md).
+// "The agent's box has text in it" (box_not_empty). The helper counts a dim prompt suggestion that starts with "/"
+// as typed text (queue.rs box_has_text). A really typed "/…" shows Claude Code's command list right above the box,
+// so a lone "/word" in the box with no list above it is most likely the suggestion. Returns that word, else null
+// (anything else in the box, a list above it, or no box found). `screen`: the terminal's screen text (hc read).
+// Tested 2026-11-11 on a throwaway: typed "/clear" closed with Esc looks the same (no list), and hc send then
+// appends ("/clearReply…": an unknown command), so sendAnyway clears the line first (ctrl+e ctrl+u).
+// A box edge: a run of ─ (the top one may carry the session's title before its last ─).
+const BOX_EDGE = (l) => { const s = l.trim(); return /^─{8,}/.test(s) && s.endsWith("─"); };
+const LIST_ROW = /^\s*(❯\s+)?\/[\w:.-]+\s{2,}\S/;
+// The input box's rows (between its two edges, the bottom-most box on screen) and the lines above it, or null.
+function boxOf(screen) {
+  const lines = String(screen ?? "").split("\n");
+  let bottom = -1, top = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!BOX_EDGE(lines[i])) continue;
+    if (bottom < 0) bottom = i; else { top = i; break; }
+  }
+  return top < 0 ? null : { rows: lines.slice(top + 1, bottom), above: lines.slice(Math.max(0, top - 2), top) };
+}
+// The box has one line only. Right after ctrl+e ctrl+u cleared that line, whatever still shows on it is not typed
+// (Claude's placeholder or a suggestion); a typed second line would remain.
+export function boxOneLine(screen) {
+  const b = boxOf(screen);
+  return Boolean(b) && /^\s*❯/.test(b.rows[0] ?? "") && !b.rows.slice(1).some((r) => r.trim());
+}
+export function suggestedSlash(screen) {
+  const b = boxOf(screen);
+  if (!b) return null;
+  const rows = b.rows;
+  const m = /^\s*❯\s?(.*)$/.exec(rows[0] ?? "");
+  const word = m?.[1].trim() ?? "";
+  if (!/^\/[\w:.-]+$/.test(word) || rows.slice(1).some((r) => r.trim())) return null;
+  if (b.above.some((l) => LIST_ROW.test(l))) return null;
+  return word;
+}
+export const SUGGESTION_NOTE = (w) => `Not sent: the terminal's box shows “${w}” (most likely Claude's dim suggestion). Send anyway clears that line, typed or not, and sends your message.`;
+
 export function withFiles(text, files) {
   if (!files.length) return text;
   const paths = files.map(quoted).join(" ");
@@ -208,6 +280,7 @@ export class Composer {
       if (this.slashClosed !== null && v !== this.slashClosed) this.slashClosed = null;
       this.pick = 0; this.top = 0; this.wheel = 0;
       if (slashQuery(v) !== null || argQuery(v) !== null) cx.spawn((cx) => this.loadCommands(cx));
+      this.keepSoon(cx);
       cx.notify();
     });
     this.cmds = new Map();      // address → { at, list } of a Claude Code agent's "/" commands
@@ -217,7 +290,9 @@ export class Composer {
     this.top = 0;               // the first shown match
     this.wheel = 0;             // wheel pixels not yet a whole row
     this.slashClosed = null;    // the text Esc closed the list at
-    this.drafts = new Map();   // address → { text, files } of agents not shown
+    // address → { text, files } of agents not shown; a rebuilt box starts from the kept drafts.
+    this.drafts = new Map(Object.entries(shared(KEY_DRAFTS) ?? {}));
+    this.saving = false;
     this.address = null;
     // address → { agent, path } the chat showed last (set by the chat); send is bound to it.
     this.seen = null;
@@ -225,10 +300,29 @@ export class Composer {
     this.onNewConversation = null;
     this.files = [];
     this.sending = false;
-    this.note = null;          // { text, bad } under the box, after a send
+    this.note = null;          // { text, bad, anyway? } under the box, after a send; anyway: { address, text, files } for "Send anyway"
     this.status = new Map();   // address → status line
+    this.lineText = new Map(); // address → the owner's status line output (colour codes and all), or null
     this.statusAt = 0;
     this.statusBusy = false;
+    // Focus: read the old box's state before this box reports its own, then keep reporting.
+    const born = Date.now(), had = refocusWanted(shared(KEY_FOCUS), born);
+    this.input.on("focus", () => setShared(KEY_FOCUS, { on: true, at: Date.now() }));
+    this.input.on("blur", () => setShared(KEY_FOCUS, { on: false, at: Date.now() }));
+    // Once the chat drew the box (it has an agent), up to ~1 s.
+    const tryFocus = (n) => _cx?.timer?.after?.(150, () => { if (this.address) this.input.focus(); else if (n > 0) tryFocus(n - 1); });
+    if (had) tryFocus(6);
+  }
+
+  // Writes the drafts to shared state DRAFT_MS after a change (one write for a burst of keys).
+  keepSoon(cx) {
+    if (this.saving || !cx?.timer?.after) return;
+    this.saving = true;
+    cx.timer.after(DRAFT_MS, () => {
+      this.saving = false;
+      const next = draftsToKeep(this.drafts, this.address, this.input.value(), this.files);
+      if (JSON.stringify(next) !== JSON.stringify(shared(KEY_DRAFTS) ?? {})) setShared(KEY_DRAFTS, next);
+    });
   }
 
   // Sets the box's text from here (no change report counts on it).
@@ -332,7 +426,11 @@ export class Composer {
       const line = r.error ? null : r.lines.find((l) => l.type === "status") ?? null;
       const before = JSON.stringify(this.status.get(a) ?? null);
       this.status.set(a, line);
-      if (JSON.stringify(line) !== before) cx.notify();
+      // The owner's own status line, saved by the wrapper for the session the chat reads (only when it is on).
+      const text = line?.source === "statusline" ? await readStatusLine(this.seen?.(a)?.path) : null;
+      const changed = text !== (this.lineText.get(a) ?? null);
+      this.lineText.set(a, text);
+      if (changed || JSON.stringify(line) !== before) cx.notify();
     } finally { this.statusBusy = false; }
   }
 
@@ -380,22 +478,64 @@ export class Composer {
     const files = b.files;
     this.sending = true; this.note = null;
     b.setText(""); b.files = [];
+    this.keepSoon(cx);
     cx.notify();
     try {
       const r = await sidecar.send(a, withFiles(text, files), files, this.seen?.(a) ?? null);
       const done = r.lines.find((l) => l.type === "done");
-      const moved = sidecar.agentChanged(done), fresh = sidecar.newConversation(done);
+      const fresh = sidecar.conversationChanged(done);
+      const moved = !fresh && sidecar.agentChanged(done);
       // Only "sent" and "unconfirmed" (it may still arrive) mean the text went out; any other result did not send.
       if (r.error || !done || (done.result !== "sent" && done.result !== "unconfirmed")) {
         // Put the text back, unless the box moved to another agent or something new was typed.
         if (this.address === a && !b.input.value()) { b.setText(text); b.files = files; }
         else if (this.address !== a) this.drafts.set(a, { text, files });
-        this.note = { text: fresh ? sidecar.NEW_CONVERSATION : moved ? sidecar.AGENT_CHANGED : (r.error?.message ?? done?.message) || "The message was not sent.", bad: true };
-        if (fresh) this.onNewConversation?.(a, cx);
-      } else if (done.result === "unconfirmed") {
-        this.note = { text: "Sent. The agent did not confirm it yet.", bad: false };
+        // A new conversation in the same terminal (a /clear): the chat reads it now, so Send again goes to it.
+        const shown = fresh && await sidecar.recheckLog(a) && await this.onNewConversation?.(a, cx);
+        this.note = { text: shown ? sidecar.NEW_CONVERSATION : fresh ? sidecar.CONVERSATION_PENDING : moved ? sidecar.AGENT_CHANGED : (r.error?.message ?? done?.message) || "The message was not sent.", bad: true };
+        // Only a lone "/word" with no command list above the box: offer to type over it (sendAnyway).
+        if (done?.result === "box_not_empty" && this.address === a) {
+          const r2 = await hc(["read", a, "--json"]).catch(() => null);
+          let screen = null; try { screen = JSON.parse(r2?.stdout ?? "")?.text; } catch { screen = null; }
+          const w = r2?.code === 0 ? suggestedSlash(screen) : null;
+          if (w && this.address === a) this.note = { text: SUGGESTION_NOTE(w), bad: true, anyway: { address: a, text, files } };
+        }
+      } else {
+        // The owner answered: its ask leaves Needs you now, not at the next tick.
+        answered(a);
+        if (done.result === "unconfirmed") this.note = { text: "Sent. The agent did not confirm it yet.", bad: false };
       }
-    } finally { this.sending = false; cx.notify(); }
+    } finally { this.sending = false; this.keepSoon(cx); cx.notify(); }
+  }
+
+  // "Send anyway" after a box_not_empty that looked like a suggestion: ctrl+e ctrl+u clears the box's line (a typed
+  // "/word" goes; a dim suggestion is untouched), the screen is read again, and only a box down to one line gets the
+  // message (hc send pastes it over any dim text and presses Enter). Only for the same agent.
+  async sendAnyway(cx) {
+    const n = this.note?.anyway, a = this.address;
+    if (!n || this.sending || n.address !== a) return;
+    this.sending = true; this.note = null;
+    cx.notify();
+    try {
+      const fail = (e) => ({ code: -1, stdout: "", stderr: String(e) });
+      const k = await hc(["keys", a, "ctrl+e", "ctrl+u"]).catch(fail);
+      await new Promise((res) => cx.timer.after(300, () => res()));
+      const s = await hc(["read", a, "--json"]).catch(fail);
+      let screen = null; try { screen = JSON.parse(s.stdout)?.text; } catch { screen = null; }
+      if (k.code !== 0 || s.code !== 0 || !boxOneLine(screen) || this.address !== a) {
+        this.note = { text: "Not sent: the terminal's box still has text in it. Clear it in the terminal (ctrl-`), then send again.", bad: true };
+        return;
+      }
+      const r = await hc(["send", a, withFiles(n.text, n.files), "--json"]).catch(fail);
+      let o = null; try { o = JSON.parse(r.stdout); } catch { o = null; }
+      if (r.code === 0 && o && o.started !== false) {
+        if (this.address === a && this.input.value().replace(/\s+$/, "") === n.text) { this.setText(""); this.files = []; this.keepSoon(cx); }
+        answered(a);
+        this.note = { text: "Sent over the suggestion.", bad: false };
+      } else {
+        this.note = { text: `Not sent: ${(o?.message ?? o?.error ?? r.stderr ?? "").toString().trim().slice(0, 200) || "hc send failed."}`, bad: true };
+      }
+    } finally { this.sending = false; this.keepSoon(cx); cx.notify(); }
   }
 
   render(agent, t) {
@@ -431,7 +571,10 @@ export class Composer {
     return v_flex().id("composer").w_full().px(16).pb(14).pt(6).gap(6).items_center()
       .key_context(PASTE_CONTEXT)
       .on_action(PASTE_ACTION, (_e, cx) => { const text = cx.read_from_clipboard?.(); cx.spawn((cx) => this.paste(cx, text)); })
-      .when(setting("status_row") !== "hide", (el) => el.child(h_flex().id("tags").w_full().max_w(800).gap(5).items_center().overflow_x_scroll().children(tags.map(tag))))
+      // The owner's status line as the terminal draws it (two rows, its colours); without one, the chips.
+      .when(setting("status_row") !== "hide", (el) => el.child(
+        (agent && statusLineView(this.lineText.get(agent.address), t))
+          ?? h_flex().id("tags").w_full().max_w(800).gap(5).items_center().overflow_x_scroll().children(tags.map(tag))))
       .when(Boolean(s), (el) => el.child(v_flex().id("slash").w_full().max_w(800).p(4).gap(0).rounded(12).bg(t.raised)
         .border(1).border_color(t.border).shadow_sm().on_scroll_wheel((e, cx) => this.slashWheel(e, cx))
         .children(shown.map(row)).when(Boolean(more), (l) => l.child(more))))
@@ -455,7 +598,10 @@ export class Composer {
             .bg(empty || this.sending ? t.chrome : t.accent).text_color(empty || this.sending ? t.dim : t.background)
             .on_click((_e, cx) => cx.spawn((cx) => this.submit(cx)))
             .child(this.sending ? svg(icon("spinner")).size(13).spin(SPIN_MS) : svg(icon("send")).size(14)))))
-      .when(Boolean(this.note), (el) => el.child(div().id("send-note").w_full().max_w(800).text_size(12)
-        .text_color(this.note.bad ? t.blocked : t.muted).child(this.note.text)));
+      .when(Boolean(this.note), (el) => el.child(h_flex().id("send-note").w_full().max_w(800).gap(8).items_center()
+        .child(div().flex_1().min_w(0).text_size(12).text_color(this.note.bad ? t.blocked : t.muted).child(this.note.text))
+        .when(Boolean(this.note.anyway), (row) => row.child(div().id("send-anyway").flex_none().h(24).px(9).flex().items_center().rounded(6)
+          .text_size(12).text_color(t.foreground).bg(t.chrome).border(1).border_color(t.border).hover((s) => s.bg(t.hover))
+          .on_click((_e, cx) => cx.spawn((cx) => this.sendAnyway(cx))).child("Send anyway")))));
   }
 }

@@ -1,5 +1,5 @@
 // Calls the sidecar (docs/protocol.md): one command per exec, JSON Lines back.
-import { exec, appHome } from "herdr";
+import { exec, appHome, readTextFile, writeTextFile } from "herdr";
 
 export const PROTOCOL = 1;
 export const sidecarPath = () => `${appHome()}/flockbook/bin/flockbook-modfeed`;
@@ -82,6 +82,23 @@ export const send = (terminal, text, files = [], seen = null) => call("send", ["
 // The sidecar's "changed" reply when another agent took the pane: nothing was sent.
 export const AGENT_CHANGED = "Another agent is in this pane now. Nothing was sent.";
 export const agentChanged = (done) => done?.result === "changed" && /another agent/i.test(done?.message ?? "");
-// The same agent started a new conversation (`/clear`): nothing was sent; the chat reads the new log.
-export const NEW_CONVERSATION = "The agent started a new conversation; the chat now shows it. Nothing was sent.";
-export const newConversation = (done) => done?.result === "changed" && /new conversation/i.test(done?.message ?? "");
+
+// `send`'s "another agent or conversation": the terminal writes another log than the chat reads. After a /clear the
+// process stays, and the sidecar keeps a terminal's log in its cache for 30 s (locate.rs RECHECK_S), so `feed` reads
+// the old conversation while `send` (no --cache) finds the new one and refuses every message for that long.
+export const conversationChanged = (done) => done?.result === "changed" && /conversation/i.test(done?.message ?? "");
+export const NEW_CONVERSATION = "This terminal is in a new conversation now (after a /clear?). The chat shows it now: press Send again.";
+export const CONVERSATION_PENDING = "This terminal's conversation changed (a /clear?) and the chat has not caught up yet. Wait a few seconds, then press Send again.";
+// Marks the terminal's cached log as checked long ago, so the next `feed` looks for its log again. Only when the
+// file did not change meanwhile (the sidecar may be writing it); false when nothing was marked.
+export async function recheckLog(terminal) {
+  try {
+    const text = await readTextFile(cachePath());
+    const c = text ? JSON.parse(text) : null;
+    const e = c?.entries?.[terminal];
+    if (!e) return false;
+    e.checked = 0;
+    await writeTextFile(cachePath(), JSON.stringify(c), text);
+    return true;
+  } catch { return false; }
+}

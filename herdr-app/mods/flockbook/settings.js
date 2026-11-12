@@ -9,6 +9,27 @@ import { v_flex, h_flex, Input, InputState } from "gpui-base";
 import { theme, props, closeOverlay } from "herdr";
 import { setting, setSetting, loadConfig, configBad, configPath, updateShown, dismissUpdate } from "./config.js";
 import { icon, settingsClosed } from "./state.js";
+import { usageLines, cooledAccounts, accountName, clockText, localOffset, autoPausedUntil, pauseAutoUntilTomorrow, resumeAuto } from "./ai.js";
+import { ghCounts } from "./asks.js";
+import { accounts } from "./accounts.js";
+import { projects } from "./automove.js";
+// The accounts in use (the "accounts" setting) and the project workspaces (the "projects" setting), in words.
+export function accountsLine() {
+  const list = accounts();
+  const which = list.length ? list.map((a) => accountName(a.mark)).join(" · ") : "One account: the default one (~/.claude).";
+  return `${which} The About lines and Summarize run as each tab's own account. Several accounts: list them in config.json ("accounts", see the README); each one's status line must show its mark.`;
+}
+export function projectsLine() {
+  const list = projects();
+  return list.length ? `Projects: ${list.map((p) => p.name).join(", ")} (config.json "projects").` : "No projects are set yet (config.json \"projects\", see the README), so nothing moves.";
+}
+// "Today: Work account (WORK): automatic 14 of 200 · Rewrite 2 · Summarize 1 requests (…)", the GitHub checks per hour
+// (s13 F5) and any account on pause (ai.js). Requests, not tokens.
+export function callsLine() {
+  const now = Date.now(), parts = usageLines(), gh = ghCounts();
+  const paused = cooledAccounts().map((x) => `${accountName(x.account)} paused until ${clockText(x.until, now, localOffset())}.`);
+  return [`Today: ${parts.length ? parts.join(" · ") : "no requests yet"}.`, `GitHub checks (merged-PR lookups): ${gh.now} this hour, ${gh.last} the hour before.`, ...paused].join(" ");
+}
 import { pollPhone, phoneTick, PHONE_TICK_MS, phoneOn, phoneBlocked, phoneChoose, phoneUser, phoneBody, setPhoneOption } from "./phone.js";
 
 const PHONE = { title: "Phone page", about: "Read your agents on your phone, through Tailscale." };
@@ -22,11 +43,43 @@ export const SETTINGS = [
     about: "The model, context, cost, folder and branch above the reply box." },
   { key: "remote_helper", title: "Helper on other machines", choices: [["ask", "Ask", "ask"], ["never", "Never", "never"]],
     about: "For a tab on another machine, the chat asks before it installs the Flockbook helper there. Never: it does not ask, and nothing runs there. To remove a helper that is already there, choose Ask first." },
+  { key: "auto_move", title: "Move sessions to their project", choices: [["on", "On", "on"], ["off", "Off", "off"]],
+    about: () => `A session started in a "~" workspace moves once to a project's workspace when its title names that project or its work happens in that project's folder. Your view stays where it is; a session you move back stays put. ${projectsLine()}` },
+  // The plus build's workflow switches: each reads a way of ending a reply that a particular setup uses (the README's
+  // "Settings"); off unless turned on here or in config.json.
+  { key: "pipeline_asks", title: "Review-pipeline asks", choices: [["on", "On", "on"], ["off", "Off", "off"]],
+    about: "A reply ending with “🔁 Extra review round needed #N: round K · … · repo …”, “🔀 Ready to merge #N — say \"merge\"” or 'reply \"go migration N\"' is listed under Needs you, with Extra round and Merge buttons, and a tab whose title shows 🔀 is checked on GitHub (gh) until its pull request is merged." },
+  { key: "handoff_marks", title: "Hand-off marks", choices: [["on", "On", "on"], ["off", "Off", "off"]],
+    about: "A finished tab whose last reply hands the work to a fresh session (“yes, clear”, a “re-entry prompt”, “safe to /clear”) gets 🤝 and goes under Done → Hand-off given." },
+  { key: "worth_considering", title: "“Also worth considering” lists", choices: [["on", "On", "on"], ["off", "Off", "off"]],
+    about: "A reply that ends with an “Also worth considering” list of optional ideas is not taken as asking you something, even when an idea ends with a question or a “say …”." },
+  // Set in config.json only (lists): shown here so the dialog says what is in use.
+  { key: "accounts_info", title: "Claude accounts", info: () => accountsLine() },
+  { key: "about_line", title: "About lines", choices: [["on", "On", "on"], ["off", "Off", "off"]],
+    about: "Each Overview card gets one plain-English line on what the tab's work is for, written by Haiku (Claude's smallest model) from the tab's screen, as the tab's own Claude account: once per tab, again when its title changes, never for a tab idle for hours. It uses that account's usage; an account that runs out is paused until its reset. The \"Now\" line under it costs nothing." },
+  // One click stops automatic About lines until midnight (s13 F6). Not a config.json setting: kept in the shared store
+  // with its end time (`current` / `act` replace the usual setting).
+  { key: "about_pause", title: "Pause automatic About lines",
+    choices: () => [["run", "Running", "run"], ["tomorrow", autoPausedUntil() ? `Paused until ${clockText(autoPausedUntil(), Date.now(), localOffset())}` : "Until tomorrow", "tomorrow"]],
+    current: () => (autoPausedUntil() ? "tomorrow" : "run"),
+    act: (v) => (v === "tomorrow" ? pauseAutoUntilTomorrow() : resumeAuto()),
+    about: "Stops the automatic About lines until midnight, then they go on by themselves. \"Rewrite\" and \"Summarize this tab\" still work." },
+  // Today's count (ai.js callsToday) under the cap's own words (B3, owner 11-12).
+  { key: "about_cap", title: "About daily cap", choices: [["100", "100", "100"], ["200", "200", "200"], ["400", "400", "400"], ["none", "No cap", "none"]],
+    about: () => `At most this many automatic About lines a day per Claude account. "Rewrite" and "Summarize this tab" always go. ${callsLine()}` },
+  // A dragged size shows as a fourth choice, "Custom W × H", while there is one.
+  { key: "terminal_size", title: "Terminal window size", choices: () => {
+      const px = setting("terminal_px");
+      return [["small", "Small", "small"], ["default", "Default", "default"], ["large", "Large", "large"], ["full", "Full", "full"],
+        ...(px ? [["custom", `${px[0]} × ${px[1]}`, "custom"]] : [])];
+    },
+    about: "How big the agent's terminal window (⌃`) opens. Drag its edges or corners to any size (kept as the last choice), or use the − + buttons and the full-size button on its title bar (or double-click the bar)." },
 ];
 
 // The sidebar's sections; `parts`: [heading, setting keys] in order.
 export const SECTIONS = [
-  { id: "general", label: "General", icon: "sliders", parts: [["CHAT", ["text_size", "status_row"]], ["OTHER MACHINES", ["remote_helper"]]] },
+  { id: "general", label: "General", icon: "sliders", parts: [["CHAT", ["text_size", "status_row"]], ["TERMINAL", ["terminal_size"]], ["OVERVIEW", ["about_line", "about_pause", "about_cap", "accounts_info"]], ["OTHER MACHINES", ["remote_helper"]]] },
+  { id: "workflow", label: "Workflow", icon: "tool", parts: [["NEEDS YOU", ["pipeline_asks", "worth_considering"]], ["DONE", ["handoff_marks"]], ["WORKSPACES", ["auto_move"]]] },
   { id: "phone", label: "Phone page", icon: "phone" },
   { id: "updates", label: "Updates", icon: "refresh", parts: [["UPDATES", ["check_updates"]]] },
 ];
@@ -39,16 +92,20 @@ const smallButton = (t) => (id, label, act) => div().id(id).h(24).px(9).flex().i
   .text_color(t.foreground).bg(t.chrome).border(1).border_color(t.border).hover((s) => s.bg(t.hover))
   .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click((_e, cx) => act(cx)).child(label);
 
+// The plus build updates from its own git folder: the official install command would put the official mod back
+// over it. So the line offers this build's update command instead, and says why.
+export const PLUS_UPDATE = "git pull && ./install.sh";
 export function updateLine(t, owner, full = false) {
   const u = updateShown();
   if (!u) return null;
   const small = smallButton(t);
-  const copy = (cx) => { cx.write_to_clipboard?.(u.command); owner.copied = u.latest; cx.notify?.(); };
+  const copy = (cx) => { cx.write_to_clipboard?.(PLUS_UPDATE); owner.copied = u.latest; cx.notify?.(); };
   return v_flex().id("update-line").w_full().px(10).py(8).gap(6).rounded(8).bg(t.raised).border(1).border_color(t.border)
-    .child(div().text_size(12.5).text_color(t.foreground).child(`Flockbook ${u.latest} is out`))
-    .when(full, (el) => el.child(div().id("update-command").text_size(11.5).font_family("Menlo").text_color(t.muted).child(u.command)))
+    .child(div().text_size(12.5).text_color(t.foreground).child(`Flockbook ${u.latest} is out upstream`))
+    .child(div().text_size(11.5).text_color(t.muted).child("This is the plus build: update it in its folder once it has the new release (the official installer would replace it)."))
+    .when(full, (el) => el.child(div().id("update-command").text_size(11.5).font_family("Menlo").text_color(t.muted).child(PLUS_UPDATE)))
     .child(h_flex().gap(6).items_center()
-      .child(small("update-copy", owner.copied === u.latest ? "Copied" : "Copy install command", copy))
+      .child(small("update-copy", owner.copied === u.latest ? "Copied" : "Copy update command", copy))
       .child(small("update-dismiss", "Not now", (cx) => cx.spawn(async (cx) => { await dismissUpdate(); cx.notify(); }))));
 }
 
@@ -133,9 +190,13 @@ export class SettingsView {
     const about = (title, line) => v_flex().flex_1().min_w(0).gap(3)
       .child(div().text_size(13.5).text_color(t.foreground).child(title))
       .child(div().text_size(12).text_color(t.muted).child(line));
-    const row = (s) => h_flex().id(`set-${s.key}`).w_full().py(14).gap(24).items_center().border_b(1).border_color(t.border)
-      .child(about(s.title, s.about))
-      .child(seg(s.key, s.choices, (v, cx) => this.choose(s.key, v, cx)));
+    const row = (s) => s.info
+      ? h_flex().id(`set-${s.key}`).w_full().py(14).gap(24).items_center().border_b(1).border_color(t.border).child(about(s.title, s.info()))
+      : h_flex().id(`set-${s.key}`).w_full().py(14).gap(24).items_center().border_b(1).border_color(t.border)
+      .child(about(s.title, typeof s.about === "function" ? s.about() : s.about))
+      .child(s.act
+        ? seg(s.key, s.choices(), (v, cx) => { s.act(v); cx?.notify?.(); }, s.current(), false)
+        : seg(s.key, typeof s.choices === "function" ? s.choices() : s.choices, (v, cx) => this.choose(s.key, v, cx)));
     const sec = SECTIONS.find((x) => x.id === this.section) ?? SECTIONS[0];
     const body = v_flex().w_full().gap(0);
     if (bad) body.child(div().id("set-bad").mt(12).p(10).rounded(8).bg(t.raised).border(1).border_color(t.blocked)
