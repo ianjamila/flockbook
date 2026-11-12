@@ -1,5 +1,9 @@
 # Flockbook
 
+> **This branch is "Flockbook plus"**, a personal build of the Herdr mod on top of upstream Flockbook. What it
+> adds, how to install and update it: [herdr-app/README.md → Flockbook plus](herdr-app/README.md#flockbook-plus-this-build);
+> every change against upstream: [herdr-app/CHANGELOG-plus.md](herdr-app/CHANGELOG-plus.md).
+
 > **Unofficial.** Flockbook is not affiliated with, endorsed by, or supported by Herdr, Inc. It uses only Herdr's public APIs.
 
 Flockbook is a reading view for your [Herdr](https://herdr.dev) coding agents. Read what each agent did, see which one needs you, and reply in one place.
