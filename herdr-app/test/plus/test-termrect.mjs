@@ -11,7 +11,7 @@ const terminalOf = (spec) => JSON.stringify(spec).match(/"terminal":"([^"]+)"/)?
 const state = await loadMod("state.js", {
   herdr: { ...st, agents: () => [], panes: () => [], spaces: () => [], openOverlay: (spec) => { opened.push(terminalOf(spec)); return `ov${++n}`; }, closeOverlay: () => {} },
   "./config.js": { setting: () => null, setSettings: async (o) => { saved.push(o); return true; }, setSetting: async () => true },
-  "./termresize.js": { gripFrame: (inner) => [inner], geom: {} },
+  "./termresize.js": { gripFrame: (inner) => [inner], geom: {}, fitTerm: (want) => want, termAt: () => null },
 });
 const A = { address: "tA", name: "Agent A" }, B = { address: "tB", name: "Agent B" };
 eq("nothing open", state.termShown(), null);

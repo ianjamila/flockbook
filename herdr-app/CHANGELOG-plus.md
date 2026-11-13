@@ -11,6 +11,7 @@ Base: upstream `main` at `0cadf31` (after v0.13.0). What each change is for, in 
 | Question answers: a comma in a single-choice label is not ambiguous (+ red test) | `herdr-core/src/question/claude_exact.rs`: only a multi-select answer splits on commas. Upstream merged it (PR #12). |
 
 | Parked Claude tabs (11-13) | Claude Code can move a terminal's conversation to its background service ("parked": the client's pid file gets `parkedJobId`; the session runs on as a `bg` process whose pid file has that `jobId`). `herdr-core/src/resolver.rs` `claude_parked` follows it (in the terminal's process tree, else anywhere), and the session lookup now names the job's session (a parked client's own old one, or a `bg` job a client merely started, no longer makes it ambiguous). `flockbook-modfeed/src/parked.rs` gives such an agent the job's status (blocked while a prompt or question picker is on screen, else working/idle from the pid file) in every command, the phone page and queue, and the new `parked` command lists them (docs/protocol.md). |
+| Answer on a parked or named tab (11-13) | A named Claude Code session (parked, or renamed) draws its name in a rule under the question picker, below its key line. `herdr-core/src/question/claude_exact.rs` `above_name_rule` drops that one rule before the exact picker and review compares, which took the last line as the key line and refused every answer from the chat ("The question on screen changed before the answer went in"). |
 
 Upstream PR #12 (long questions, the "edit in <editor>" key line, typed capitals on the hc backend) is
 already in upstream `main`.
@@ -34,14 +35,14 @@ New files:
 | `statusline.js` | Each session's own status line in the chat header (with `extras/flockbook-statusline`). |
 | `summary.js` | The "Summarize this tab" dialog. |
 | `tabs.js` | The vertical tab list. A working agent's icon dances (two native `loop`s: hop + sway; `dances`, setting `dance`, on by default). |
-| `termresize.js` | Drag-resize grips for the terminal window, and its size presets. |
+| `termresize.js` | Drag-resize grips for the terminal window, and its size presets. `fitTerm`/`termAt`: the window stays clear of the tab list (it only shrinks, to the work column right of its remembered spot; a window never dropped is centered in the work column). |
 | `icons/moved.svg`, `icons/tablist.svg` | Their icons. |
 
 Changed files:
 
 | File | Change |
 |---|---|
-| `state.js` | Tab names from the session title (`sessionTitle`, `sessionTopic`, keep/rename); the title symbols and ask marks as sub-statuses (`overlays`, `subStatus`, `SUB_GROUPS`, incl. "Waiting on a review", and a merge watch still running after "merge" kept as working under "Merging"); terminal window sizes. |
+| `state.js` | Tab names from the session title (`sessionTitle`, `sessionTopic`, keep/rename); the title symbols and ask marks as sub-statuses (`overlays`, `subStatus`, `SUB_GROUPS`, incl. "Waiting on a review", and a merge watch still running after "merge" kept as working under "Merging"); terminal window sizes; `keepTerminal` (run by the 300 ms screen sync): the open terminal window follows the shown tab (closes on a tab with no terminal) and reopens in place at its fitted size when the app, a sidebar or its spot changes (`termRoom`/`termApp` from widths the screens, the sidebar and the tab list measure; Herdr's `windows.json` for the spot). |
 | `overview.js` | Status groups and sub-groups with waiting counts, Now/About lines, the Since-you-looked strip, the resume banner, pause notices, width fix. |
 | `needs.js` | Asks from replies, Extra round / Merge buttons (check the screen first), MCP input requests, waiting times. |
 | `top.js`, `side.js`, `termbar.js`, `menu.js`, `main.js` | Title tooltips, double-click to keep a name, hover labels, tab menu rows (Keep name, Name from session again, Move to, Summarize, Rewrite About line), the move badge, new views registered, the ticks (asks, about, history, resume, moves, patch check). |

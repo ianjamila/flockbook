@@ -3,7 +3,7 @@
 import { focused, shared, setShared, run, openOverlay, closeOverlay, appHome, readTextFile, panes } from "herdr";
 import { agents, spaces } from "./parked.js";
 import { loadConfig, updateSeen, setting, setSetting, setSettings } from "./config.js";
-import { gripFrame, geom } from "./termresize.js";
+import { gripFrame, geom, fitTerm, termAt } from "./termresize.js";
 import { askOf, prOf, bgOf, bgWords, askMark, handoffOf } from "./asks.js";
 
 export const KEY_AGENT = "flockbook.agent";
@@ -432,7 +432,12 @@ export function termDims(size, px) {
 // else the window opens where it was last put (tested 11-11).
 function terminalWindow(address, name, at = null) {
   setShared(KEY_TERM_FOR, { address, name });
-  const [width, height] = termDims(setting("terminal_size"), setting("terminal_px"));
+  setShared(KEY_TERM_TAB, activeTab()?.id ?? null);
+  const [width, height] = termWindowDims();
+  setShared(KEY_TERM_DIMS, [width, height]);
+  // No remembered spot (never dropped): centered in the work column, not over the tab list.
+  const room = termRoom();
+  if (!at && !geom.place && room && width > 1 && height > 1) at = termAt([width, height], room);
   const grip = (edge) => ({ mod: "flockbook", props: { view: "termgrip", edge, terminal: address, name } });
   const inner = { type: "column", resizable: false, children: [
     { type: "block", size: { px: 42 }, content: { mod: "flockbook", props: { view: "termbar", terminal: address, name } } },
@@ -445,6 +450,52 @@ function terminalWindow(address, name, at = null) {
     layout: { type: "column", resizable: false, background: "background", radius: 16, border: { width: 1, color: "border" }, shadow: "lg",
       children: gripFrame(inner, grip) },
   });
+}
+
+// The size the window opens at: the setting, fitted so it stays clear of the tab list (termresize.js fitTerm);
+// "full" (⤢) covers the app on purpose.
+const KEY_TERM_DIMS = "flockbook.terminal.dims";   // [w, h] the open window was opened at
+const KEY_TERM_TAB = "flockbook.terminal.tab";     // the shown tab when it opened (or last followed)
+export function termWindowDims() {
+  const size = setting("terminal_size");
+  const want = termDims(size, setting("terminal_px"));
+  return size === "full" ? want : fitTerm(want, termRoom(), termApp(), geom.place);
+}
+// The work column between the sidebars, app-relative ({x, w, h}), once a screen measured it; null before.
+// The sidebars are 250 px in the layout until their views measured them.
+export function termRoom() {
+  const h = shared(KEY_WIN_H);
+  if (!(geom.workW > 0 && h > 0)) return null;
+  return { x: sidebarShown() ? geom.sideW ?? 250 : 0, w: geom.workW, h };
+}
+export function termApp() {
+  const r = termRoom();
+  return r ? { width: r.x + r.w + (tablistShown() ? geom.listW ?? 250 : 0), height: r.h } : null;
+}
+// Herdr's remembered spot for the window (windows.json "places"; its own file, read only), at most every 2 s.
+export async function readTermPlace(now = Date.now()) {
+  if (now - geom.placeAt < 2000) return;
+  geom.placeAt = now;
+  let p = null;
+  try { p = JSON.parse((await readTextFile(`${appHome()}/windows.json`)) ?? "{}")?.places?.["flockbook-terminal"] ?? null; } catch { p = null; }
+  geom.place = Array.isArray(p) && p.length === 2 && p.every(Number.isFinite) ? { x: p[0], y: p[1] } : null;
+}
+// Run by the screen sync (top.js, every 300 ms, each copy; the shared keys make the first copy act). While the
+// terminal window is open: (1) the shown tab changed (a click on a tab or a workspace, a key): the window shows
+// that tab's terminal, or closes when it has none (owner 11-13: clicking a tab changed nothing on screen);
+// (2) the app or the sidebars changed size, or the window was moved: it reopens in place at the fitted size.
+export function keepTerminal() {
+  const open = shared(KEY_TERM), shown = termShown();
+  if (!open || !shown) return;
+  const tab = activeTab()?.id ?? null;
+  if (tab && tab !== shared(KEY_TERM_TAB)) {
+    setShared(KEY_TERM_TAB, tab);
+    const cur = currentTerminal();
+    if (!cur) { setShared(KEY_TERM, null); closeOverlay(open); return; }
+    if (cur.address !== shown.address) { setShared(KEY_TERM, terminalWindow(cur.address, agentName(cur))); return; }
+  }
+  const was = shared(KEY_TERM_DIMS), now = termWindowDims();
+  if (!Array.isArray(was) || Math.abs(was[0] - now[0]) >= 2 || Math.abs(was[1] - now[1]) >= 2) setShared(KEY_TERM, terminalWindow(shown.address, shown.name));
 }
 
 // ctrl-` and the Terminal button: open the agent's terminal window, or close it when it is open.

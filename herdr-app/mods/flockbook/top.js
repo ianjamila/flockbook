@@ -6,7 +6,8 @@ import { h_flex } from "gpui-base";
 import { theme, layout, window, settings, openOverlay, run, setAgentOrder, nextCommand, shared, setShared, props } from "herdr";
 import { openMenu, tabItems, openMoveMenu } from "./menu.js";
 import { spaceAgents, spaceTabs, activeTab, currentAgent, currentTerminal, tabLabel, plainLabel, sessionTitle, subStatus, withAsk, keepOrRename, screenFor, showTab, closeTab, openTerminal, showNeeds, icon, tabAgents, shownScreen,
-  SPIN_MS, FADE, sidebarShown, toggleSidebar, loadSidebar, showScreen, showOverview, showSettings, watchEdge, noteWindowHeight, applyTermRect, termShown, agentName, tabStatus, tablistShown, toggleTablist, watchGrace } from "./state.js";
+  SPIN_MS, FADE, sidebarShown, toggleSidebar, loadSidebar, showScreen, showOverview, showSettings, watchEdge, noteWindowHeight, applyTermRect, termShown, agentName, tabStatus, tablistShown, toggleTablist, watchGrace, keepTerminal, readTermPlace, KEY_TERM } from "./state.js";
+import { geom } from "./termresize.js";
 import { loadConfig, pollUpdate, updateDot, stepTextSize } from "./config.js";
 import { checkHelperPatch } from "./patchcheck.js";
 import { asksTick, TICK_MS as ASKS_MS } from "./asks.js";
@@ -147,6 +148,8 @@ export function startTop(cx, owner) {
 // shell. It acts only when the tab changes or an agent starts or stops in it, so a choice
 // made by hand (Needs you, the tab's terminals) stays until then.
 export function syncScreen(owner) {
+  // The terminal window follows the shown tab and stays clear of the tab list (state.keepTerminal).
+  if (shared(KEY_TERM)) { keepTerminal(); readTermPlace(); }
   const tab = activeTab();
   const now = tab ? `${tab.id}:${screenFor(tab)}` : null;
   if (now === owner.seen) return;
@@ -273,7 +276,11 @@ export const overBar = (t) => div().id("over-bar").absolute().top(0).left(0).rig
 export const barOver = () => props()?.bar !== "outside";
 export const barRoom = (over) => (over ? BAR_H : 0);
 // The window height, for the floating sidebar: with the bar outside, the screen is BAR_H shorter.
-export const noteScreenHeight = (size, over) => noteWindowHeight({ height: (size?.height ?? 0) + BAR_H - barRoom(over) });
+// Also the work column's width (a screen is as wide as it), for the terminal window's room (state.termRoom).
+export const noteScreenHeight = (size, over) => {
+  if (size?.width > 0) geom.workW = Math.round(size.width);
+  return noteWindowHeight({ height: (size?.height ?? 0) + BAR_H - barRoom(over) });
+};
 
 export class TopView {
   constructor(cx) { startTop(cx, this); }

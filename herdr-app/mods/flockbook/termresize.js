@@ -97,11 +97,35 @@ export function idleAction(now, last, start, r, idle = IDLE_MS) {
   if (now - last < idle) return null;
   return movedEnough(start, r) ? "apply" : "cancel";
 }
+
+// The terminal window stays clear of the tab list (owner 11-13: a window dragged big in a wide app covered the
+// tab list once the app got narrower, and its tabs could not be clicked). `want` [w, h]: px, or a share (≤ 1)
+// of the app. `room` {x, w, h}: the work column between the sidebars (app-relative px; h the app's height),
+// `app` {width, height}: the whole app; `at` {x, y}: the window's top left where Herdr puts it (its remembered
+// spot; null: none, so state.js places it with termAt). The window only shrinks, never below TERM_MIN; a share
+// becomes px. Nothing measured yet: `want` as it is.
+export const TERM_MARGIN = 12;
+export function fitTerm(want, room, app, at) {
+  if (!(room?.w > 0 && room?.h > 0 && app?.width > 0 && app?.height > 0)) return want;
+  let [w, h] = want;
+  if (w <= 1) w *= app.width;
+  if (h <= 1) h *= app.height;
+  const left = at ? at.x : room.x + TERM_MARGIN, top = at ? at.y : TERM_MARGIN;
+  const maxW = room.x + room.w - TERM_MARGIN - left, maxH = room.h - TERM_MARGIN - top;
+  return [Math.round(Math.min(w, Math.max(TERM_MIN.w, maxW))), Math.round(Math.min(h, Math.max(TERM_MIN.h, maxH)))];
+}
+// Where a window Herdr has no spot for goes: centered in the work column (Herdr centers it in the whole app,
+// partly over the tab list).
+export function termAt(dims, room) {
+  return { x: Math.round(room.x + Math.max(0, (room.w - dims[0]) / 2)), y: Math.round(Math.max(0, (room.h - dims[1]) / 2)) };
+}
 // </pure>
 
 // What the grips measured (module state is shared by every copy of the mod): the open window's outer
 // size, and the app's size from the last catcher (state.js uses it to place a custom size among the presets).
-export const geom = { w: 0, h: 0, app: null };
+// Also, for fitTerm: the work column's width (the screens measure it), the sidebar's and the tab list's widths
+// (their views measure them; null until drawn), and the window's remembered spot (Herdr's windows.json; null: none).
+export const geom = { w: 0, h: 0, app: null, workW: 0, sideW: null, listW: null, place: null, placeAt: 0 };
 
 const CURSOR = {
   n: (el) => el.cursor_ns_resize(), s: (el) => el.cursor_ns_resize(),

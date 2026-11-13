@@ -12,6 +12,7 @@ import { statusMark, lightsRoom, BAR_H } from "./top.js";
 import { updateLine } from "./settings.js";
 import { updateSeen } from "./config.js";
 import { dragger, dropPlace } from "./drag.js";
+import { geom } from "./termresize.js";
 
 // The workspace being dragged up or down (drag.js): one at a time, so the docked and the floating
 // sidebar draw from the same one.
@@ -133,7 +134,9 @@ export class SideView {
         .text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
         .on_mouse_down("left", stop).on_click(() => toggleSidebar()).child(svg(icon("sidebar")).size(16)));
     const root = v_flex().id("side-root").size_full().px(8).pb(8).gap(2)
-      .on_hover((h) => { if (!h) this.leave(); });
+      .on_hover((h) => { if (!h) this.leave(); })
+      // The sidebar's width, for the terminal window's room (state.termRoom); the floating panel is not it.
+      .on_size_change((size) => { if (!this.floating && size?.width > 0) geom.sideW = Math.round(size.width); });
     // Floating: the panel draws its own surface, as Herdr draws no frame around it.
     if (this.floating) root.on_mouse_down("left", stop).bg(t.chrome).rounded(14).border(1).border_color(t.border).shadow_lg()
       .relative().left(this.slid ? 0 : -PEEK_W).when(this.slid, (el) => el.spring("left", SPRING));

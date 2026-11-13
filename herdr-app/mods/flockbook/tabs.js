@@ -17,6 +17,7 @@ import { statusMark, BAR_H } from "./top.js";
 import { dragger, dropPlace } from "./drag.js";
 import { movedBadge, badgeTip } from "./automove.js";
 import { setting } from "./config.js";
+import { geom } from "./termresize.js";
 
 // The row being dragged up or down: one at a time, so every copy of the list draws from it.
 const drag = dragger("y");
@@ -151,6 +152,8 @@ function list(t, view) {
   };
 
   return v_flex().id("tabs-list").size_full().min_h(0).bg(t.chrome).border_l(1).border_color(t.border)
+    // The tab list's width, for the terminal window's room (state.termApp).
+    .on_size_change((size) => { if (size?.width > 0) geom.listW = Math.round(size.width); })
     .on_hover((inside, cx) => { if (!inside) drag.cancel(cx); })
     .on_mouse_down_out((_e, cx) => drag.cancel(cx))
     // On the whole list, not the rows: a release between rows ends the press too.
