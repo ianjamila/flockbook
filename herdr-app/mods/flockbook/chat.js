@@ -3,7 +3,7 @@
 // cannot be scrolled from code, and the chat must open at the newest message. Every row shows in full.
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextView, Scrollbar, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
-import { theme, run, shared, settings } from "herdr";
+import { theme, run, shared, settings, notify } from "herdr";
 import { currentAgent, machineOf, icon, SPIN_MS, FADE, shownScreen, watchEdge, noteWindowHeight, KEY_WIN_H } from "./state.js";
 import { Appear } from "./motion.js";
 import { now, record, flush, loadTiming } from "./timing.js";
@@ -14,6 +14,7 @@ import { ROW_PAD_Y, BUBBLE_PAD_X, BUBBLE_PAD_Y, BUBBLE_GAP, IMAGES_FS, bubbleWid
   CALL_H, SEP_H, FOOTER_H, STATUS_H, CARD_ROW_H, OTHER_H } from "./metrics.js";
 import { Composer } from "./composer.js";
 import { markdownView, codeBlockAt } from "./mdblocks.js";
+import { reentryPrompt } from "./blocks.js";
 import { textScale } from "./config.js";
 
 // Herdr's zoom: line heights round in zoomed px (estimate.js lineHeight).
@@ -75,6 +76,7 @@ export class ChatView {
     this.width = 0;              // the pane's width, from on_size_change
     this.follow = true;          // keep the newest row on screen
     this.open = new Set();       // tool rows that show their calls
+    this.copied = null;          // the footer row whose "Copy all" was just clicked (says "Copied" for 2 s)
     this.heights = new WeakMap(); // row → { w, open, k, zoom, h }
     this.busy = false;
     this.lastPoll = 0;
@@ -199,8 +201,18 @@ export class ChatView {
       case "tools": return this.tools(row, t);
       case "sep":
         return h_flex().w_full().h(SEP_H).items_center().justify_center().text_size(11.5).text_color(t.dim).child(row.text || "");
-      case "footer":
-        return div().w_full().h(FOOTER_H).pt(2).text_size(11.5).text_color(t.dim).child(row.text || "");
+      case "footer": {
+        // A reply that hands over to a fresh session (blocks.js reentryPrompt): "Copy all" beside its time, one click
+        // puts the whole prompt on the clipboard (click below; the list gives a whole row, so the line is the button).
+        if (!this.promptBefore(row)) return div().w_full().h(FOOTER_H).pt(2).text_size(11.5).text_color(t.dim).child(row.text || "");
+        const done = this.copied === row.id;
+        return h_flex().w_full().h(FOOTER_H).gap(10).items_center().text_size(11.5).text_color(t.dim).cursor_pointer()
+          .child(div().flex_none().child(row.text || ""))
+          .child(h_flex().id(`copy-prompt-${row.id}`).flex_none().gap(5).items_center().px(8).py(2).rounded(8).border(1)
+            .border_color(done ? t.done : t.border).text_color(done ? t.done : t.foreground)
+            .child(svg(icon(done ? "check" : "copy")).size(12))
+            .child(done ? "Copied" : "Copy all"));
+      }
       case "status":
         return h_flex().w_full().h(STATUS_H).items_center().justify_center().text_size(12).text_color(t.muted).child(row.text || "");
       case "perm": {
@@ -278,13 +290,42 @@ export class ChatView {
       : row.from == null ? { y: y0 - ROW_PAD_Y - BUBBLE_PAD_Y, w: bubbleTextWidth(w) } : null;
     const code = at ? codeBlockAt(row.text || "", at.w, at.y - (i === 0 ? barRoom(this.barOver) : 0), textScale(), appZoom()) : null;
     if (code !== null) items.push({ label: "Copy code", act: "copy", args: { text: code } });
+    const prompt = row.k === "assistant" ? reentryPrompt(row.text) : null;
+    if (prompt) items.push({ label: "Copy re-entry prompt", act: "copy", args: { text: prompt } });
     items.push({ label: "Copy message", act: "copy", args: { text: row.text || "" } });
     return openMenu(items);
+  }
+
+  // The re-entry prompt of the reply this footer ends: its last assistant text with one, back to the user's message.
+  promptBefore(footer) {
+    const rows = this.feed()?.rows ?? [];
+    for (let j = rows.findIndex((r) => r.id === footer.id) - 1; j >= 0; j--) {
+      const r = rows[j];
+      if (r.k === "footer" || (r.k === "user" && r.from == null)) return null;
+      if (r.k === "assistant") { const p = reentryPrompt(r.text); if (p) return p; }
+    }
+    return null;
+  }
+
+  // "Copy all": the prompt on the clipboard, a short notice, and the button says "Copied" for 2 s.
+  copyPrompt(row, cx) {
+    const p = this.promptBefore(row);
+    if (!p) return;
+    if (typeof cx?.write_to_clipboard !== "function") {
+      notify({ title: "Couldn't copy the re-entry prompt: no clipboard here. Right-click the reply → Copy re-entry prompt.", level: "warning", timeout: 3000 });
+      return;
+    }
+    cx.write_to_clipboard(p);
+    notify({ title: "Re-entry prompt copied to the clipboard", level: "info", timeout: 2000 });
+    this.copied = row.id;
+    cx.notify?.();
+    cx.timer?.after?.(2000, (cx2) => { if (this.copied === row.id) { this.copied = null; cx2?.notify?.(); } });
   }
 
   click(key, cx) {
     const row = this.feed()?.rows.find((r) => r.id === key);
     if (!row) return;
+    if (row.k === "footer") return this.copyPrompt(row, cx);
     if (row.k === "tools" || (row.k === "user" && row.from != null)) {
       if (this.open.has(row.id)) this.open.delete(row.id); else this.open.add(row.id);
       cx.notify();

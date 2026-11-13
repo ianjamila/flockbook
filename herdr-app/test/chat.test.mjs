@@ -433,3 +433,68 @@ test("Copy message copies the row's markdown as written, for user, assistant and
   assert.equal(copy("n1"), "Notes updated.\nSee notes.md");
   assert.equal(copy("s1"), null, "a status row has no menu");
 });
+
+// Owner 11-13: a reply with a re-entry prompt gets "Copy all" on its footer line; one click copies the whole prompt,
+// a short notice says so, and the button says "Copied" for 2 s.
+test("a re-entry prompt's footer has Copy all: the whole prompt on the clipboard, a notice, Copied for 2 s", async () => {
+  const { MenuView } = await import("../mods/flockbook/menu.js");
+  const reply = "Done.\n\nRe-entry prompt (`--effort high`):\n\n> Continue the work.\n> (1) PR 2a.";
+  fake.exec = () => jl(header, logLine("c1"), { type: "splice", at: 0, count: 6 }, user("u1", "go"), asst("a1", "Working on it."), tools("a1-t2"),
+    asst("a1-b", reply), { type: "row", id: "f-a1", k: "footer", text: "10:04 · Worked 14m · 54 tools" },
+    asst("a2", "No prompt here."), end);
+  const cx = fakeCx(); const v = new ChatView(cx); await cx.settle(); v.width = 900;
+  v.render(cx);
+  const footer = () => textOf(lastList._args.render({ start: 4, end: 5 })[0]);
+  assert.match(footer(), /10:04 · Worked 14m · 54 tools/);
+  assert.match(footer(), /Copy all/);
+  const sizes = lastList._args.sizes.slice();
+  let copied = null;
+  const ccx = { ...fakeCx(), write_to_clipboard: (s) => { copied = s; } };
+  const n0 = log.notify.length;
+  lastList._h.on_item_click("f-a1", ccx);
+  assert.equal(copied, "Continue the work.\n(1) PR 2a.");
+  assert.equal(log.notify.length, n0 + 1);
+  assert.match(log.notify.at(-1).title, /copied to the clipboard/i);
+  v.render(cx);
+  assert.match(footer(), /Copied/);
+  assert.doesNotMatch(footer(), /Copy all/);
+  assert.deepEqual(lastList._args.sizes, sizes, "the button changes no row's height");
+  const t = ccx.timers.find((x) => x.once && x.ms === 2000);
+  assert.ok(t, "a 2 s timer puts the label back");
+  t.f(ccx); v.render(cx);
+  assert.match(footer(), /Copy all/);
+  // Right-click on the reply: Copy re-entry prompt, before Copy message.
+  lastList._h.on_item_secondary_click("a1-b", { button: "right", position: { x: 0, y: 4 }, local_position: { x: 50, y: 4 } }, cx);
+  const items = log.overlays.at(-1).props.items;
+  assert.deepEqual(items.map((i) => i.label), ["Copy re-entry prompt", "Copy message"]);
+  fake.props = { view: "menu", items, overlay: "o1" };
+  copied = null;
+  const m = new MenuView(fakeCx()).render(fakeCx());
+  byId(m, "menu-0")._h.on_click({}, { ...fakeCx(), write_to_clipboard: (s) => { copied = s; } });
+  assert.equal(copied, "Continue the work.\n(1) PR 2a.");
+});
+
+test("a footer without a re-entry prompt has no Copy all, and a click on it copies nothing", async () => {
+  fake.exec = () => jl(header, logLine("c1"), { type: "splice", at: 0, count: 5 },
+    asst("a0", "Re-entry prompt:\n> an older turn's prompt"), user("u1", "go"), asst("a1", "All done."),
+    { type: "row", id: "f-a1", k: "footer", text: "10:05 · Worked 3s" }, { type: "row", id: "f-x", k: "footer", text: "10:06" }, end);
+  const cx = fakeCx(); const v = new ChatView(cx); await cx.settle(); v.width = 900;
+  v.render(cx);
+  assert.doesNotMatch(textOf(lastList._args.render({ start: 3, end: 4 })[0]), /Copy all/, "the user's message ends the look-back");
+  assert.doesNotMatch(textOf(lastList._args.render({ start: 4, end: 5 })[0]), /Copy all/, "another footer ends the look-back");
+  let copied = null;
+  const n0 = log.notify.length;
+  lastList._h.on_item_click("f-a1", { ...fakeCx(), write_to_clipboard: (s) => { copied = s; } });
+  assert.equal(copied, null);
+  assert.equal(log.notify.length, n0);
+});
+
+test("Copy all without a clipboard says so instead of claiming it copied", async () => {
+  fake.exec = () => jl(header, logLine("c1"), { type: "splice", at: 0, count: 2 },
+    asst("a1", "Re-entry prompt:\n> go on"), { type: "row", id: "f-a1", k: "footer", text: "10:05" }, end);
+  const cx = fakeCx(); const v = new ChatView(cx); await cx.settle(); v.width = 900;
+  v.render(cx);
+  lastList._h.on_item_click("f-a1", fakeCx());
+  assert.equal(log.notify.at(-1).level, "warning");
+  assert.match(log.notify.at(-1).title, /Couldn't copy/);
+});

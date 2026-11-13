@@ -70,3 +70,38 @@ export function splitBlocks(text) {
   flush();
   return out;
 }
+
+// Owner 11-13 ("when an re entry prompt like this appears, can there be a copy all button"): the prompt a reply hands
+// to a fresh session, as written, or null. A line that names it ("Re-entry prompt (`--effort high`):", "**Resume
+// prompt:**", "a prompt for a fresh session:") followed, after blank lines, by a quote (every "> " line from there;
+// blank lines between quoted lines kept, one "> " taken off each) or a code fence (its body). The last such line
+// with a quote or fence under it wins; one without (a later "the re-entry prompt above") is passed over.
+const PROMPT_NAME = /\bre-?entry prompt\b|\bresume prompt\b|\bhand-?off prompt\b|\bprompt for (?:a |the )?(?:fresh|new|next) session\b/i;
+const QUOTED = /^\s{0,3}>/;
+export function reentryPrompt(text) {
+  const lines = String(text ?? "").replace(/\r/g, "").split("\n");
+  for (let h = lines.length - 1; h >= 0; h--) {
+    if (!PROMPT_NAME.test(lines[h]) || QUOTED.test(lines[h])) continue;
+    let i = h + 1;
+    while (i < lines.length && !lines[i].trim()) i++;
+    if (i >= lines.length) continue;
+    const f = OPEN.exec(lines[i]) ?? TILDE_OPEN.exec(lines[i]);
+    let body = null;
+    if (f) {
+      body = [];
+      for (i++; i < lines.length && !closes(lines[i], f[1]); i++) body.push(lines[i]);
+    } else if (QUOTED.test(lines[i])) {
+      body = [];
+      for (; i < lines.length; i++) {
+        if (QUOTED.test(lines[i])) { body.push(lines[i].replace(/^\s{0,3}> ?/, "")); continue; }
+        let j = i;
+        while (j < lines.length && !lines[j].trim()) j++;
+        if (j > i && j < lines.length && QUOTED.test(lines[j])) { for (; i < j; i++) body.push(""); i--; continue; }
+        break;
+      }
+    }
+    const out = body?.join("\n").trim();
+    if (out) return out;
+  }
+  return null;
+}
