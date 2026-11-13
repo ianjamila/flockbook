@@ -2,7 +2,7 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { withHover } from "./hover.js";
-import { theme, spaces, shared, setShared, home } from "herdr";
+import { theme, spaces, agents, shared, setShared, home, notify } from "herdr";
 import { tabLabel, plainLabel, subStatus, SUB_GROUPS, tabAgents, agentName, openTab, showNeeds, needing, icon, FADE, watchEdge, noteWindowHeight } from "./state.js";
 import { openMenu, tabItems, suggestBadge } from "./menu.js";
 import { movedBadge, badgeTip } from "./automove.js";
@@ -175,21 +175,70 @@ export class OverviewView {
     });
   }
 
-  // "Since you last looked" (history.js, s13 item 8): one line per tab with what changed after the last "Mark seen"
-  // (or since midnight), newest first. Copy puts exactly these lines on the clipboard; Mark seen clears the strip.
+  // "Since you last looked" (history.js; s13 item 8, redesigned 11-13 for the owner's "hard to read … organized
+  // better"): the tabs that changed after the last "Mark seen" (or since midnight), grouped by what they do now
+  // (Waiting on you first). A tab is a small card: name, account, how long since its last change, what it does now,
+  // its About line, and its changes as time chips. A click on an open tab's card opens it; Closed starts folded.
+  // Copy puts the same layout on the clipboard as text (copyText); Mark seen clears the strip.
   sinceStrip(t) {
     const v = sinceView();
-    if (!v.lines.length) return [];
-    const copied = this.copiedAt && Date.now() - this.copiedAt < 3000;
+    if (!v.groups.length) return [];
+    const now = Date.now();
+    const copied = this.copiedAt && now - this.copiedAt < 3000;
+    this.sinceOpen ??= new Set(["needs", "busy", "working", "finished"]);
     const btn = (id, label, on) => div().id(id).h(26).px(10).flex().flex_none().items_center().rounded(7).text_size(12)
       .bg(t.chrome).border(1).border_color(t.border).text_color(t.foreground).hover((s) => s.bg(t.hover)).on_click(on).child(label);
-    return [v_flex().id("ov-since").w_full().gap(6).px(14).py(10).rounded(10).bg(t.raised).border(1).border_color(t.border)
+    const tint = { needs: t.blocked, busy: t.accent, working: t.working, finished: t.done, closed: t.dim };
+    const copy = (_e, cx) => {
+      if (typeof cx?.write_to_clipboard !== "function") { notify({ title: "Couldn't copy: no clipboard here.", level: "warning", timeout: 3000 }); return; }
+      cx.write_to_clipboard(copyText(v)); this.copiedAt = Date.now();
+      notify({ title: "Copied what changed to the clipboard", level: "info", timeout: 2000 });
+      cx.notify();
+    };
+    const tabFor = (addr) => {
+      const ag = agents().find((x) => x.address === addr);
+      if (!ag?.tab) return null;
+      for (const sp of spaces()) { const tab = (sp.tabs ?? []).find((x) => x.id === ag.tab); if (tab) return { space: sp, tab }; }
+      return null;
+    };
+    const chip = (id, e) => h_flex().id(id).flex_none().gap(5).items_center().px(7).py(1).rounded(6).bg(t.chrome).text_size(11.5)
+      .child(div().text_color(t.dim).child(e.when))
+      .child(div().text_color(e.kind === "needs" ? t.blocked : e.kind === "pr" ? t.done : t.foreground).child(e.text));
+    const item = (g, it, i) => {
+      const id = `ov-since-${g.key}-${i}`;
+      const open = g.key === "closed" ? null : tabFor(it.addr);
+      return v_flex().id(id).w_full().gap(4).px(10).py(8).rounded(8)
+        .when(Boolean(open), (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).tooltip("Open this tab").on_click(() => openTab(open.space.id, open.tab)))
+        .child(h_flex().w_full().gap(8).items_center()
+          .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(g.key === "closed" ? t.muted : t.foreground).child(it.label))
+          .when(Boolean(it.account), (el) => el.child(div().id(`${id}-acct`).flex_none().px(5).rounded(4).border(1).border_color(t.border)
+            .text_size(10.5).text_color(t.muted).tooltip(accountName(it.account)).child(it.account)))
+          .child(div().flex_none().text_size(11.5).text_color(t.dim).child(ago(it.at, now) === "now" ? "just now" : `${ago(it.at, now)} ago`)))
+        .child(div().w_full().whitespace_normal().text_size(12).text_color(tint[g.key]).child(it.now))
+        .when(Boolean(it.about), (el) => el.child(div().id(`${id}-about`).w_full().whitespace_normal().text_size(12).line_height("17px")
+          .text_color(t.muted).tooltip("About: written by Haiku from the tab's screen").child(it.about)))
+        .when(it.events.length > 0, (el) => el.child(h_flex().w_full().flex_wrap().gap(4).items_center()
+          .when(it.more > 0, (r) => r.child(div().flex_none().text_size(11).text_color(t.dim).child(`+${it.more} earlier`)))
+          .children(it.events.map((e, k) => chip(`${id}-e${k}`, e)))));
+    };
+    const group = (g) => {
+      const shown = this.sinceOpen.has(g.key);
+      return v_flex().id(`ov-since-g-${g.key}`).w_full().gap(2)
+        .child(h_flex().id(`ov-since-h-${g.key}`).gap(6).items_center().pt(6).pb(2).cursor_pointer()
+          .on_click((_e, cx) => { if (shown) this.sinceOpen.delete(g.key); else this.sinceOpen.add(g.key); cx.notify(); })
+          .child(div().size(7).rounded(4).bg(tint[g.key]))
+          .child(div().text_size(11).font_semibold().text_color(t.muted).child(g.title.toUpperCase()))
+          .child(div().text_size(11).text_color(t.dim).child(`${g.items.length} ${shown ? "▾" : "▸"}`)))
+        .when(shown, (el) => el.children(g.items.map((it, i) => item(g, it, i))));
+    };
+    return [v_flex().id("ov-since").w_full().gap(4).px(14).py(10).rounded(10).bg(t.raised).border(1).border_color(t.border)
       .child(h_flex().gap(8).items_center()
-        .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(t.foreground).child(v.header))
-        .child(btn("ov-since-copy", copied ? "Copied" : "Copy", (_e, cx) => { cx.write_to_clipboard?.(copyText(v)); this.copiedAt = Date.now(); cx.notify(); }))
+        .child(v_flex().flex_1().min_w(0)
+          .child(div().truncate().text_size(13).font_semibold().text_color(t.foreground).child(v.header))
+          .child(div().truncate().text_size(11.5).text_color(t.dim).child(`${v.count} ${v.count === 1 ? "tab" : "tabs"} changed${v.note ? ` · ${v.note}` : ""}`)))
+        .child(btn("ov-since-copy", copied ? "Copied" : "Copy", (_e, cx) => copy(_e, cx)))
         .child(btn("ov-since-seen", "Mark seen", (_e, cx) => { markSeen(); cx.notify(); })))
-      .when(Boolean(v.note), (el) => el.child(div().text_size(11.5).text_color(t.dim).child(v.note)))
-      .children(v.lines.map((l, i) => div().id(`ov-since-${i}`).w_full().whitespace_normal().text_size(12.5).line_height("18px").text_color(t.foreground).child(l.text)))];
+      .children(v.groups.map(group))];
   }
 
   // Claude sessions open before a restart (resume.js, owner 11-12 s13): Resume all / Dismiss, and a Resume per row.

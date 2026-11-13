@@ -47,7 +47,8 @@ file by file, is in [`CHANGELOG-plus.md`](CHANGELOG-plus.md).
   a pill, or the tab menu's **Keep name**, to keep the current topic as the tab's name; **Name from session
   again** goes back. The terminal window's header names the agent too.
 - A vertical **tab list** down the right of the window (like VS Code's terminal list): every tab of the shown
-  workspace stays in sight, scrolls to the shown one, shows ⌘1–⌘9 hints and each tab's status.
+  workspace stays in sight, scrolls to the shown one, shows ⌘1–⌘9 hints and each tab's status. A working
+  agent's icon dances (hops and sways) until its work stops; Settings → General → Tab list turns it off.
 - The sidebar's workspace status marks say which tab they are on hover.
 
 **Overview**
@@ -59,8 +60,11 @@ file by file, is in [`CHANGELOG-plus.md`](CHANGELOG-plus.md).
   tab, again when its title changes; a daily cap per account; "Pause until tomorrow"; off in Settings).
 - **Hover boxes** on cards, tab pills and tab-list rows: the About line and a few sentences more, the last
   steps, the helpers at work, links to **Summarize** and **Rewrite**.
-- **Since you last looked**: what changed in each tab while you were away (finished, asked you something,
-  waiting on CI or a review, a hand-off, a PR merged), with **Copy** and **Mark seen**.
+- **Since you last looked**: what changed in each tab while you were away, grouped by what the tab does now
+  (**Waiting on you**, **Merging, CI or review**, **Working**, **Finished**, **Closed** — folded at first). Each tab is
+  a small card: its name and account, how long ago it changed, what it does now, its About line, and its changes as
+  time chips that name the day where it changes ("yesterday 10:15 pm"). A click opens the tab; **Copy** puts the
+  same layout on the clipboard as text (with a "Copied" notice); **Mark seen** clears it.
 - **Resume after a restart**: the Claude sessions that were open when Herdr Core or the Mac restarted are
   offered back (**Resume**, **Resume all**, **Dismiss**); each opens in its workspace and folder, as its
   account, with `claude --resume`. A row being opened says "Opening…".
@@ -82,6 +86,9 @@ file by file, is in [`CHANGELOG-plus.md`](CHANGELOG-plus.md).
 - Answers Claude Code can't take typed (some symbols) say so and offer the terminal (a Codex question answered
   by a message takes any text); drafts are kept per agent.
 - Selected text in the reply and answer boxes is highlighted in the theme's selection blue.
+- A reply that ends with a **re-entry prompt** (a "Re-entry prompt:" line with a quote or code block under it) gets
+  **Copy all** on its footer line: one click puts the whole prompt on the clipboard, a small notice says it was
+  copied, and the button says "Copied" for 2 seconds. Right-click the reply → **Copy re-entry prompt** does the same.
 - Optional: each session's own **status line** in the chat header (see "Status line" below).
 
 **Terminal window**

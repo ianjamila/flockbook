@@ -53,3 +53,40 @@ test("ago and greeting", () => {
   assert.equal(ago(null, now), "");
   assert.equal(greeting(9), "Good morning"); assert.equal(greeting(15), "Good afternoon"); assert.equal(greeting(21), "Good evening");
 });
+
+// Owner 11-13 ("hard to read … should be organized better"): the strip groups tabs by what they do now, a card per tab;
+// a click opens an open tab; Closed starts folded; Copy copies the grouped text and says so.
+test("Since you last looked: groups, cards, click to open, Closed folded, Copy with a notice", async () => {
+  const { KEY_HIST } = await import("../mods/flockbook/history.js");
+  const now = Date.now(), m = 60_000;
+  const ev = (addr, label, min, kind, text) => ({ at: now - min * m, addr, label, account: "WORK", kind, text });
+  fake.shared[KEY_HIST] = { from: now - 600 * m, at: now, last: {
+    t1: { label: "api", account: "WORK", state: "working", about: "Keeps the API fast.", pr: null, handoff: false },
+    t2: { label: "docs", account: "WORK", state: "needs", ask: "ready to merge · #5", about: null, pr: null, handoff: false },
+  }, events: [ev("t1", "api", 9, "finished", "finished"), ev("t1", "api", 8, "about", "About: Keeps the API fast. (auto-written)"),
+    ev("t2", "docs", 5, "needs", "ready to merge · #5"), ev("gone", "Webshop", 4, "closed", "closed")] };
+  const v = new OverviewView(fakeCx());
+  const el = v.render(fakeCx());
+  const strip = byId(el, "ov-since");
+  const text = textOf(strip);
+  // Waiting on you comes first, then Working, then Closed (folded: its tab is not listed).
+  assert.ok(text.indexOf("WAITING ON YOU") < text.indexOf("WORKING") && text.indexOf("WORKING") < text.indexOf("CLOSED"), text);
+  assert.match(text, /3 tabs changed/);
+  assert.match(textOf(byId(el, "ov-since-needs-0")), /docs.*WORK.*ready to merge, #5/);
+  assert.match(textOf(byId(el, "ov-since-working-0")), /api.*Keeps the API fast\./);
+  assert.doesNotMatch(textOf(byId(el, "ov-since-working-0")), /auto-written/);
+  assert.equal(byId(el, "ov-since-closed-0"), null, "Closed starts folded");
+  byId(el, "ov-since-h-closed")._h.on_click({}, fakeCx());
+  const el2 = v.render(fakeCx());
+  assert.match(textOf(byId(el2, "ov-since-closed-0")), /Webshop/);
+  assert.equal(byId(el2, "ov-since-closed-0")._h?.on_click, undefined, "a closed tab's card opens nothing");
+  log.run = [];
+  byId(el2, "ov-since-needs-0")._h.on_click({}, fakeCx());
+  assert.deepEqual(log.run.slice(0, 2), [["space.select", { id: "sp1" }], ["tab.select", { id: "tb-t2" }]]);
+  let copied = null;
+  byId(el2, "ov-since-copy")._h.on_click({}, { ...fakeCx(), write_to_clipboard: (s) => { copied = s; } });
+  assert.match(copied, /^Since you last looked/);
+  assert.match(copied, /\nWaiting on you \(1\)\n- docs \[WORK\]: ready to merge, #5\n/);
+  assert.match(log.notify.at(-1).title, /Copied/);
+  assert.match(textOf(byId(v.render(fakeCx()), "ov-since-copy")), /Copied/);
+});

@@ -59,7 +59,7 @@ eq("gh count: an hour with none", asks.ghCounts(), { now: 0, last: 0 });
   const M = MOD;
   const ov = fs.readFileSync(M + "overview.js", "utf8"), nd = fs.readFileSync(M + "needs.js", "utf8"), se = fs.readFileSync(M + "settings.js", "utf8"), tp = fs.readFileSync(M + "top.js", "utf8");
   eq("overview: strip, then pause banners, then auto-pause line", /\.children\(this\.sinceStrip\(t\)\)\s*\.children\(this\.pauseBanners\(t\)\)\s*\.children\(this\.autoPauseLine\(t\)\)/.test(ov), true);
-  eq("overview: Copy copies copyText(v) of the shown view", /write_to_clipboard\?\.\(copyText\(v\)\)/.test(ov), true);
+  eq("overview: Copy copies copyText(v) of the shown view", /write_to_clipboard\(copyText\(v\)\)/.test(ov), true);
   eq("needs: waiting age on the row", /waitingFor\(a\.address\)/.test(nd), true);
   eq("settings: pause row in OVERVIEW", /\["OVERVIEW", \["about_line", "about_pause", "about_cap", "accounts_info"\]\]/.test(se), true);
   eq("settings: usage + GitHub line", /usageLines\(\)/.test(se) && /GitHub checks/.test(se), true);

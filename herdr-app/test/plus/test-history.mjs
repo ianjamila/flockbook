@@ -65,20 +65,67 @@ h.historyTick();
 eq("gap: noticed from moves to now", h.history().from, now);
 eq("gap: About change still caught", h.history().events.at(-1).text, "About: Couriers read offline. (auto-written)");
 
-// The strip: per tab, newest tab first, events after the baseline; Copy = exactly the strip's lines.
+// The strip (owner 11-13 redesign): grouped by what each tab does now; a tab = name, account, now, About, change chips.
 const view = h.sinceView({ seen: T0 + 5 * MIN, now, off: OFF });
 eq("strip: header", view.header, "Since you last looked (3:05 pm)");
 eq("strip: earlier changes may be missing (gap after the baseline)", view.note, `changes noticed from ${"3:36 pm"} · earlier changes may be missing`);
-eq("strip: lines", view.lines.map((l) => l.text), [
-  "Style Guide #1838 (Work account (WORK)): 3:10 pm finished · 3:15 pm ready to merge, #1838 · 3:36 pm About: Couriers read offline. (auto-written)",
-  "Inventory (Personal account (HOME)): 3:16 pm closed",
-]);
-eq("copy: same lines under a local-day header", h.copyText(view), [
+eq("strip: groups in order, empty ones left out", view.groups.map((g) => [g.key, g.title, g.items.length]), [["needs", "Waiting on you", 1], ["closed", "Closed", 1]]);
+eq("strip: count of tabs", view.count, 2);
+eq("strip: a tab's card", view.groups[0].items[0], { addr: "t1", label: "Style Guide #1838", account: "WORK", now: "ready to merge, #1838",
+  about: "Couriers read offline.", at: T0 + 36 * MIN,
+  events: [{ when: "3:10 pm", text: "finished", kind: "finished" }, { when: "3:15 pm", text: "ready to merge, #1838", kind: "needs" }], more: 0 });
+eq("strip: a closed tab keeps its name and account", [view.groups[1].items[0].label, view.groups[1].items[0].account, view.groups[1].items[0].now], ["Inventory", "HOME", "closed"]);
+eq("copy: the strip as text, a heading per group", h.copyText(view), [
   "Since you last looked (3:05 pm) — Thu 12 Nov · changes noticed from 3:36 pm · earlier changes may be missing",
-  "- Style Guide #1838 (Work account (WORK)): 3:10 pm finished · 3:15 pm ready to merge, #1838 · 3:36 pm About: Couriers read offline. (auto-written)",
-  "- Inventory (Personal account (HOME)): 3:16 pm closed",
+  "",
+  "Waiting on you (1)",
+  "- Style Guide #1838 [WORK]: ready to merge, #1838",
+  "  About: Couriers read offline.",
+  "  3:10 pm finished → 3:15 pm ready to merge, #1838",
+  "",
+  "Closed (1)",
+  "- Inventory [HOME]: closed",
+  "  3:16 pm closed",
 ].join("\n"));
-eq("strip: nothing after Mark seen", h.sinceView({ seen: now, now, off: OFF }).lines, []);
+eq("strip: nothing after Mark seen", h.sinceView({ seen: now, now, off: OFF }).groups, []);
+// The day is said where it matters (owner 11-13: "10:15 pm … 10:15 am" read as one evening).
+{
+  const clk = (at) => { const w = new Date(at + OFF * MIN); const hh = w.getUTCHours(); return `${hh % 12 || 12}:${String(w.getUTCMinutes()).padStart(2, "0")} ${hh < 12 ? "am" : "pm"}`; };
+  const N = Date.UTC(2026, 10, 13, 2, 20);   // Fri 10:20 am Singapore
+  const y = Date.UTC(2026, 10, 12, 14, 15);  // Thu 10:15 pm
+  eq("when: today", h.whenText(N - 5 * MIN, N, OFF, clk), "10:15 am");
+  eq("when: yesterday", h.whenText(y, N, OFF, clk), "yesterday 10:15 pm");
+  eq("when: older → weekday", h.whenText(y - 2 * 86_400_000, N, OFF, clk), "Tue 10:15 pm");
+  eq("when: same day as the event before → time only", h.whenText(y + 60 * MIN, N, OFF, clk, y), "11:15 pm");
+  eq("when: a timeline crossing into today says today", h.whenText(N - 5 * MIN, N, OFF, clk, y), "today 10:15 am");
+  eq("when: just after midnight, the evening before is yesterday", h.whenText(Date.UTC(2026, 10, 12, 15, 50), Date.UTC(2026, 10, 12, 16, 10), OFF, clk), "yesterday 11:50 pm");
+}
+// nowText: what a tab does now, in words.
+eq("now: finished with a merged PR and a hand-off", h.nowText({ state: "finished", pr: { pr: 1916, state: "MERGED" }, handoff: true }), "finished · #1916 merged · gave a hand-off");
+eq("now: ci", h.nowText({ state: "ci" }), "waiting on CI");
+eq("now: merging", h.nowText({ state: "merging" }), "merging");
+eq("now: working", h.nowText({ state: "working", handoff: true }), "working");
+eq("now: needs, its ask with commas", h.nowText({ state: "needs", ask: "ready to merge · #5" }), "ready to merge, #5");
+eq("now: gone", h.nowText(null), "closed");
+// More than PER_TAB changes: the last 6 shown, "+N earlier"; About changes are not chips, the newest About is the line.
+{
+  const evs = [];
+  for (let i = 0; i < 9; i++) evs.push({ at: now + (i + 1) * MIN, addr: "t1", label: "Style Guide #1838", account: "WORK", kind: i % 2 ? "finished" : "needs", text: i % 2 ? "finished" : `asks ${i}` });
+  evs.push({ at: now + 20 * MIN, addr: "t1", label: "Style Guide #1838", account: "WORK", kind: "about", text: "About: Newer words. (auto-written)" });
+  st.setShared(h.KEY_HIST, { ...h.history(), events: evs, last: { t1: { label: "Style Guide #1838", account: "WORK", state: "working", about: null } } });
+  const v2 = h.sinceView({ seen: now, now: now + 30 * MIN, off: OFF });
+  const it = v2.groups[0].items[0];
+  eq("many: in Working", v2.groups.map((g) => g.key), ["working"]);
+  eq("many: last 6 changes, 3 earlier", [it.events.length, it.more, it.events.at(-1).text], [6, 3, "asks 8"]);
+  eq("many: the newest About when the tab has none now", it.about, "Newer words.");
+}
+// In a group, the tab with the newest change first (the record lists them oldest first).
+{
+  const e = (addr, min) => ({ at: now + min * MIN, addr, label: addr, account: null, kind: "finished", text: "finished" });
+  const fin = { state: "finished", about: null };
+  st.setShared(h.KEY_HIST, { ...h.history(), events: [e("old", 1), e("new", 5), e("mid", 3)], last: { old: { label: "old", ...fin }, new: { label: "new", ...fin }, mid: { label: "mid", ...fin } } });
+  eq("order: newest change first", h.sinceView({ seen: now, now: now + 10 * MIN, off: OFF }).groups[0].items.map((x) => x.label), ["new", "mid", "old"]);
+}
 h.markSeen();
 eq("markSeen stores now", h.seenAt(), now);
 // Default baseline: start of the local day.

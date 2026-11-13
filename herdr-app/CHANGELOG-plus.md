@@ -23,14 +23,14 @@ New files:
 | `ai.js` | About lines and the Haiku calls behind them and Summarize: one call gate (known account, not paused, under the daily cap), usage-limit pauses with the reset time read in any time zone, per-account counts. |
 | `asks.js` | Reads each local agent's screen every 15 s: replies that end asking you something, review-pipeline asks (setting), hand-offs (setting), background shells/agents, CI and review waits, MCP input requests, the "Now:" line, merged-PR checks via `gh` (setting). |
 | `automove.js` | Move to <workspace> (tab menu), automatic moves to project workspaces and the wrong-workspace badge, from the `projects` setting. |
-| `history.js` | "Since you last looked": per-tab snapshots and events (finished, needs you, waiting on CI, waiting on a review, hand-off, About, PR merged/closed), Copy and Mark seen, "waiting 2 h". |
+| `history.js` | "Since you last looked": per-tab snapshots and events (finished, needs you, waiting on CI, waiting on a review, hand-off, About, PR merged/closed), Copy and Mark seen, "waiting 2 h". 11-13: grouped by what each tab does now (`SINCE_GROUPS`), a card per tab (`nowText`, About line, change chips), times name their day (`whenText`); `overview.js` draws it, click opens the tab, Closed folded, Copy = the grouped text with a notice. |
 | `hover.js` | The hover box on cards, tab pills and tab-list rows. |
 | `patchcheck.js` | Warns once when an official update replaced the patched helper (only after a patched one was seen here). |
 | `resume.js` | Remembers each Claude tab's session and offers them back after a restart (Resume, Resume all, Dismiss, "Opening…"). |
 | `selection.js` | Text selection in the kit's text boxes in the theme's selection colour. |
 | `statusline.js` | Each session's own status line in the chat header (with `extras/flockbook-statusline`). |
 | `summary.js` | The "Summarize this tab" dialog. |
-| `tabs.js` | The vertical tab list. |
+| `tabs.js` | The vertical tab list. A working agent's icon dances (two native `loop`s: hop + sway; `dances`, setting `dance`, on by default). |
 | `termresize.js` | Drag-resize grips for the terminal window, and its size presets. |
 | `icons/moved.svg`, `icons/tablist.svg` | Their icons. |
 
@@ -42,8 +42,9 @@ Changed files:
 | `overview.js` | Status groups and sub-groups with waiting counts, Now/About lines, the Since-you-looked strip, the resume banner, pause notices, width fix. |
 | `needs.js` | Asks from replies, Extra round / Merge buttons (check the screen first), MCP input requests, waiting times. |
 | `top.js`, `side.js`, `termbar.js`, `menu.js`, `main.js` | Title tooltips, double-click to keep a name, hover labels, tab menu rows (Keep name, Name from session again, Move to, Summarize, Rewrite About line), the move badge, new views registered, the ticks (asks, about, history, resume, moves, patch check). |
+| `chat.js`, `blocks.js` | Copy all for a reply's re-entry prompt (`reentryPrompt`): a footer-line button with a "copied" notice and 2 s "Copied", plus a right-click item. |
 | `chat.js`, `composer.js`, `sidecar.js`, `cards.js` | Send anyway over a "/" suggestion, sends after `/clear`, ask markers above the reply box, untypeable answers, drafts, the chat's last lines at any zoom, the MCP input card; upstream's `--cache` send kept. |
-| `config.js`, `settings.js` | New settings: About lines (on/off, daily cap, pause until tomorrow), terminal size, and the Workflow switches `pipeline_asks`, `handoff_marks`, `worth_considering`, `auto_move` (all off by default), plus `accounts`, `projects`, `claude_path`, `helper_rebuild` (config.json). The update notice points to this build's own update command. |
+| `config.js`, `settings.js` | New settings: About lines (on/off, daily cap, pause until tomorrow), terminal size, dancing tab-list icons (`dance`), and the Workflow switches `pipeline_asks`, `handoff_marks`, `worth_considering`, `auto_move` (all off by default), plus `accounts`, `projects`, `claude_path`, `helper_rebuild` (config.json). The update notice points to this build's own update command. |
 | `estimate.js` | Row heights at a zoom below 1 count prose at its unzoomed line height, so a long reply's last lines (often the ask) are not cut off. |
 
 ## Layout, themes, install

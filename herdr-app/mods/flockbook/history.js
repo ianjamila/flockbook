@@ -63,6 +63,27 @@ export function waitText(since, known, now) {
   const s = m < 60 ? `${m} min` : m < 1440 ? `${Math.floor(m / 60)} h` : `${Math.floor(m / 1440)} d`;
   return `waiting ${s}${known ? "" : "+"}`;
 }
+// The strip's groups (owner 11-13: "hard to read … should be organized better"): each tab under what it does NOW, the
+// groups in this order. A tab no longer open is "closed".
+export const SINCE_GROUPS = [["needs", "Waiting on you"], ["busy", "Merging, CI or review"], ["working", "Working"], ["finished", "Finished"], ["closed", "Closed"]];
+const GROUP_OF = { needs: "needs", ci: "busy", merging: "busy", review: "busy", working: "working", finished: "finished" };
+// What a tab does now, in words, from its snapshot (null: closed).
+export function nowText(snap) {
+  if (!snap) return "closed";
+  if (snap.state === "needs") return String(snap.ask ?? "waits for you").replace(/ · /g, ", ");
+  const merged = snap.pr?.state === "MERGED" ? `#${snap.pr.pr} merged` : snap.pr?.state === "CLOSED" ? `#${snap.pr.pr} closed` : null;
+  const word = { ci: "waiting on CI", merging: "merging", review: "waiting on a review", working: "working" }[snap.state] ?? "finished";
+  return [word, merged, snap.state === "finished" && snap.handoff ? "gave a hand-off" : null].filter(Boolean).join(" · ");
+}
+// A past time with its day where it matters: "10:15 am" (today), "yesterday 10:15 pm", "Wed 10:15 pm". `clock`: the
+// time of day ("10:15 pm"). With `prevAt`, the day is said only when it differs from that event's day (a timeline).
+export function whenText(at, now, off, clock, prevAt = null) {
+  const day = dayStart(at, off), today = dayStart(now, off);
+  if (prevAt != null && dayStart(prevAt, off) === day) return clock(at);
+  if (day === today) return prevAt == null ? clock(at) : `today ${clock(at)}`;
+  if (today - day <= 26 * 3600_000) return `yesterday ${clock(at)}`;
+  return `${DAYS[new Date(at + off * 60_000).getUTCDay()]} ${clock(at)}`;
+}
 // </history-pure>
 
 export const history = () => shared(KEY_HIST) ?? { from: null, at: null, last: {}, events: [] };
@@ -104,8 +125,11 @@ export function waitingFor(address, now = Date.now()) {
   return s?.state === "needs" && s.needsAt ? waitText(s.needsAt, s.needsKnown, now) : null;
 }
 
-// The strip: { header, note, lines: [{ addr, text }] } for the events after `seen` (default: local midnight). One
-// line per tab, the tab with the newest change first, its last PER_TAB changes in order, a repeat in a row once.
+// The strip (owner 11-13 redesign): { header, note, day, count, groups: [{ key, title, items }] }, the events after `seen`
+// (default: local midnight). An item is one tab: { addr, label, account, now (what it does now), about (its latest
+// About line, without "(auto-written)"), at (its last change), events: [{ when, text, kind }] (its last PER_TAB
+// changes but About ones, oldest first, a repeat in a row once, the day said where it changes), more (older ones left
+// out) }. Groups in SINCE_GROUPS order, empty ones left out; in a group the tab with the newest change first.
 export function sinceView({ seen = seenAt(), now = Date.now(), off = localOffset() } = {}) {
   const h = history();
   const base = seen ?? dayStart(now, off);
@@ -113,21 +137,40 @@ export function sinceView({ seen = seenAt(), now = Date.now(), off = localOffset
   const by = new Map();
   for (const e of h.events ?? []) {
     if (e.at <= base) continue;
-    const list = by.get(e.addr) ?? [];
-    if (list.at(-1)?.text !== e.text) list.push(e);
-    by.set(e.addr, list);
+    const t = by.get(e.addr) ?? { all: [], events: [], about: null };
+    t.all.push(e);
+    if (e.kind === "about") t.about = String(e.text).replace(/^About: /, "").replace(/ \(auto-written\)$/, "");
+    else if (t.events.at(-1)?.text !== e.text) t.events.push(e);
+    by.set(e.addr, t);
   }
-  const lines = [...by.entries()].sort((x, y) => y[1].at(-1).at - x[1].at(-1).at).map(([addr, list]) => {
-    const head = list.at(-1);
-    // An ask's own " · " ("ready to merge · #1838") would read as two changes: a comma inside one.
-    const items = list.slice(-PER_TAB).map((e) => `${clock(e.at)} ${String(e.text).replace(/ · /g, ", ")}`);
-    return { addr, text: `${head.label ?? addr} (${accountName(head.account)}): ${list.length > PER_TAB ? "… " : ""}${items.join(" · ")}` };
-  });
-  const header = `Since you last looked (${seen ? clock(seen) : "today"})`;
-  const note = h.from && base < h.from ? `changes noticed from ${clock(h.from)} · earlier changes may be missing` : null;
-  return { header, note, lines, day: dayText(now, off) };
+  const groups = new Map(SINCE_GROUPS.map(([key, title]) => [key, { key, title, items: [] }]));
+  for (const [addr, t] of by) {
+    const snap = h.last?.[addr] ?? null;
+    const head = t.all.at(-1);
+    const shown = t.events.slice(-PER_TAB);
+    const events = shown.map((e, i) => ({ when: whenText(e.at, now, off, clock, i ? shown[i - 1].at : null), text: String(e.text).replace(/ · /g, ", "), kind: e.kind }));
+    groups.get(snap ? GROUP_OF[snap.state] ?? "finished" : "closed").items.push({
+      addr, label: snap?.label ?? head.label ?? addr, account: snap?.account ?? head.account ?? null, now: nowText(snap),
+      about: snap?.about ?? t.about, at: head.at, events, more: t.events.length - shown.length,
+    });
+  }
+  const list = [...groups.values()].filter((g) => g.items.length);
+  for (const g of list) g.items.sort((x, y) => y.at - x.at);
+  const header = `Since you last looked (${seen ? whenText(seen, now, off, clock) : "today"})`;
+  const note = h.from && base < h.from ? `changes noticed from ${whenText(h.from, now, off, clock)} · earlier changes may be missing` : null;
+  return { header, note, day: dayText(now, off), count: by.size, groups: list };
 }
-// What "Copy" puts on the clipboard: exactly the strip's lines, under its header and the local day.
+// What "Copy" puts on the clipboard: the strip as it reads, as Markdown: the header and local day, a heading per group,
+// a bullet per tab (now, account), its About and its changes indented under it.
 export function copyText(view) {
-  return [`${view.header} — ${view.day}${view.note ? ` · ${view.note}` : ""}`, ...view.lines.map((l) => `- ${l.text}`)].join("\n");
+  const out = [`${view.header} — ${view.day}${view.note ? ` · ${view.note}` : ""}`];
+  for (const g of view.groups) {
+    out.push("", `${g.title} (${g.items.length})`);
+    for (const it of g.items) {
+      out.push(`- ${it.label}${it.account ? ` [${it.account}]` : ""}: ${it.now}`);
+      if (it.about) out.push(`  About: ${it.about}`);
+      if (it.events.length) out.push(`  ${it.more ? `(${it.more} earlier) ` : ""}${it.events.map((e) => `${e.when} ${e.text}`).join(" → ")}`);
+    }
+  }
+  return out.join("\n");
 }
