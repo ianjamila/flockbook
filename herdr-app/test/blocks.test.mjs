@@ -60,3 +60,24 @@ test("reentryPrompt: none without a quote or fence under the line; a later menti
   assert.equal(reentryPrompt("Re-entry prompt:\n> the prompt\n\nCopy the re-entry prompt above into a fresh session."), "the prompt");
   assert.equal(reentryPrompt("Plain quote:\n> not a prompt"), null);
 });
+
+// Owner 11-13 follow-up: a reply that was only the fenced prompt + "The prompt is ready to paste." had no Copy all.
+test("reentryPrompt: a block counts when the line under it speaks of the prompt, when it reads like one, or when asked for", async () => {
+  const { reentryPrompt } = await import("../mods/flockbook/blocks.js");
+  const fenced = "```\nContinue the auto-close work.\n1. Map C.\n```\n\nThe prompt is ready to paste. Exit this terminal with `/exit`, then paste it.";
+  assert.equal(reentryPrompt(fenced), "Continue the auto-close work.\n1. Map C.");
+  assert.equal(reentryPrompt("> Go on with PR 5.\n\nPaste this into the new session."), "Go on with PR 5.");
+  // Reads like one: starts "Continue …" and is long; a short one or code starting with `continue;` is not.
+  const long = ("Continue eaglewatch PR #1945 " + "with the review rounds and the migration go ".repeat(5)).trim();
+  assert.equal(reentryPrompt(`If you start fresh instead:\n> ${long}`), long);
+  assert.equal(reentryPrompt("Note:\n> Continue later."), null, "short");
+  assert.equal(reentryPrompt("```js\ncontinue;\n" + "x();\n".repeat(60) + "```"), null, "code that starts with continue;");
+  // Asked for: the owner's message wanted a re-entry prompt, so the reply's block is it.
+  assert.equal(reentryPrompt("```\nGo on.\n```", "can you give me a re-entry prompt?"), "Go on.");
+  assert.equal(reentryPrompt("```\nGo on.\n```", "write me a resume prompt"), "Go on.");
+  assert.equal(reentryPrompt("```\nGo on.\n```", "fix the bug"), null, "not asked: a plain code block is not a prompt");
+  assert.equal(reentryPrompt("```sh\nnpm test\n```\n\nRun that, then tell me what fails."), null);
+  assert.equal(reentryPrompt("> a quote\n\nThat's what the docs say."), null);
+  // The last block that counts wins.
+  assert.equal(reentryPrompt("Re-entry prompt:\n> first\n\nOr, shorter:\n\n```\nsecond\n```\n\nThat prompt is ready to paste."), "second");
+});

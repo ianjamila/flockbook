@@ -72,36 +72,55 @@ export function splitBlocks(text) {
 }
 
 // Owner 11-13 ("when an re entry prompt like this appears, can there be a copy all button"): the prompt a reply hands
-// to a fresh session, as written, or null. A line that names it ("Re-entry prompt (`--effort high`):", "**Resume
-// prompt:**", "a prompt for a fresh session:") followed, after blank lines, by a quote (every "> " line from there;
-// blank lines between quoted lines kept, one "> " taken off each) or a code fence (its body). The last such line
-// with a quote or fence under it wins; one without (a later "the re-entry prompt above") is passed over.
+// to a fresh session, as written, or null. The prompt is a quote (every "> " line of it; blank lines between quoted
+// lines kept, one "> " taken off each) or a code fence (its body). A block counts when:
+//  (1) a line just above it names it ("Re-entry prompt (`--effort high`):", "**Resume prompt:**", "a prompt for a fresh
+//      session:"), or
+//  (2) a line just below it speaks of the prompt ("The prompt is ready to paste.", "Paste this into the new session"), or
+//  (3) it reads like one: starts with "Continue"/"Resume"/"Pick up"/"Finish" and is at least 200 characters, or
+//  (4) `ask` (the owner's message the reply answers) asked for a re-entry / resume / hand-off prompt.
+// Owner 11-13 follow-up: a reply that was only a fenced prompt + "The prompt is ready to paste" had no button. The
+// last block that counts wins; a later "the re-entry prompt above" names nothing below it and is passed over.
 const PROMPT_NAME = /\bre-?entry prompt\b|\bresume prompt\b|\bhand-?off prompt\b|\bprompt for (?:a |the )?(?:fresh|new|next) session\b/i;
+const PROMPT_AFTER = /\bprompt\b.*\b(?:paste|ready|copy|fresh|new session|re-?entry|resume)|\bpaste (?:it|this|that)\b.*\b(?:session|terminal|claude)/i;
+const PROMPT_START = /^(?:\*\*)?(?:continue|resume|pick up|finish)\s+[a-z]/i;
 const QUOTED = /^\s{0,3}>/;
-export function reentryPrompt(text) {
-  const lines = String(text ?? "").replace(/\r/g, "").split("\n");
-  for (let h = lines.length - 1; h >= 0; h--) {
-    if (!PROMPT_NAME.test(lines[h]) || QUOTED.test(lines[h])) continue;
-    let i = h + 1;
-    while (i < lines.length && !lines[i].trim()) i++;
-    if (i >= lines.length) continue;
-    const f = OPEN.exec(lines[i]) ?? TILDE_OPEN.exec(lines[i]);
-    let body = null;
-    if (f) {
-      body = [];
-      for (i++; i < lines.length && !closes(lines[i], f[1]); i++) body.push(lines[i]);
-    } else if (QUOTED.test(lines[i])) {
-      body = [];
-      for (; i < lines.length; i++) {
-        if (QUOTED.test(lines[i])) { body.push(lines[i].replace(/^\s{0,3}> ?/, "")); continue; }
-        let j = i;
-        while (j < lines.length && !lines[j].trim()) j++;
-        if (j > i && j < lines.length && QUOTED.test(lines[j])) { for (; i < j; i++) body.push(""); i--; continue; }
-        break;
-      }
-    }
-    const out = body?.join("\n").trim();
-    if (out) return out;
+// The quote or fence starting at line `i`: { body (as written), end (the line after it) }, or null.
+function blockAt(lines, i) {
+  const f = OPEN.exec(lines[i]) ?? TILDE_OPEN.exec(lines[i]);
+  if (f) {
+    const body = [];
+    let j = i + 1;
+    for (; j < lines.length && !closes(lines[j], f[1]); j++) body.push(lines[j]);
+    return { body: body.join("\n").trim(), end: Math.min(j + 1, lines.length) };
   }
-  return null;
+  if (!QUOTED.test(lines[i])) return null;
+  const body = [];
+  let j = i;
+  for (; j < lines.length; j++) {
+    if (QUOTED.test(lines[j])) { body.push(lines[j].replace(/^\s{0,3}> ?/, "")); continue; }
+    let k = j;
+    while (k < lines.length && !lines[k].trim()) k++;
+    if (k > j && k < lines.length && QUOTED.test(lines[k])) { for (; j < k; j++) body.push(""); j--; continue; }
+    break;
+  }
+  return { body: body.join("\n").trim(), end: j };
 }
+const nonBlank = (lines, i, step) => { while (i >= 0 && i < lines.length && !lines[i].trim()) i += step; return i >= 0 && i < lines.length ? lines[i] : null; };
+export function reentryPrompt(text, ask = null) {
+  const lines = String(text ?? "").replace(/\r/g, "").split("\n");
+  const asked = PROMPT_NAME.test(String(ask ?? "")) || /\b(?:re-?entry|resume|hand-?off)\b.*\bprompt\b|\bprompt\b.*\b(?:re-?entry|fresh session|new session)\b/i.test(String(ask ?? ""));
+  let found = null;
+  for (let i = 0; i < lines.length; i++) {
+    const b = blockAt(lines, i);
+    if (!b) continue;
+    const above = nonBlank(lines, i - 1, -1), below = nonBlank(lines, b.end, 1);
+    const named = above != null && PROMPT_NAME.test(above) && !QUOTED.test(above);
+    const after = below != null && !QUOTED.test(below) && PROMPT_AFTER.test(below);
+    const looks = PROMPT_START.test(b.body) && b.body.length >= 200;
+    if (b.body && (named || after || looks || asked)) found = b.body;
+    i = Math.max(i, b.end - 1);
+  }
+  return found;
+}
+

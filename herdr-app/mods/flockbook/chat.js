@@ -290,19 +290,32 @@ export class ChatView {
       : row.from == null ? { y: y0 - ROW_PAD_Y - BUBBLE_PAD_Y, w: bubbleTextWidth(w) } : null;
     const code = at ? codeBlockAt(row.text || "", at.w, at.y - (i === 0 ? barRoom(this.barOver) : 0), textScale(), appZoom()) : null;
     if (code !== null) items.push({ label: "Copy code", act: "copy", args: { text: code } });
-    const prompt = row.k === "assistant" ? reentryPrompt(row.text) : null;
+    const prompt = row.k === "assistant" ? reentryPrompt(row.text, this.askBefore(rows, i)) : null;
     if (prompt) items.push({ label: "Copy re-entry prompt", act: "copy", args: { text: prompt } });
     items.push({ label: "Copy message", act: "copy", args: { text: row.text || "" } });
     return openMenu(items);
   }
 
   // The re-entry prompt of the reply this footer ends: its last assistant text with one, back to the user's message.
+  // The owner's message (a user row not from another agent) that the reply ending before row `i` answers, or null.
+  askBefore(rows, i) {
+    for (let j = i - 1; j >= 0; j--) {
+      if (rows[j].k === "footer") return null;
+      if (rows[j].k === "user" && rows[j].from == null) return rows[j].text ?? null;
+    }
+    return null;
+  }
+
+  // The re-entry prompt of the reply this footer ends: its last assistant text with one, back to the owner's message
+  // (which, when it asked for such a prompt, makes the reply's block count: blocks.js reentryPrompt).
   promptBefore(footer) {
     const rows = this.feed()?.rows ?? [];
-    for (let j = rows.findIndex((r) => r.id === footer.id) - 1; j >= 0; j--) {
+    const at = rows.findIndex((r) => r.id === footer.id);
+    const ask = this.askBefore(rows, at);
+    for (let j = at - 1; j >= 0; j--) {
       const r = rows[j];
       if (r.k === "footer" || (r.k === "user" && r.from == null)) return null;
-      if (r.k === "assistant") { const p = reentryPrompt(r.text); if (p) return p; }
+      if (r.k === "assistant") { const p = reentryPrompt(r.text, ask); if (p) return p; }
     }
     return null;
   }

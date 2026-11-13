@@ -91,7 +91,7 @@ Enter sends); the vertical tab list on the right shows each tab's program, statu
 - Answers Claude Code can't take typed (some symbols) say so and offer the terminal (a Codex question answered
   by a message takes any text); drafts are kept per agent.
 - Selected text in the reply and answer boxes is highlighted in the theme's selection blue.
-- A reply that ends with a **re-entry prompt** (a "Re-entry prompt:" line with a quote or code block under it) gets
+- A reply that ends with a **re-entry prompt** (a quote or code block named "Re-entry prompt:" above it, called "ready to paste" under it, starting "Continue …", or answering a message that asked for one) gets
   **Copy all** on its footer line: one click puts the whole prompt on the clipboard, a small notice says it was
   copied, and the button says "Copied" for 2 seconds. Right-click the reply → **Copy re-entry prompt** does the same.
 - Optional: each session's own **status line** in the chat header (see "Status line" below).

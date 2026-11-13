@@ -498,3 +498,16 @@ test("Copy all without a clipboard says so instead of claiming it copied", async
   assert.equal(log.notify.at(-1).level, "warning");
   assert.match(log.notify.at(-1).title, /Couldn't copy/);
 });
+
+test("Copy all when the owner asked for a re-entry prompt and the reply is only the fenced prompt", async () => {
+  fake.exec = () => jl(header, logLine("c1"), { type: "splice", at: 0, count: 3 },
+    user("u1", "give me the re-entry prompt"), asst("a1", "```\nGo on with PR 2a.\n```"), { type: "row", id: "f-a1", k: "footer", text: "10:57 · Worked 20s" }, end);
+  const cx = fakeCx(); const v = new ChatView(cx); await cx.settle(); v.width = 900;
+  v.render(cx);
+  assert.match(textOf(lastList._args.render({ start: 2, end: 3 })[0]), /Copy all/);
+  let copied = null;
+  lastList._h.on_item_click("f-a1", { ...fakeCx(), write_to_clipboard: (s) => { copied = s; } });
+  assert.equal(copied, "Go on with PR 2a.");
+  lastList._h.on_item_secondary_click("a1", { button: "right", position: { x: 0, y: 4 }, local_position: { x: 50, y: 4 } }, cx);
+  assert.deepEqual(log.overlays.at(-1).props.items.map((i) => i.label), ["Copy re-entry prompt", "Copy message"]);
+});
