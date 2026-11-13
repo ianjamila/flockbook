@@ -13,6 +13,7 @@
 import { hc, shared, setShared, exec, panes, home, appHome, readTextFile, writeTextFile } from "herdr";
 import { agents } from "./parked.js";
 import { setting } from "./config.js";
+import * as sidecar from "./sidecar.js";
 
 export const KEY_ASKS = "flockbook.asks";       // { [address]: { kind: "round" | "merge" | "migration" | "reply" | "question", pr?, round?, words?, text? } }
 export const KEY_BG = "flockbook.background";  // { [address]: { shells, agents } }: work still running after the turn ended
@@ -536,10 +537,10 @@ export function askMark(ask) {
   if (!ask) return null;
   if (ask.kind === "round") return { glyph: "🔁", group: "round", word: `extra round #${ask.pr}`,
     tip: `it asks for an extra review round on #${ask.pr} (round ${ask.round}): type “extra round” in its chat to grant it`,
-    title: `Extra review round asked · #${ask.pr} round ${ask.round}`, hint: "To grant it, type “extra round” below yourself: the pipeline only counts your own words." };
+    title: `Extra review round asked · #${ask.pr} round ${ask.round}`, hint: "Press Extra round to grant it (it sends “extra round” as if you typed it), or type it below." };
   if (ask.kind === "merge") return { glyph: "🔀", group: "merge", word: `ready to merge ${prList(ask)}`,
     tip: `${prList(ask)} ${ask.prs ? "are" : "is"} ready to merge: say “merge” in its chat`,
-    title: `Ready to merge · ${prList(ask)}`, hint: "Say “merge” below when you're happy with it." };
+    title: `Ready to merge · ${prList(ask)}`, hint: "Press Merge when you're happy with it (it sends “merge” as if you typed it), or say it below." };
   if (ask.kind === "migration") return { glyph: "🗄", group: "migration", word: `migration go #${ask.pr}`,
     tip: `it waits for your go on the live database change for #${ask.pr}`,
     title: `Database change waits for your go · #${ask.pr}`, hint: `Reply “go migration ${ask.pr}” below when you're ready.` };
@@ -555,6 +556,26 @@ export function prList(ask) { return (ask?.prs ?? [ask?.pr]).map((n) => `#${n}`)
 export function stillAsks(screen, ask) {
   const now = pendingAsk(screen);
   return Boolean(now && ask && now.kind === ask.kind && now.pr === ask.pr && prList(now) === prList(ask) && (now.round ?? null) === (ask.round ?? null));
+}
+// The owner's words a button sends for `ask`: "extra round" / "merge"; null for any other ask (a migration's go and
+// free answers are typed by the owner).
+export function askWords(ask) {
+  return ask?.kind === "round" ? "extra round" : ask?.kind === "merge" ? "merge" : null;
+}
+// One-click grant (owner 11-12: Needs you's Extra round / Merge buttons; 11-13: the chat's ask strip too): the owner's
+// own words go to the session exactly as the chat's reply box sends them, only after its screen is read again and
+// still ends with that same ask (kind, PR, round): a round already granted, a newer one, or a merge hand-off replaced
+// since, gets nothing. A send that went out marks the ask answered. { text, bad, sent }.
+export async function grantAsk(address, ask) {
+  const words = askWords(ask);
+  if (!words) return { text: "Not sent: this ask has no button. Reply in its chat.", bad: true, sent: false };
+  const r = await hc(["read", address]).catch(() => null);
+  if (!(r?.code === 0 && stillAsks(r.stdout, ask))) return { text: `Not sent: its screen no longer ends with this ask (${askLine(ask)}). Open the chat to see where it is.`, bad: true, sent: false };
+  const res = await sidecar.send(address, words);
+  const done = res?.lines?.find((l) => l.type === "done");
+  if (res?.error || !done || (done.result !== "sent" && done.result !== "unconfirmed")) return { text: (res?.error?.message ?? done?.message) || `Not sent. Type “${words}” in its chat.`, bad: true, sent: false };
+  answered(address);
+  return { text: done.result === "sent" ? `Sent “${words}”.` : `Sent “${words}”. The agent did not confirm it yet.`, bad: false, sent: true };
 }
 export function askDetail(ask) {
   if (ask?.kind === "reply") return `Its turn ended waiting for your answer: “${ask.text}” Reply in its chat.`;

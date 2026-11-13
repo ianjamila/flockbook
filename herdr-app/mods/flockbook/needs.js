@@ -5,11 +5,9 @@ import { v_flex, h_flex } from "gpui-base";
 import { theme } from "herdr";
 import { needing, needReason, agentName, showAgent, icon, watchEdge, noteWindowHeight, sessionTopic } from "./state.js";
 import { aboutEntry, isStale, agoText } from "./ai.js";
-import { askOf, askLine, askDetail, stillAsks, prList, answered, elicitOf } from "./asks.js";
-import { hc } from "herdr";
+import { askOf, askLine, askDetail, prList, grantAsk, elicitOf } from "./asks.js";
 // How long each has waited on you ("waiting 2 h"; s13 C2, from history.js; age only, the order is unchanged).
 import { waitingFor } from "./history.js";
-import * as sidecar from "./sidecar.js";
 import { Cards } from "./cards.js";
 import { startTop, overBar, barOver, barRoom, noteScreenHeight } from "./top.js";
 
@@ -53,22 +51,15 @@ export class NeedsView {
     this.granting = address; this.notes.delete(address); cx.notify();
     let note = null;
     try {
-      const r = await hc(["read", address]).catch(() => null);
-      if (!(r?.code === 0 && stillAsks(r.stdout, ask))) note = { text: `Not sent: its screen no longer ends with this ask (${askLine(ask)}). Open the chat to see where it is.`, bad: true };
-      else {
-        const res = await sidecar.send(address, words);
-        const done = res.lines?.find((l) => l.type === "done");
-        if (res.error || !done || (done.result !== "sent" && done.result !== "unconfirmed")) note = { text: (res.error?.message ?? done?.message) || `Not sent. Type “${words}” in its chat.`, bad: true };
-        else {
-          note = { text: done.result === "sent" ? `Sent “${words}”.` : `Sent “${words}”. The agent did not confirm it yet.`, bad: false };
-          // Answered: it leaves the list now (asks.js answered), so the note shows above the list for a while.
-          const who = agentName(needing().find((x) => x.address === address) ?? { address });
-          answered(address);
-          this.flash = { text: `${note.text.replace(/\.$/, "")} to ${who}.`, until: Date.now() + 8000 };
-          cx.timer?.after?.(8100, () => cx.notify());
-        }
+      // Named before the grant: an answered ask leaves the list (asks.js grantAsk marks it answered).
+      const who = agentName(needing().find((x) => x.address === address) ?? { address });
+      note = await grantAsk(address, ask);
+      // Answered: it leaves the list now, so the note shows above the list for a while.
+      if (note.sent) {
+        this.flash = { text: `${note.text.replace(/\.$/, "")} to ${who}.`, until: Date.now() + 8000 };
+        cx.timer?.after?.(8100, () => cx.notify());
       }
-    } finally { this.granting = null; }
+    } catch { note = { text: `Not sent. Type “${words}” in its chat.`, bad: true }; } finally { this.granting = null; }
     this.notes.set(address, note); cx.notify();
   }
 

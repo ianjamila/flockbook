@@ -23,7 +23,7 @@ import { openMenu } from "./menu.js";
 import { Cards, wanted } from "./cards.js";
 import { startTop, overBar, BAR_H, barOver, barRoom, noteScreenHeight } from "./top.js";
 import { HelperUI, isRemoteProblem } from "./helpercard.js";
-import { askOf, askMark } from "./asks.js";
+import { askOf, askMark, askWords, grantAsk } from "./asks.js";
 
 export const POLL_MS = 2000;
 const CHECK_MS = 400;
@@ -77,6 +77,8 @@ export class ChatView {
     this.follow = true;          // keep the newest row on screen
     this.open = new Set();       // tool rows that show their calls
     this.copied = null;          // the footer row whose "Copy all" was just clicked (says "Copied" for 2 s)
+    this.granting = null;        // the agent whose ask strip button is sending (Extra round / Merge)
+    this.askNotes = new Map();   // address → { text, bad, ask } of its last strip send that did not go out
     this.heights = new WeakMap(); // row → { w, open, k, zoom, h }
     this.busy = false;
     this.lastPoll = 0;
@@ -306,6 +308,19 @@ export class ChatView {
     return replyPrompt(rows, rows.findIndex((r) => r.id === footer.id));
   }
 
+  // The ask strip's Extra round / Merge button (owner 11-13: "theres no button here"): the same checked send as Needs
+  // you's buttons (asks.js grantAsk). Sent → the ask is answered and the strip goes, so a notice says it; not sent →
+  // the reason shows in the strip.
+  async grant(cx, address, ask) {
+    if (this.granting) return;
+    this.granting = address; this.askNotes.delete(address); cx.notify?.();
+    let note;
+    try { note = await grantAsk(address, ask); } catch { note = { text: `Not sent. Type “${askWords(ask)}” below.`, bad: true, sent: false }; } finally { this.granting = null; }
+    if (note.sent) notify({ title: note.text, level: "info", timeout: 3000 });
+    else this.askNotes.set(address, { ...note, ask: JSON.stringify(ask) });
+    cx.notify?.();
+  }
+
   // "Copy all": the prompt on the clipboard, a short notice, and the button says "Copied" for 2 s.
   copyPrompt(row, cx) {
     const p = this.promptBefore(row);
@@ -442,14 +457,26 @@ export class ChatView {
         const card = this.cards.view(this.address, t, "chat-card");
         // What the reply ends asking for (an extra round, a merge, a migration go), as a strip over the reply box: the
         // ask's line is easy to miss at the end of a long reply (owner 11-12). Not while a question card shows.
-        const mark = card ? null : askMark(askOf(this.address));
-        if (mark) el.child(h_flex().w_full().px(16).pt(8).justify_center().on_mouse_down("left", stop)
-          .child(h_flex().id("chat-ask").w_full().max_w(800).px(14).py(8).gap(10).items_center().rounded(12)
-            .bg(t.raised).border(1).border_color(t.accent)
-            .child(div().flex_none().text_size(18).child(mark.glyph))
-            .child(v_flex().flex_1().min_w(0)
-              .child(div().truncate().text_size(13.5).font_semibold().text_color(t.foreground).child(mark.title))
-              .child(div().text_size(12).text_color(t.muted).child(mark.hint)))));
+        const ask = card ? null : askOf(this.address), mark = askMark(ask);
+        if (mark) {
+          // Extra round / Merge as a button here too (owner 11-13), coloured as on Needs you: round = working, merge = done.
+          const address = this.address, words = askWords(ask), busy = this.granting === address, round = ask.kind === "round";
+          // A note is about the ask it was sent for: a later, different ask starts clean.
+          const note = this.askNotes.get(address)?.ask === JSON.stringify(ask) ? this.askNotes.get(address) : null;
+          el.child(h_flex().w_full().px(16).pt(8).justify_center().on_mouse_down("left", stop)
+            .child(h_flex().id("chat-ask").w_full().max_w(800).px(14).py(8).gap(10).items_center().rounded(12)
+              .bg(t.raised).border(1).border_color(t.accent)
+              .child(div().flex_none().text_size(18).child(mark.glyph))
+              .child(v_flex().flex_1().min_w(0)
+                .child(div().truncate().text_size(13.5).font_semibold().text_color(t.foreground).child(mark.title))
+                .child(div().text_size(12).text_color(t.muted).child(mark.hint))
+                .when(Boolean(note), (n) => n.child(div().id("chat-ask-note").text_size(12).text_color(note.bad ? t.blocked : t.muted).child(note.text))))
+              .when(Boolean(words), (b) => b.child(div().id(round ? "chat-ask-round" : "chat-ask-merge").flex_none().px(14).h(32).flex().items_center()
+                .rounded(8).text_size(13).font_semibold()
+                .bg(busy ? t.chrome : round ? t.working : t.done).text_color(busy ? t.dim : t.background)
+                .when(!busy, (x) => x.hover((y) => y.opacity(0.9)).on_click((_e, cx) => cx.spawn((cx) => this.grant(cx, address, ask))))
+                .child(busy ? "Sending…" : round ? "🔁 Extra round" : "🔀 Merge")))));
+        }
         if (card) el.child(this.appear.wrap(h_flex().w_full().px(16).pt(8).justify_center().on_mouse_down("left", stop).child(card), "chat-card-in", `${this.address}:${this.cards.key?.(this.address) ?? ""}`, cx, 10));
         return el.child(div().w_full().on_mouse_down("left", stop).child(this.composer.render(currentAgent(), t)));
       })
