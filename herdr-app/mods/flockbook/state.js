@@ -18,9 +18,12 @@ export function machineOf(address) {
 }
 // "settings" was a screen before the settings became a dialog; a saved one shows the chat.
 export const shownScreen = () => { const s = shared(KEY_SCREEN); return s && s !== "settings" ? s : "chat"; };
-export function showScreen(child) {
+// `to`: the terminal the new screen is for, when the caller knows it before Herdr shows that tab (a tab click); else
+// the shown tab's. The terminal window steps aside / comes back in the same click (stepTerminal).
+export function showScreen(child, to) {
   setShared(KEY_SCREEN, child);
   run("layout.select", { stack: "screen", child });
+  stepTerminal(child, to);
 }
 const MOD = "mods/flockbook";
 export const icon = (name) => `${MOD}/icons/${name}.svg`;
@@ -133,7 +136,11 @@ export function currentAgent() {
 export function currentTerminal() {
   const a = currentAgent();
   if (a) return a;
-  const tab = activeTab();
+  return paneTerminal(activeTab());
+}
+// A tab's terminal for the window: its agent, else its focused terminal pane, else its first; null for none.
+export const tabTerminal = (tab) => (tab ? tabAgents(tab.id)[0] ?? paneTerminal(tab) : null);
+function paneTerminal(tab) {
   if (!tab) return null;
   const list = (panes() ?? []).filter((p) => p.tab === tab.id && p.terminal);
   const f = focused();
@@ -156,7 +163,7 @@ export const screenFor = (tab) => (tab && tabAgents(tab.id).length && (tab.panes
 export function showTab(tab) {
   setShared(KEY_AGENT, null);
   run("tab.select", { id: tab.id });
-  showScreen(screenFor(tab));
+  showScreen(screenFor(tab), tabTerminal(tab));
 }
 
 // Closes a tab (herdr asks first when it is the space's last tab).
@@ -329,7 +336,7 @@ export function keepOrRename(tab) {
 export function showAgent(address) {
   setShared(KEY_AGENT, address);
   run("agent.focus", { terminal: address });
-  showScreen("chat");
+  showScreen("chat", agents().find((a) => a.address === address) ?? undefined);
 }
 
 export function showNeeds() { showScreen("needs"); }
@@ -355,7 +362,7 @@ export function openTab(spaceId, tab) {
   setShared(KEY_AGENT, null);
   run("space.select", { id: spaceId });
   run("tab.select", { id: tab.id });
-  showScreen(screenFor(tab));
+  showScreen(screenFor(tab), tabTerminal(tab));
 }
 
 // Agents that wait for the owner, in every space: a question or approval (blocked), an ask its reply ended
@@ -405,7 +412,9 @@ export function needing() {
 export function showSpace(id) {
   setShared(KEY_AGENT, null);
   run("space.select", { id });
-  showScreen("chat");
+  // The window comes back on that space's shown tab (Herdr shows it after this click).
+  const sp = spaces().find((x) => x.id === id);
+  showScreen("chat", sp ? tabTerminal(sp.tabs?.find((t) => t.active) ?? sp.tabs?.[0]) : undefined);
 }
 
 // The agent's own terminal in a floating window, for anything the chat cannot do. A title bar
@@ -495,7 +504,35 @@ export async function readTermPlace(now = Date.now()) {
 // terminal window is open: (1) the shown tab changed (a click on a tab or a workspace, a key): the window shows
 // that tab's terminal, or closes when it has none (owner 11-13: clicking a tab changed nothing on screen);
 // (2) the app or the sidebars changed size, or the window was moved: it reopens in place at the fitted size.
+// (0) Needs you and Overview take the whole work column: switching TO one puts the open window away (owner 11-13: it
+// covered Needs you, so a click there seemed to do nothing), switching back to a chat reopens it for the shown tab. A
+// window opened while one of them shows ("Answer in terminal") stays: only the switch puts it away.
+const KEY_TERM_AWAY = "flockbook.terminal.away";       // true while the window is put away for Needs you / Overview
+const KEY_TERM_SCREEN = "flockbook.terminal.screen";   // the screen at the last sync, to see a switch
+const AWAY_SCREENS = new Set(["needs", "overview"]);
+// The switch to `screen`: puts the open window away (to Needs you / Overview) or brings it back (to anything else) for
+// `to` (undefined: the shown tab's terminal). Run by showScreen in the click (owner 11-13: coming back on the next
+// sync, a second later, was eye-straining) and by the sync for a switch made elsewhere. True when it opened or closed it.
+function stepTerminal(screen, to) {
+  const before = shared(KEY_TERM_SCREEN) ?? null;
+  if (screen !== before) setShared(KEY_TERM_SCREEN, screen);
+  if (AWAY_SCREENS.has(screen)) {
+    const opened = shared(KEY_TERM);
+    if (AWAY_SCREENS.has(before) || !opened) return false;
+    setShared(KEY_TERM, null); closeOverlay(opened); setShared(KEY_TERM_AWAY, true);
+    return true;
+  }
+  // The settings dialog opens over any screen: not "back to a chat" yet.
+  if (!shared(KEY_TERM_AWAY) || screen === "settings") return false;
+  setShared(KEY_TERM_AWAY, null);
+  const cur = shared(KEY_TERM) ? null : to === undefined ? currentTerminal() : to;
+  if (!cur) return false;
+  setShared(KEY_TERM, terminalWindow(cur.address, agentName(cur)));
+  return true;
+}
 export function keepTerminal() {
+  const screen = shared(KEY_SCREEN) ?? null;
+  if (stepTerminal(screen) || AWAY_SCREENS.has(screen)) return;
   const open = shared(KEY_TERM), shown = termShown();
   if (!open || !shown) return;
   const tab = activeTab()?.id ?? null;

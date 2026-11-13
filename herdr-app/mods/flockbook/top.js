@@ -147,8 +147,10 @@ export function startTop(cx, owner) {
 // shell. It acts only when the tab changes or an agent starts or stops in it, so a choice
 // made by hand (Needs you, the tab's terminals) stays until then.
 export function syncScreen(owner) {
-  // The terminal window follows the shown tab and stays clear of the tab list (state.keepTerminal).
-  if (shared(KEY_TERM)) { keepTerminal(); readTermPlace(); }
+  // The terminal window follows the shown tab, stays clear of the tab list, and steps aside for Needs you / Overview
+  // (state.keepTerminal). Run every time: a window put away is closed, and only this brings it back (owner 11-13).
+  keepTerminal();
+  if (shared(KEY_TERM)) readTermPlace();
   const tab = activeTab();
   const now = tab ? `${tab.id}:${screenFor(tab)}` : null;
   if (now === owner.seen) return;
