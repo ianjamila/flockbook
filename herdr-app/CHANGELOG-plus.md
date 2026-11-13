@@ -51,7 +51,8 @@ Changed files:
 | `chat.js`, `composer.js`, `sidecar.js`, `cards.js` | Send anyway over a "/" suggestion, sends after `/clear`, ask markers above the reply box, untypeable answers, drafts, the chat's last lines at any zoom, the MCP input card; upstream's `--cache` send kept. |
 | `config.js`, `settings.js` | New settings: About lines (on/off, daily cap, pause until tomorrow), terminal size, dancing tab-list icons (`dance`), and the Workflow switches `pipeline_asks`, `handoff_marks`, `worth_considering`, `auto_move` (all off by default), plus `accounts`, `projects`, `claude_path`, `helper_rebuild` (config.json). The update notice points to this build's own update command. |
 | `asks.js` | 11-13: a running sub-agent row drawn "◯" (newer Claude Code) counts as background work, as "○" did, so a finished turn with a build agent still running stays Working instead of Done. |
-| `estimate.js` | Row heights at a zoom below 1 count prose at its unzoomed line height, so a long reply's last lines (often the ask) are not cut off. |
+| `estimate.js` | Row heights at a zoom below 1 count prose at its unzoomed line height, so a long reply's last lines (often the ask) are not cut off. 11-13: a code box's lines are counted as drawn (`codeLines`: Menlo at 0.61 em, wrapped by word like prose, indent kept), not letter by letter at 0.58 em, which left a long fenced re-entry prompt's last lines and its footer's Copy all cut off. |
+| `chat.js` | 11-13: while the chat follows the newest row, a change in the list's size (the status rows, an ask strip or a card appearing under it, or a narrower pane) scrolls back to it, instead of leaving it half under the reply box. |
 
 ## Layout, themes, install
 

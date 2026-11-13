@@ -511,3 +511,28 @@ test("Copy all when the owner asked for a re-entry prompt and the reply is only 
   lastList._h.on_item_secondary_click("a1", { button: "right", position: { x: 0, y: 4 }, local_position: { x: 50, y: 4 } }, cx);
   assert.deepEqual(log.overlays.at(-1).props.items.map((i) => i.label), ["Copy re-entry prompt", "Copy message"]);
 });
+
+// Owner 11-13: a long reply's footer (and its Copy all) sat half under the status rows. The list kept its
+// scroll when the room under it grew (status rows, an ask strip, a card) or the pane narrowed, so a list that
+// was showing the newest row no longer did. Its size change now scrolls back to the newest row.
+test("the list scrolls back to the newest row when its size changes while following, not while reading older rows", async () => {
+  fake.exec = () => jl(header, logLine("c1"), { type: "splice", at: 0, count: 3 },
+    user("u1", "go"), asst("a1", "done"), { type: "row", id: "f-a1", k: "footer", text: "14:38 · Worked 5s" }, end);
+  const cx = fakeCx(); const v = new ChatView(cx); await cx.settle(); v.width = 900;
+  const root = v.render(cx);
+  const find = (el, p) => { if (!el || typeof el !== "object") return null; if (p(el)) return el; for (const k of el.kids || []) { const f = find(k, p); if (f) return f; } return null; };
+  const box = find(root, (el) => (el.kids || []).includes(lastList));
+  assert.ok(box?._h.on_size_change, "the list's box notes its size");
+  const scrolls = () => calls.filter((c) => c[0] === "scroll_to_item");
+  box._h.on_size_change({ width: 900, height: 600 }, cx);
+  calls.length = 0;
+  box._h.on_size_change({ width: 900, height: 600 }, cx);
+  assert.equal(scrolls().length, 0, "same size: no scroll");
+  box._h.on_size_change({ width: 900, height: 540 }, cx);
+  assert.deepEqual(scrolls().at(-1), ["scroll_to_item", 2, "top"], "room under the list grew: back to the newest row");
+  box._h.on_size_change({ width: 700, height: 540 }, cx);
+  assert.equal(scrolls().length, 2, "narrower (rows re-wrap taller): back to the newest row");
+  v.follow = false; calls.length = 0;
+  box._h.on_size_change({ width: 700, height: 480 }, cx);
+  assert.equal(scrolls().length, 0, "reading older rows: the scroll stays");
+});

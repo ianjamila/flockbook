@@ -360,6 +360,15 @@ export class ChatView {
     // The first row starts below the bar; the rest scroll up under it (no room when the bar is outside).
     const sizes = rows.map((r, i) => this.height(r) + (i === 0 ? barRoom(this.barOver) : 0));
     const box = v_flex().relative().flex_1().min_h(0)
+      // The list keeps its scroll when its room changes: the status rows, an ask strip or a card under it, or a
+      // narrower pane (rows re-wrap taller). While following, that left the newest row half under the reply box
+      // (owner 11-13: a footer and its Copy all cut off), so a size change scrolls back to it.
+      .on_size_change((size, cx) => {
+        const was = this.listSize;
+        this.listSize = { w: size?.width ?? 0, h: size?.height ?? 0 };
+        if (was && Math.abs(was.w - this.listSize.w) < 1 && Math.abs(was.h - this.listSize.h) < 1) return;
+        if (this.follow) { this.toNewest(); cx?.notify?.(); }
+      })
       .on_scroll_wheel((e, cx) => {
         const up = e?.delta?.y > 0;
         if (this.follow && up) { this.follow = false; cx.notify(); }

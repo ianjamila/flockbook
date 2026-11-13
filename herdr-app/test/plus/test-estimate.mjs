@@ -22,4 +22,30 @@ const r = markdownHeight(reply, 760, null, 1, 0.9);
 ok("long reply at 0.9 covers 34 lines of 29 px", r >= 34 * 29, r);
 // Headings scale too.
 ok("heading at 0.9 taller than at 1", markdownHeight("# Title", 760, null, 1, 0.9) > markdownHeight("# Title", 760, null, 1, 1), "");
+
+// Code boxes (owner 11-13: a re-entry prompt in a code box lost its last lines and its footer's Copy all). The box
+// is Menlo 13 px (0.602 em, 7.83 px a letter) wrapped by word, in a box 30 px narrower than the column.
+const box = (lines) => markdownHeight("```\n" + lines.join("\n") + "\n```", 711, null, 1, 1);
+const CL = lineHeight(13, 1);
+// 88 letters are 689 px drawn: over the 681 px line, so 2 lines (counted at 0.58 em they fit in one).
+ok("88 Menlo letters wrap in a 681 px code line", box(["a".repeat(88)]) === 34 + 2 * CL, box(["a".repeat(88)]));
+// The owner's line: by word it takes 3 lines on screen (screenshot 11-13); by character it fit in 2.
+const ownerLine = "5. Propose one storage-hardening follow-up PR covering issues #1958-#1961 and #1971-#1973 after #1533 merges (follow-up PR; ask the owner (AskUserQuestion) whether to start it).";
+ok("a code line wraps by word: 3 lines as drawn", box([ownerLine]) === 34 + 3 * CL, box([ownerLine]));
+// The rest of that box's lines as drawn: 2, 2, 2, 3, 4 (all matched the screenshot).
+const drawn = [
+  ["1. Propose landing #1502 (inactive-admin fix; closes #1493 and #1850) as the next PR once both merge (follow-up PR).", 2],
+  ["2. Tell the owner to run `pipeline update` for cp #333 when convenient (note in the final reply).", 2],
+  ["6. Remove eligible worktrees after merge: both wts above, and cp ~/Code/claude-pipeline/.worktrees/agent-past-round-grants once idle ≥24h (≥11-14), following every CLAUDE.md eligibility check.", 3],
+  ["Constraints: prod read-only except owner-approved migrations; never `supabase db push`; never stop shared stacks; the owner says \"merge\"; ci.draft_while_iterating on (`P redraft` before pushing to a READY PR); main moves fast, so re-check conflicts right before ready and before the merge dry-run.", 4],
+];
+for (const [l, n] of drawn) ok(`code line drawn on ${n} lines: ${l.slice(0, 30)}…`, box([l]) === 34 + n * CL, box([l]));
+// Indent counts (no-break spaces in the box): 84 letters fit one line, 4 spaces before them do not.
+ok("an indented code line counts its indent", box(["    " + "b".repeat(84)]) === 34 + 2 * CL && box(["b".repeat(84)]) === 34 + CL, box(["    " + "b".repeat(84)]));
+// A space at a break is not drawn: two 42-letter words with one space fit one 681 px line (85 letters).
+ok("two words that just fit stay on one line", box(["c".repeat(42) + " " + "d".repeat(42)]) === 34 + CL, box(["c".repeat(42) + " " + "d".repeat(42)]));
+// The space where it breaks is dropped: two 85-letter words (674 px each) take 2 lines, not 3.
+ok("the space at a break is not counted on the next line", box(["e".repeat(85) + " " + "f".repeat(85)]) === 34 + 2 * CL, box(["e".repeat(85) + " " + "f".repeat(85)]));
+// Short lines and empty ones stay one line each.
+ok("short and empty code lines: one line each", box(["State:", "", "x"]) === 34 + 3 * CL, box(["State:", "", "x"]));
 process.exit(bad ? 1 : 0);
