@@ -123,9 +123,7 @@ export function termAt(dims, room) {
 
 // What the grips measured (module state is shared by every copy of the mod): the open window's outer
 // size, and the app's size from the last catcher (state.js uses it to place a custom size among the presets).
-// Also, for fitTerm: the work column's width (the screens measure it), the sidebar's and the tab list's widths
-// (their views measure them; null until drawn), and the window's remembered spot (Herdr's windows.json; null: none).
-export const geom = { w: 0, h: 0, app: null, workW: 0, sideW: null, listW: null, place: null, placeAt: 0 };
+export const geom = { w: 0, h: 0, app: null };
 
 const CURSOR = {
   n: (el) => el.cursor_ns_resize(), s: (el) => el.cursor_ns_resize(),

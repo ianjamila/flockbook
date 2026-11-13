@@ -10,14 +10,13 @@ import { h_flex, v_flex, ScrollHandle } from "gpui-base";
 import { theme, run, openOverlay, props } from "herdr";
 import { spaces } from "./parked.js";
 import { openMenu, tabItems, suggestBadge } from "./menu.js";
-import { watchGrace, spaceTabs, tabAgents, tabLabel, sessionTitle, subStatus, tabStatus, needReason, keepOrRename, showTab, closeTab, icon, toggleTablist, answerInTerminal } from "./state.js";
+import { watchGrace, spaceTabs, tabAgents, tabLabel, sessionTitle, subStatus, tabStatus, needReason, keepOrRename, showTab, closeTab, icon, toggleTablist, answerInTerminal, noteWidth, KEY_LIST_W } from "./state.js";
 import { elicitOf } from "./asks.js";
 import { withHover } from "./hover.js";
 import { statusMark, BAR_H } from "./top.js";
 import { dragger, dropPlace } from "./drag.js";
 import { movedBadge, badgeTip } from "./automove.js";
 import { setting } from "./config.js";
-import { geom } from "./termresize.js";
 
 // The row being dragged up or down: one at a time, so every copy of the list draws from it.
 const drag = dragger("y");
@@ -153,7 +152,7 @@ function list(t, view) {
 
   return v_flex().id("tabs-list").size_full().min_h(0).bg(t.chrome).border_l(1).border_color(t.border)
     // The tab list's width, for the terminal window's room (state.termApp).
-    .on_size_change((size) => { if (size?.width > 0) geom.listW = Math.round(size.width); })
+    .on_size_change((size) => noteWidth(KEY_LIST_W, size))
     .on_hover((inside, cx) => { if (!inside) drag.cancel(cx); })
     .on_mouse_down_out((_e, cx) => drag.cancel(cx))
     // On the whole list, not the rows: a release between rows ends the press too.

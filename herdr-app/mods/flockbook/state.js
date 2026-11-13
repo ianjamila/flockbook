@@ -437,7 +437,7 @@ function terminalWindow(address, name, at = null) {
   setShared(KEY_TERM_DIMS, [width, height]);
   // No remembered spot (never dropped): centered in the work column, not over the tab list.
   const room = termRoom();
-  if (!at && !geom.place && room && width > 1 && height > 1) at = termAt([width, height], room);
+  if (!at && !termPlace() && room && width > 1 && height > 1) at = termAt([width, height], room);
   const grip = (edge) => ({ mod: "flockbook", props: { view: "termgrip", edge, terminal: address, name } });
   const inner = { type: "column", resizable: false, children: [
     { type: "block", size: { px: 42 }, content: { mod: "flockbook", props: { view: "termbar", terminal: address, name } } },
@@ -459,26 +459,37 @@ const KEY_TERM_TAB = "flockbook.terminal.tab";     // the shown tab when it open
 export function termWindowDims() {
   const size = setting("terminal_size");
   const want = termDims(size, setting("terminal_px"));
-  return size === "full" ? want : fitTerm(want, termRoom(), termApp(), geom.place);
+  return size === "full" ? want : fitTerm(want, termRoom(), termApp(), termPlace());
 }
 // The work column between the sidebars, app-relative ({x, w, h}), once a screen measured it; null before.
 // The sidebars are 250 px in the layout until their views measured them.
+// The widths come from shared() (as the window height, KEY_WIN_H): each layout block's copy of the mod may run its
+// own module, so the screens, the sidebar and the tab list note them there; written only when they change.
+export const KEY_WORK_W = "flockbook.work.width", KEY_SIDE_W = "flockbook.side.width", KEY_LIST_W = "flockbook.list.width";
+const KEY_TERM_PLACE = "flockbook.terminal.place";   // {x, y}: Herdr's remembered spot for the window, or null
+export function noteWidth(key, size) {
+  const w = Math.round(size?.width ?? 0);
+  if (w > 0 && shared(key) !== w) setShared(key, w);
+}
 export function termRoom() {
-  const h = shared(KEY_WIN_H);
-  if (!(geom.workW > 0 && h > 0)) return null;
-  return { x: sidebarShown() ? geom.sideW ?? 250 : 0, w: geom.workW, h };
+  const h = shared(KEY_WIN_H), w = shared(KEY_WORK_W);
+  if (!(w > 0 && h > 0)) return null;
+  return { x: sidebarShown() ? shared(KEY_SIDE_W) ?? 250 : 0, w, h };
 }
 export function termApp() {
   const r = termRoom();
-  return r ? { width: r.x + r.w + (tablistShown() ? geom.listW ?? 250 : 0), height: r.h } : null;
+  return r ? { width: r.x + r.w + (tablistShown() ? shared(KEY_LIST_W) ?? 250 : 0), height: r.h } : null;
 }
+const termPlace = () => shared(KEY_TERM_PLACE) ?? null;
 // Herdr's remembered spot for the window (windows.json "places"; its own file, read only), at most every 2 s.
+let placeAt = 0;
 export async function readTermPlace(now = Date.now()) {
-  if (now - geom.placeAt < 2000) return;
-  geom.placeAt = now;
+  if (now - placeAt < 2000) return;
+  placeAt = now;
   let p = null;
   try { p = JSON.parse((await readTextFile(`${appHome()}/windows.json`)) ?? "{}")?.places?.["flockbook-terminal"] ?? null; } catch { p = null; }
-  geom.place = Array.isArray(p) && p.length === 2 && p.every(Number.isFinite) ? { x: p[0], y: p[1] } : null;
+  const place = Array.isArray(p) && p.length === 2 && p.every(Number.isFinite) ? { x: p[0], y: p[1] } : null;
+  if (JSON.stringify(place) !== JSON.stringify(termPlace())) setShared(KEY_TERM_PLACE, place);
 }
 // Run by the screen sync (top.js, every 300 ms, each copy; the shared keys make the first copy act). While the
 // terminal window is open: (1) the shown tab changed (a click on a tab or a workspace, a key): the window shows

@@ -6,8 +6,7 @@ import { h_flex } from "gpui-base";
 import { theme, layout, window, settings, openOverlay, run, setAgentOrder, nextCommand, shared, setShared, props } from "herdr";
 import { openMenu, tabItems, openMoveMenu } from "./menu.js";
 import { spaceAgents, spaceTabs, activeTab, currentAgent, currentTerminal, tabLabel, plainLabel, sessionTitle, subStatus, withAsk, keepOrRename, screenFor, showTab, closeTab, openTerminal, showNeeds, icon, tabAgents, shownScreen,
-  SPIN_MS, FADE, sidebarShown, toggleSidebar, loadSidebar, showScreen, showOverview, showSettings, watchEdge, noteWindowHeight, applyTermRect, termShown, agentName, tabStatus, tablistShown, toggleTablist, watchGrace, keepTerminal, readTermPlace, KEY_TERM } from "./state.js";
-import { geom } from "./termresize.js";
+  SPIN_MS, FADE, sidebarShown, toggleSidebar, loadSidebar, showScreen, showOverview, showSettings, watchEdge, noteWindowHeight, applyTermRect, termShown, agentName, tabStatus, tablistShown, toggleTablist, watchGrace, keepTerminal, readTermPlace, KEY_TERM, noteWidth, KEY_WORK_W } from "./state.js";
 import { loadConfig, pollUpdate, updateDot, stepTextSize } from "./config.js";
 import { checkHelperPatch } from "./patchcheck.js";
 import { asksTick, TICK_MS as ASKS_MS } from "./asks.js";
@@ -278,7 +277,7 @@ export const barRoom = (over) => (over ? BAR_H : 0);
 // The window height, for the floating sidebar: with the bar outside, the screen is BAR_H shorter.
 // Also the work column's width (a screen is as wide as it), for the terminal window's room (state.termRoom).
 export const noteScreenHeight = (size, over) => {
-  if (size?.width > 0) geom.workW = Math.round(size.width);
+  noteWidth(KEY_WORK_W, size);
   return noteWindowHeight({ height: (size?.height ?? 0) + BAR_H - barRoom(over) });
 };
 
