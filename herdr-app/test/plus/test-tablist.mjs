@@ -4,7 +4,7 @@ import fs from "node:fs";
 const DIR = MOD;
 const src = fs.readFileSync(DIR + "tabs.js", "utf8");
 const pure = src.slice(src.indexOf("// <pure>"), src.indexOf("// </pure>")).replaceAll("export ", "");
-const R = new Function(pure + "; return { rowParts, headText, stripGlyphs };")();
+const R = new Function(pure + "; return { rowParts, headText, stripGlyphs, dances, DANCE };")();
 let bad = 0;
 function eq(name, got, want) {
   const ok = JSON.stringify(got) === JSON.stringify(want);
@@ -36,4 +36,13 @@ const RS = { hint: "🔁 extra round #1838 · ✅ results waiting", tip: "x", as
 eq("round ask: 🔁 before the bare name", R.rowParts({ label: "✅ Style Guide", ss: RS, title: "✅ Style Guide", need: "round", index: 1 }).text, "🔁 Style Guide");
 eq("round ask: bell", R.rowParts({ label: "✅ Style Guide", ss: RS, title: "✅ Style Guide", need: "round", index: 1 }).bell, true);
 eq("merge ask, name already has 🔀: once", R.rowParts({ label: "🔀 PR 5", ss: { hint: "🔀 ready to merge #5", tip: "x", askGlyph: "🔀" }, title: "🔀 PR 5", need: "merge", index: 1 }).text, "🔀 PR 5");
+// Owner 11-13: a working agent's icon dances (the `dance` setting turns it off).
+const AG = { address: "t1" };
+eq("dance: a working agent dances", R.dances({ agent: AG, status: "working", setting: "on" }), true);
+eq("dance: default (no setting yet) dances", R.dances({ agent: AG, status: "working", setting: undefined }), true);
+eq("dance: setting off → still", R.dances({ agent: AG, status: "working", setting: "off" }), false);
+eq("dance: a shell tab (no agent) → still", R.dances({ agent: null, status: "working", setting: "on" }), false);
+for (const st of ["idle", "done", "blocked", "unknown"]) eq(`dance: ${st} → still`, R.dances({ agent: AG, status: st, setting: "on" }), false);
+eq("dance: hop is up and back, sway either side", [R.DANCE.hop.from === 0 && R.DANCE.hop.to < 0, R.DANCE.sway.from < 0 && R.DANCE.sway.to > 0], [true, true]);
+eq("dance: loop periods at least 100 ms (the API floor)", [R.DANCE.hop.period, R.DANCE.sway.period].every((n) => n >= 100), true);
 process.exit(bad ? 1 : 0);

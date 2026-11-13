@@ -74,11 +74,14 @@ export const SETTINGS = [
         ...(px ? [["custom", `${px[0]} × ${px[1]}`, "custom"]] : [])];
     },
     about: "How big the agent's terminal window (⌃`) opens. Drag its edges or corners to any size (kept as the last choice), or use the − + buttons and the full-size button on its title bar (or double-click the bar)." },
+  // Owner 11-13: "can the claude icon be dancing when its working" (tabs.js dances).
+  { key: "dance", title: "Dancing agent icons", choices: [["on", "On", "on"], ["off", "Off", "off"]],
+    about: "In the tab list, a working agent's icon hops and sways until its work stops. Off: it stays still; the spinner beside it still turns." },
 ];
 
 // The sidebar's sections; `parts`: [heading, setting keys] in order.
 export const SECTIONS = [
-  { id: "general", label: "General", icon: "sliders", parts: [["CHAT", ["text_size", "status_row"]], ["TERMINAL", ["terminal_size"]], ["OVERVIEW", ["about_line", "about_pause", "about_cap", "accounts_info"]], ["OTHER MACHINES", ["remote_helper"]]] },
+  { id: "general", label: "General", icon: "sliders", parts: [["CHAT", ["text_size", "status_row"]], ["TERMINAL", ["terminal_size"]], ["TAB LIST", ["dance"]], ["OVERVIEW", ["about_line", "about_pause", "about_cap", "accounts_info"]], ["OTHER MACHINES", ["remote_helper"]]] },
   { id: "workflow", label: "Workflow", icon: "tool", parts: [["NEEDS YOU", ["pipeline_asks", "worth_considering"]], ["DONE", ["handoff_marks"]], ["WORKSPACES", ["auto_move"]]] },
   { id: "phone", label: "Phone page", icon: "phone" },
   { id: "updates", label: "Updates", icon: "refresh", parts: [["UPDATES", ["check_updates"]]] },

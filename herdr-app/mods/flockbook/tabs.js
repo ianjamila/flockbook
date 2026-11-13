@@ -15,6 +15,7 @@ import { withHover } from "./hover.js";
 import { statusMark, BAR_H } from "./top.js";
 import { dragger, dropPlace } from "./drag.js";
 import { movedBadge, badgeTip } from "./automove.js";
+import { setting } from "./config.js";
 
 // The row being dragged up or down: one at a time, so every copy of the list draws from it.
 const drag = dragger("y");
@@ -49,14 +50,26 @@ export function stripGlyphs(s) {
 export function headText(spaceName, n) {
   return spaceName ? `${spaceName} · ${n}` : `Tabs · ${n}`;
 }
+// Owner 11-13 ("can the claude icon be dancing when its working"): an agent's icon dances while its tab works
+// (tabStatus "working", background work included) and the `dance` setting is not off. A shell tab, a tab that waits
+// on you, and a finished one stay still.
+export function dances({ agent, status, setting }) {
+  return Boolean(agent) && status === "working" && setting !== "off";
+}
+// The dance: a hop (up and back, twice) per sway (left to right and back), both native loops.
+export const DANCE = { hop: { from: 0, to: -2.5, period: 460, easing: "ease-out" }, sway: { from: -1.5, to: 1.5, period: 920 } };
 // </pure>
 
 // The program's icon (Claude Code, a shell…): tinted glyphs in the row's colour, pictures as they are; a tab
-// with no agent shows the terminal glyph.
-function programMark(a, t, color) {
+// with no agent shows the terminal glyph. `dance`: the wrapper's id when it dances (dances above), else null.
+function programMark(a, t, color, dance = null) {
   const p = a?.program;
-  if (p?.icon) return p.tint ? svg(p.icon).size(14).flex_none().text_color(color) : image(p.icon).size(14).flex_none();
-  return svg(icon("terminal")).size(14).flex_none().text_color(t.muted);
+  const mark = p?.icon ? (p.tint ? svg(p.icon).size(14).flex_none().text_color(color) : image(p.icon).size(14).flex_none())
+    : svg(icon("terminal")).size(14).flex_none().text_color(t.muted);
+  if (!dance) return mark;
+  // Two wrappers, as each element runs one loop: the outer sways, the inner hops. Natively, only while drawn.
+  return div().id(dance).relative().flex_none().loop("left", DANCE.sway)
+    .child(div().id(`${dance}-hop`).relative().loop("top", DANCE.hop).child(mark));
 }
 
 function head(t) {
@@ -113,7 +126,7 @@ function list(t, view) {
       })
       .when(Boolean(line), (el) => el.child(div().id("vdrop-line").absolute().left(4).right(4).h(3).rounded(2).bg(t.accent)
         .when(line.after, (l) => l.bottom(-2)).when(!line.after, (l) => l.top(-2))))
-      .child(programMark(a, t, on ? t.foreground : t.muted))
+      .child(programMark(a, t, on ? t.foreground : t.muted, dances({ agent: a, status: tabStatus(tab), setting: setting("dance") }) ? `vdance-${tab.id}` : null))
       .child(statusMark(tabStatus(tab), t))
       .child(name)
       .when(parts.bell && !mcp, (el) => el.child(svg(icon("bell")).size(13).flex_none().text_color(t.blocked)))
