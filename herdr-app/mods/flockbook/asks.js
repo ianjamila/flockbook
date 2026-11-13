@@ -240,7 +240,8 @@ export function noteElicit(address, el) {
 
 // Work a Claude Code session still runs after its turn ended (owner 11-11, 18:18: "quick check still running but
 // already tagged as done"): its footer under the input box counts background shells ("· 1 shell ·") and lists running
-// sub-agents ("○ implementer  Running verify.mjs quick check"). { shells, agents } or null. "← N agents" is not
+// sub-agents ("○ implementer  Running verify.mjs quick check"; newer Claude Code draws "◯", as the helpers list
+// below reads it — owner 11-13: a tab whose build agent ran sat in Done). { shells, agents } or null. "← N agents" is not
 // counted: it lists finished agents too.
 export function backgroundWork(screen) {
   const lines = String(screen ?? "").split(/\r?\n/);
@@ -256,7 +257,7 @@ export function backgroundWork(screen) {
   for (const l of foot) {
     const m = /(?:^|·)\s*(\d{1,3})\s+(?:background\s+)?shells?\b/.exec(l);
     if (m) shells = Math.max(shells, Number(m[1]));
-    if (/^\s*○\s+\S+\s{2,}\S/.test(l)) agents++;
+    if (/^\s*[○◯]\s+\S+\s{2,}\S/.test(l)) agents++;
   }
   if (!shells && !agents) return null;
   // A shell behind a reply that says it waits on CI is the CI watch (owner 11-12 16:49: "this terminal is waiting

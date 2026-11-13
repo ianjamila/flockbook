@@ -59,7 +59,9 @@ const FOOT = (extra) => `⏺ #1825 is first in the merge queue.\n\n✻ Brewed fo
 // Owner 11-12 22:15: a reply that says the PR is in the merge queue, with a shell, is a merge wait (`merge`).
 eq("1 shell in the footer (t10 18:19)", backgroundWork(FOOT("  ⏵⏵ auto mode on · 1 shell · ← 4 agents")), { shells: 1, agents: 0, merge: true });
 eq("2 shells and a running agent row", backgroundWork(FOOT("  ▶▶ auto mode on · 2 shells · ← 4 agents\n\n  ● main\n  ○ implementer  Running verify.mjs quick check        7m 0s · ↓ 73.3k tokens")), { shells: 2, agents: 1, merge: true });
-eq("only finished agents (← N agents)", backgroundWork(FOOT("  ⏵⏵ auto mode on · ← 4 agents")), null);
+// Owner 11-13: Claude Code now draws a running agent as "◯" (U+25EF), not "○"; the tab sat in Done while it ran.
+eq("running agent row drawn ◯", backgroundWork(FOOT("  ⏵⏵ auto mode on · 2 shells\n\n  ⏺ main\n  ◯ implementer  Awaiting quick verify result        10m 28s · ↓ 82.5k tokens")), { shells: 2, agents: 1, merge: true });
+eq("only finished agents (← N agents)",backgroundWork(FOOT("  ⏵⏵ auto mode on · ← 4 agents")), null);
 eq("no footer work", backgroundWork(FOOT("  ⏵⏵ auto mode on")), null);
 eq("no box", backgroundWork("1 shell"), null);
 // Real screens: node test-asks.mjs <file>=<kind> … (e.g. t1t-screen.txt=round t1d-screen.txt=migration)
