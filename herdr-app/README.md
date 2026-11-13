@@ -70,6 +70,9 @@ Enter sends); the vertical tab list on the right shows each tab's program, statu
   a small card: its name and account, how long ago it changed, what it does now, its About line, and its changes as
   time chips that name the day where it changes ("yesterday 10:15 pm"). A click opens the tab; **Copy** puts the
   same layout on the clipboard as text (with a "Copied" notice); **Mark seen** clears it.
+- A tab that finished with a **hand-off** ("Hand-off given") gets **Copy prompt** on its Overview card and its
+  "Since you last looked" card: it copies the re-entry prompt from that tab's last reply without opening the tab.
+- Times say their day when it isn't today: "paused until tomorrow 1:00 am", "yesterday 9:10 pm", "Sat 1:00 am".
 - **Resume after a restart**: the Claude sessions that were open when Herdr Core or the Mac restarted are
   offered back (**Resume**, **Resume all**, **Dismiss**); each opens in its workspace and folder, as its
   account, with `claude --resume`. A row being opened says "Opening…".

@@ -68,7 +68,7 @@ test("reentryPrompt: a block counts when the line under it speaks of the prompt,
   assert.equal(reentryPrompt(fenced), "Continue the auto-close work.\n1. Map C.");
   assert.equal(reentryPrompt("> Go on with PR 5.\n\nPaste this into the new session."), "Go on with PR 5.");
   // Reads like one: starts "Continue …" and is long; a short one or code starting with `continue;` is not.
-  const long = ("Continue eaglewatch PR #1945 " + "with the review rounds and the migration go ".repeat(5)).trim();
+  const long = ("Continue webshop PR #1945 " + "with the review rounds and the migration go ".repeat(5)).trim();
   assert.equal(reentryPrompt(`If you start fresh instead:\n> ${long}`), long);
   assert.equal(reentryPrompt("Note:\n> Continue later."), null, "short");
   assert.equal(reentryPrompt("```js\ncontinue;\n" + "x();\n".repeat(60) + "```"), null, "code that starts with continue;");
@@ -80,4 +80,28 @@ test("reentryPrompt: a block counts when the line under it speaks of the prompt,
   assert.equal(reentryPrompt("> a quote\n\nThat's what the docs say."), null);
   // The last block that counts wins.
   assert.equal(reentryPrompt("Re-entry prompt:\n> first\n\nOr, shorter:\n\n```\nsecond\n```\n\nThat prompt is ready to paste."), "second");
+});
+
+// s19: the chat's Copy all and the Overview's Copy prompt share one finder over a feed's rows.
+test("replyPrompt: the newest reply's prompt (its footer skipped), back to the owner's message only", async () => {
+  const { replyPrompt, askBefore } = await import("../mods/flockbook/blocks.js");
+  const r = (id, k, text, extra = {}) => ({ id, k, text, ...extra });
+  const named = "Re-entry prompt:\n\n> Continue the work.";
+  const rows = [r("u0", "user", "start"), r("a0", "assistant", "Re-entry prompt:\n\n> OLD."), r("f0", "footer", "9:00"),
+    r("u1", "user", "go"), r("a1", "assistant", named), r("t1", "tools", ""), r("a1b", "assistant", "All done."), r("f1", "footer", "10:00")];
+  assert.equal(replyPrompt(rows), "Continue the work.", "the last assistant text WITH a prompt in the newest reply");
+  assert.equal(replyPrompt(rows, 2), "OLD.", "an explicit end: the reply that footer closes");
+  assert.equal(replyPrompt(rows.slice(0, 7)), "Continue the work.", "no footer yet: the reply so far");
+  assert.equal(replyPrompt([...rows, r("u2", "user", "thanks"), r("a2", "assistant", "Sure."), r("f2", "footer", "")]), null, "a newer reply without one");
+  assert.equal(replyPrompt([...rows, r("u2", "user", "thanks")]), null, "the owner wrote after it");
+  assert.equal(replyPrompt([r("x", "user", "hi", { from: "t9" }), r("a", "assistant", named)]), "Continue the work.", "another agent's message is not the owner's");
+  // A bare fence counts only when the owner asked for a prompt (blocks.js reentryPrompt's `ask`).
+  const fenced = "```\nPick up the parser work.\n```";
+  assert.equal(replyPrompt([r("u", "user", "write me a re-entry prompt"), r("a", "assistant", fenced)]), "Pick up the parser work.");
+  assert.equal(replyPrompt([r("u", "user", "show the snippet"), r("a", "assistant", fenced)]), null);
+  assert.equal(replyPrompt([r("x", "user", "write me a re-entry prompt", { from: "t9" }), r("a", "assistant", fenced)]), null, "another agent asking is not the owner asking");
+  assert.equal(askBefore([r("u", "user", "go"), r("x", "user", "prompt?", { from: "t9" })], 2), "go", "passes over another agent's message");
+  assert.equal(askBefore(rows, 7), "go");
+  assert.equal(askBefore(rows, 3), null, "a footer first: no ask");
+  assert.equal(replyPrompt([]), null);
 });

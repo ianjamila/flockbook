@@ -6,7 +6,10 @@ import { theme, spaces, agents, shared, setShared, home, notify } from "herdr";
 import { tabLabel, plainLabel, subStatus, SUB_GROUPS, tabAgents, agentName, openTab, showNeeds, needing, icon, FADE, watchEdge, noteWindowHeight } from "./state.js";
 import { openMenu, tabItems, suggestBadge } from "./menu.js";
 import { movedBadge, badgeTip } from "./automove.js";
-import { askOf, nowOf } from "./asks.js";
+import { askOf, nowOf, handoffOf } from "./asks.js";
+import * as sidecar from "./sidecar.js";
+import { emptyFeed, applyFeed } from "./feedstate.js";
+import { replyPrompt } from "./blocks.js";
 import { aboutOf, aboutMore, cooledAccounts, agentsOn, accountName, clockText, localOffset, autoPausedUntil, resumeAuto } from "./ai.js";
 import { sinceView, copyText, markSeen } from "./history.js";
 import { offer, resumeOne, resumeAll, dismissOffer, opening } from "./resume.js";
@@ -117,6 +120,42 @@ export class OverviewView {
     cx?.timer?.every?.(30000, (cx) => cx.notify());
   }
 
+  // "Copy re-entry prompt" (s19, owner yes): a hand-off tab's prompt without opening the tab. Its newest reply is read
+  // through the helper (the chat's own feed call) and the prompt found the way the chat's Copy all finds it
+  // (blocks.js replyPrompt). Nothing found: a notice saying so (the chat still has the reply).
+  async copyHandoff(cx, address) {
+    if (typeof cx?.write_to_clipboard !== "function") { notify({ title: "Couldn't copy: no clipboard here. Open the tab and use Copy all.", level: "warning", timeout: 3000 }); return; }
+    if (this.copying) return;
+    this.copying = address; cx.notify?.();
+    let prompt = null, problem = null;
+    try {
+      const f = emptyFeed(address);
+      applyFeed(f, await sidecar.feed(address));
+      if (f.error) problem = f.error.message || "the helper could not read its chat";
+      else prompt = replyPrompt(f.rows);
+    } catch (e) { problem = String(e?.message ?? e); } finally { this.copying = null; }
+    if (!prompt) {
+      notify({ title: problem ? `Couldn't read its chat: ${problem}` : "No re-entry prompt in its last reply. Open the tab to see it.", level: "warning", timeout: 4000 });
+    } else {
+      cx.write_to_clipboard(prompt);
+      notify({ title: "Re-entry prompt copied to the clipboard", level: "info", timeout: 2000 });
+      this.copiedHandoff = address;
+      cx.timer?.after?.(2000, (cx2) => { if (this.copiedHandoff === address) { this.copiedHandoff = null; cx2?.notify?.(); } });
+    }
+    cx.notify?.();
+  }
+  // The small button on a hand-off card (a click on it does not open the tab, as the card's own click does).
+  copyButton(id, address, t) {
+    const busy = this.copying === address, done = this.copiedHandoff === address;
+    return div().id(id).flex_none().h(22).px(8).flex().items_center().rounded(6).text_size(11.5)
+      .bg(t.chrome).border(1).border_color(t.border).text_color(done ? t.done : t.foreground)
+      .tooltip("Copy its re-entry prompt (from its last reply) without opening the tab")
+      .when(!busy, (el) => el.hover((s) => s.bg(t.hover)))
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_click((_e, cx) => { cx.stop_propagation?.(); if (!busy) cx.spawn((cx2) => this.copyHandoff(cx2, address)); })
+      .child(busy ? "Copying…" : done ? "Copied" : "Copy prompt");
+  }
+
   card(it, t, w) {
     const { space, tab } = it;
     const a = tabAgents(tab.id)[0];
@@ -138,6 +177,7 @@ export class OverviewView {
           .when(Boolean(moved), (el) => el.child(h_flex().id(`ov-moved-${tab.id}`).flex_none().gap(4).items_center().text_size(11.5).text_color(t.accent)
             .tooltip(badgeTip(moved)).child(svg(icon("moved")).size(11)).child("moved here")))
           .when(Boolean(suggestBadge(a, t, `ov-sg-${tab.id}`)), (el) => el.child(suggestBadge(a, t, `ov-sg-${tab.id}`)))
+          .when(ss?.key === "handoff" && Boolean(a?.address), (el) => el.child(this.copyButton(`ov-copy-${tab.id}`, a.address, t)))
           .when(Boolean(when), (el) => el.child(div().flex_none().text_size(11.5).text_color(t.muted).child(when)))
           // The hover box opens from this ⓘ only (owner 11-12: opening on the whole card covered the cards below it,
           // so the next card could not be clicked). A click on it opens the tab, as the card does.
@@ -214,6 +254,7 @@ export class OverviewView {
           .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(g.key === "closed" ? t.muted : t.foreground).child(it.label))
           .when(Boolean(it.account), (el) => el.child(div().id(`${id}-acct`).flex_none().px(5).rounded(4).border(1).border_color(t.border)
             .text_size(10.5).text_color(t.muted).tooltip(accountName(it.account)).child(it.account)))
+          .when(Boolean(open) && handoffOf(it.addr), (el) => el.child(this.copyButton(`${id}-copy`, it.addr, t)))
           .child(div().flex_none().text_size(11.5).text_color(t.dim).child(ago(it.at, now) === "now" ? "just now" : `${ago(it.at, now)} ago`)))
         .child(div().w_full().whitespace_normal().text_size(12).text_color(tint[g.key]).child(it.now))
         .when(Boolean(it.about), (el) => el.child(div().id(`${id}-about`).w_full().whitespace_normal().text_size(12).line_height("17px")

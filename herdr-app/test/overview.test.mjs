@@ -102,3 +102,75 @@ test("Since you last looked: groups, cards, click to open, folded at first, Expa
   const el3 = v.render(fakeCx());
   for (const id of ["ov-since-needs-0", "ov-since-working-0", "ov-since-closed-0"]) assert.equal(byId(el3, id), null, id);
 });
+
+// s19 (owner yes): a tab under "Hand-off given" gets "Copy prompt" on its Overview card (and its "Since you last
+// looked" card): the prompt of its newest reply, read through the helper as the chat reads it, without opening the tab.
+test("Hand-off given: Copy prompt copies the newest reply's re-entry prompt without opening the tab", async () => {
+  const jl = (...lines) => ({ code: 0, stdout: lines.map((l) => JSON.stringify(l)).join("\n") + "\n", stderr: "" });
+  const head = { type: "header", protocol: 1, sidecar: "0.1.0", command: "feed" }, end = { type: "end", ok: true };
+  const logLine = { type: "log", agent: "claude", path: "/logs/s.jsonl", start: 0, size: 10, cursor: "c1", model: "m" };
+  const row = (id, k, text) => ({ type: "row", id, k, text, ts: 1 });
+  const reply = "Done.\n\nRe-entry prompt:\n\n> Continue the work.\n> (1) PR 2a.";
+  let feed = [row("u0", "user", "start"), row("a0", "assistant", "Re-entry prompt:\n\n> An OLDER prompt."), row("f0", "footer", "9:00"),
+    row("u1", "user", "go"), row("a1", "assistant", reply), row("f1", "footer", "10:04 · Worked 14m")];
+  fake.exec = (_c, args) => { if (args[0] !== "feed") return { code: 127, stdout: "", stderr: "" }; return jl(head, logLine, { type: "splice", at: 0, count: feed.length }, ...feed, end); };
+  // The asks tick (started by a render) rewrites the marks from the screens, which these fakes do not give: set again.
+  const mark = (on = true) => { fake.shared["flockbook.handoff"] = on ? { t2: true } : {}; };
+  const render = () => { mark(); return v.render(fakeCx()); };
+  const v = new OverviewView(fakeCx());
+  let el = render();
+  assert.ok(byId(el, "ov-copy-tb-t2"), "the hand-off card has the button");
+  assert.equal(byId(el, "ov-copy-tb-t1"), null, "a working tab has none");
+  let copied = null;
+  const ccx = Object.assign(fakeCx(), { write_to_clipboard: (s) => { copied = s; } });
+  log.run = []; let stopped = 0;
+  const btn = byId(el, "ov-copy-tb-t2");
+  ccx.stop_propagation = () => { stopped++; };
+  btn._h.on_click({}, ccx);
+  await Promise.all(ccx.tasks);
+  assert.equal(copied, "Continue the work.\n(1) PR 2a.", "the newest reply's prompt, not the older one");
+  assert.ok(log.exec.some(([, a]) => a[0] === "feed" && a.includes("t2")), "read t2's chat through the helper");
+  assert.match(log.notify.at(-1).title, /Re-entry prompt copied/);
+  assert.equal(stopped, 1, "the click stops at the button");
+  assert.deepEqual(log.run, [], "the tab is not opened");
+  assert.match(textOf(byId(render(), "ov-copy-tb-t2")), /Copied/);
+  // A newest reply without a prompt: nothing copied, a notice says so.
+  feed = [...feed, row("u2", "user", "thanks"), row("a2", "assistant", "You're welcome."), row("f2", "footer", "10:30")];
+  copied = null; v.copiedHandoff = null;
+  const ccx2 = Object.assign(fakeCx(), { write_to_clipboard: (s) => { copied = s; } });
+  byId(render(), "ov-copy-tb-t2")._h.on_click({}, ccx2); await Promise.all(ccx2.tasks);
+  assert.equal(copied, null);
+  assert.match(log.notify.at(-1).title, /No re-entry prompt in its last reply/);
+  // The helper fails: its message, nothing copied.
+  fake.exec = () => jl(head, { type: "error", code: "read", message: "log not found" }, end);
+  const ccx3 = Object.assign(fakeCx(), { write_to_clipboard: (s) => { copied = s; } });
+  byId(render(), "ov-copy-tb-t2")._h.on_click({}, ccx3); await Promise.all(ccx3.tasks);
+  assert.equal(copied, null);
+  assert.match(log.notify.at(-1).title, /Couldn't read its chat: log not found/);
+  // No clipboard: a warning, no helper call.
+  const n = log.exec.length;
+  const ccx4 = fakeCx();
+  byId(render(), "ov-copy-tb-t2")._h.on_click({}, ccx4); await Promise.all(ccx4.tasks);
+  assert.equal(log.exec.length, n);
+  assert.match(log.notify.at(-1).title, /no clipboard/);
+  // The mark gone: no button.
+  mark(false);
+  assert.equal(byId(v.render(fakeCx()), "ov-copy-tb-t2"), null);
+});
+
+test("Hand-off given: the Since you last looked card of a hand-off tab has Copy prompt too; others don't", async () => {
+  const { KEY_HIST } = await import("../mods/flockbook/history.js");
+  const now = Date.now(), m = 60_000;
+  fake.shared[KEY_HIST] = { from: now - 600 * m, at: now, last: {
+    t1: { label: "api", account: "WORK", state: "working", about: null, pr: null, handoff: false },
+    t2: { label: "docs", account: "WORK", state: "finished", about: null, pr: null, handoff: true },
+  }, events: [{ at: now - 9 * m, addr: "t1", label: "api", account: "WORK", kind: "working", text: "working" },
+    { at: now - 5 * m, addr: "t2", label: "docs", account: "WORK", kind: "handoff", text: "gave a hand-off" }] };
+  const v = new OverviewView(fakeCx());
+  fake.shared["flockbook.handoff"] = { t2: true };
+  byId(v.render(fakeCx()), "ov-since-expand")._h.on_click({}, fakeCx());
+  fake.shared["flockbook.handoff"] = { t2: true };
+  const el = v.render(fakeCx());
+  assert.ok(byId(el, "ov-since-finished-0-copy"), "the hand-off tab's card");
+  assert.equal(byId(el, "ov-since-working-0-copy"), null);
+});

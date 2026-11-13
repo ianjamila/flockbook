@@ -123,4 +123,26 @@ export function reentryPrompt(text, ask = null) {
   }
   return found;
 }
+// The owner's message (a user row not from another agent) that the reply ending before row `end` answers, or null.
+export function askBefore(rows, end) {
+  for (let j = end - 1; j >= 0; j--) {
+    if (rows[j].k === "footer") return null;
+    if (rows[j].k === "user" && rows[j].from == null) return rows[j].text ?? null;
+  }
+  return null;
+}
+// The re-entry prompt of the reply ending before row `end` of a chat feed (default: the newest reply, its closing
+// footer skipped): its last assistant text with one, back to the owner's message. The chat's Copy all and the
+// Overview's "Copy re-entry prompt" (s19) both read it here.
+export function replyPrompt(rows, end = null) {
+  let at = end ?? rows.length;
+  if (end == null) while (at > 0 && rows[at - 1].k === "footer") at--;
+  const ask = askBefore(rows, at);
+  for (let j = at - 1; j >= 0; j--) {
+    const r = rows[j];
+    if (r.k === "footer" || (r.k === "user" && r.from == null)) return null;
+    if (r.k === "assistant") { const p = reentryPrompt(r.text, ask); if (p) return p; }
+  }
+  return null;
+}
 

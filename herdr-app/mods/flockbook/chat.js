@@ -14,7 +14,7 @@ import { ROW_PAD_Y, BUBBLE_PAD_X, BUBBLE_PAD_Y, BUBBLE_GAP, IMAGES_FS, bubbleWid
   CALL_H, SEP_H, FOOTER_H, STATUS_H, CARD_ROW_H, OTHER_H } from "./metrics.js";
 import { Composer } from "./composer.js";
 import { markdownView, codeBlockAt } from "./mdblocks.js";
-import { reentryPrompt } from "./blocks.js";
+import { reentryPrompt, replyPrompt, askBefore } from "./blocks.js";
 import { textScale } from "./config.js";
 
 // Herdr's zoom: line heights round in zoomed px (estimate.js lineHeight).
@@ -297,27 +297,13 @@ export class ChatView {
   }
 
   // The re-entry prompt of the reply this footer ends: its last assistant text with one, back to the user's message.
-  // The owner's message (a user row not from another agent) that the reply ending before row `i` answers, or null.
-  askBefore(rows, i) {
-    for (let j = i - 1; j >= 0; j--) {
-      if (rows[j].k === "footer") return null;
-      if (rows[j].k === "user" && rows[j].from == null) return rows[j].text ?? null;
-    }
-    return null;
-  }
+  // The owner's message the reply ending before row `i` answers (blocks.js askBefore).
+  askBefore(rows, i) { return askBefore(rows, i); }
 
-  // The re-entry prompt of the reply this footer ends: its last assistant text with one, back to the owner's message
-  // (which, when it asked for such a prompt, makes the reply's block count: blocks.js reentryPrompt).
+  // The re-entry prompt of the reply this footer ends (blocks.js replyPrompt, which the Overview shares).
   promptBefore(footer) {
     const rows = this.feed()?.rows ?? [];
-    const at = rows.findIndex((r) => r.id === footer.id);
-    const ask = this.askBefore(rows, at);
-    for (let j = at - 1; j >= 0; j--) {
-      const r = rows[j];
-      if (r.k === "footer" || (r.k === "user" && r.from == null)) return null;
-      if (r.k === "assistant") { const p = reentryPrompt(r.text, ask); if (p) return p; }
-    }
-    return null;
+    return replyPrompt(rows, rows.findIndex((r) => r.id === footer.id));
   }
 
   // "Copy all": the prompt on the clipboard, a short notice, and the button says "Copied" for 2 s.
