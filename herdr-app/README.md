@@ -39,6 +39,11 @@ This branch is a personal build of the Herdr mod on top of upstream Flockbook, s
 as is. Everything upstream does still works; the list below is what it adds. Every change against upstream,
 file by file, is in [`CHANGELOG-plus.md`](CHANGELOG-plus.md).
 
+<img src="preview-plus-question.png" alt="Flockbook plus: a chat named after its topic, the agent's question as a card with its options above the reply box, the model, folder and tab chips, and the vertical tab list on the right" width="800">
+
+<sub>The tab is named after the session's topic; the agent's question is a card above the reply box (1–4 pick,
+Enter sends); the vertical tab list on the right shows each tab's program, status and bell.</sub>
+
 ### What this build adds
 
 **Tabs and names**
