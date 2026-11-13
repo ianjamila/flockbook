@@ -7,8 +7,8 @@ Base: upstream `main` at `0cadf31` (after v0.13.0). What each change is for, in 
 
 | Commit | Change |
 |---|---|
-| Helper: send over Claude Code's suggested command (+ red test) | `flockbook-modfeed/src/queue.rs`, `cards.rs`: a send while Claude Code shows its "/" command list clears the box (ctrl+e ctrl+u) and checks it is one row before pasting; `docs/protocol.md` notes it. |
-| Question answers: a comma in a single-choice label is not ambiguous (+ red test) | `herdr-core/src/question/claude_exact.rs`: only a multi-select answer splits on commas. |
+| Helper: send over Claude Code's suggested command (+ red test) | Replaced by upstream's own fix when upstream fe57f10 was merged in (11-13): the helper reads the box's first paint and sends over a dim suggestion (`queue.rs` `claude_suggestion_in_paint`). A "/word" really typed still gets the chat's Send anyway. The helper is now upstream's, unchanged. |
+| Question answers: a comma in a single-choice label is not ambiguous (+ red test) | `herdr-core/src/question/claude_exact.rs`: only a multi-select answer splits on commas. Upstream merged it (PR #12). |
 
 Upstream PR #12 (long questions, the "edit in <editor>" key line, typed capitals on the hc backend) is
 already in upstream `main`.

@@ -98,7 +98,7 @@ copy_only() {
   cp "$here/layouts/flockbook.json" "$app_home/layouts/flockbook.json"
   for f in "$here"/themes/flockbook*.json; do cp "$f" "$app_home/themes/"; done
   echo "Copied the plus mod, layout and themes into $app_home (the old ones are in $backup)."
-  echo "The helper was kept: the chat works, but the plus helper fixes are not in it (./install.sh --build-helper adds them)."
+  echo "The helper was kept: the chat works, but the helper fixes newer than your release may not be in it (./install.sh --build-helper adds them)."
 }
 
 # The plus build, from source: the helper built from this checkout (it embeds this checkout's herdr-app files).

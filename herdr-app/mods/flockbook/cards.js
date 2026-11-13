@@ -5,7 +5,7 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, Textarea, TextareaState } from "gpui-base";
 import { shared, setShared, agents, hc } from "herdr";
-import { icon, openTerminal } from "./state.js";
+import { icon, openTerminal, KEY_TERM } from "./state.js";
 import * as sidecar from "./sidecar.js";
 import { elicitation, noteElicit } from "./asks.js";
 
@@ -81,6 +81,18 @@ export function answersFor(question, picks, others) {
   return out.length ? out : null;
 }
 
+// The answers so far, for `card --answers` (the sidecar checks the own answers against the review rule). Null
+// while no own answer is typed: then the card's labels alone decide.
+export function draftFor(question, picks, others) {
+  const qs = question?.questions ?? [];
+  if (!qs.some((_q, i) => (others.get(i) ?? "").trim())) return null;
+  return qs.map((_q, i) => {
+    const p = [...(picks.get(i) ?? [])].sort((a, b) => a - b);
+    const other = (others.get(i) ?? "").trim();
+    return other ? { picks: p, other } : { picks: p };
+  });
+}
+
 export const MAX_QUESTIONS = 4;
 
 // Whether question `qi` has a pick or an own answer.
@@ -122,6 +134,8 @@ export class Cards {
         const e = this.byAgent.get(this.address); if (!e) return;
         const was = Boolean((e.others.get(qi) ?? "").trim());
         e.others.set(qi, v);
+        // The card's `blocked` (the helper's review check) may change with it: the next poll reads it again at once.
+        if (e.card?.kind === "question") e.at = 0;
         if (was !== Boolean(v.trim())) cx.notify();
       });
       // Enter in the box does what Enter on the card does: the next question, or send.
@@ -152,7 +166,7 @@ export class Cards {
     if (e.busy || e.sending || (!force && Date.now() - e.at < CARD_MS)) return;
     e.busy = true; e.at = Date.now();
     try {
-      const r = await sidecar.card(address);
+      const r = await sidecar.card(address, false, e.card?.kind === "question" ? draftFor(e.card.question, e.picks, e.others) : null);
       const line = r.error ? null : r.lines.find((l) => l.type === "card");
       let card = line && line.kind ? line : null;
       // No card from the helper: an MCP server's input request on screen (elicitation) gets one of its own.
@@ -237,7 +251,7 @@ export class Cards {
       if (this.typingIn !== null) { this.typingIn = null; this.focus?.focus(); }
       cx.notify(); return true;
     }
-    if (answersFor(c.question, en.picks, en.others) && !reviewBlocked(c.question, en.others) && !untypeable(en.others, c.question)) { cx.spawn((cx) => this.answer(cx, address)); return true; }
+    if (!c.blocked && answersFor(c.question, en.picks, en.others) && !reviewBlocked(c.question, en.others) && !untypeable(en.others, c.question)) { cx.spawn((cx) => this.answer(cx, address)); return true; }
     return false;
   }
 
@@ -286,7 +300,7 @@ export class Cards {
   answer(cx, address) {
     const e = this.entry(address);
     const answers = answersFor(e.card?.question, e.picks, e.others);
-    if (!answers || reviewBlocked(e.card?.question, e.others) || untypeable(e.others, e.card?.question)) return;
+    if (!answers || e.card?.blocked || reviewBlocked(e.card?.question, e.others) || untypeable(e.others, e.card?.question)) return;
     return this.act(cx, address, (c) => sidecar.answer(address, c.request, answers), STOPPED_ANSWER);
   }
 
@@ -309,12 +323,17 @@ export class Cards {
     const head = (text) => h_flex().gap(8).items_center()
       .child(div().size(8).flex_none().rounded(4).bg(t.blocked))
       .child(div().text_size(13.5).font_semibold().text_color(t.foreground).child(text));
-    const agent = agents().find((a) => a.address === address) ?? null;
+    // The terminal window for this agent (one at a time: an open one closes first).
+    const toTerminal = async () => {
+      const a = (agents() ?? []).find((x) => x.address === address) ?? { address };
+      if (shared(KEY_TERM)) openTerminal(null);
+      openTerminal(a);
+    };
     // The note of the last press; the sidecar refusing a typed answer it can't type also gets the terminal button.
-    const tail = () => !e.note ? null : cannotType(e.note) && agent
+    const tail = () => !e.note ? null : cannotType(e.note)
       ? h_flex().id(`${id}-note`).gap(10).items_center()
         .child(div().flex_1().min_w(0).text_size(12).text_color(t.blocked).child(e.note))
-        .child(button("note-terminal", "Answer in terminal", true, async () => openTerminal(agent)))
+        .child(button("note-terminal", "Answer in terminal", true, toTerminal))
       : div().id(`${id}-note`).text_size(12).text_color(t.blocked).child(e.note);
 
     if (c.kind === "elicitation") {
@@ -324,7 +343,7 @@ export class Cards {
         .text_size(13).text_color(t.foreground).child(c.text));
       box.child(h_flex().gap(10).items_center()
         .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child("Accept or Decline in its terminal: Flockbook doesn't answer these for you."))
-        .when(Boolean(agent), (el) => el.child(button("elicit-terminal", "Answer in terminal", true, async () => openTerminal(agent)))));
+        .child(button("elicit-terminal", "Answer in terminal", true, toTerminal)));
       return box;
     }
     if (c.kind === "approval") {
@@ -383,6 +402,11 @@ export class Cards {
         .when((qq.options ?? []).length < 9, (el) => el.child(hint((qq.options ?? []).length + 1))));
       box.child(sec);
     });
+    // The terminal's review screen could not show these answers: `answer` would refuse, so Send is off from the start.
+    // (The plus build's own check below says it before the helper's poll answers; this line, when there, wins.)
+    if (c.blocked && !(c.unread > 0)) box.child(h_flex().id(`${id}-blocked`).gap(10).items_center()
+      .child(div().flex_1().min_w(0).text_size(12).text_color(t.blocked).child(c.blocked))
+      .child(button("terminal", "Answer in terminal", false, toTerminal)));
     if (c.unread > 0) {
       const total = q.questions.length + c.unread;
       box.child(h_flex().gap(10).items_center()
@@ -391,20 +415,21 @@ export class Cards {
           .child(`${c.unread} more question${c.unread === 1 ? " follows" : "s follow"}. Answer them all here, then send.`)));
     } else {
       const cant = untypeable(e.others, q);
-      // An own answer Herdr can't type blocks like an own answer the review screen can't show.
-      const blocked = reviewBlocked(q, e.others) ?? (cant ? "type" : null);
+      // An own answer Herdr can't type blocks like an own answer the review screen can't show; the helper's own
+      // review check (`c.blocked`, upstream) blocks first ("helper": its line above says why, with its terminal button).
+      const blocked = (c.blocked ? "helper" : null) ?? reviewBlocked(q, e.others) ?? (cant ? "type" : null);
       const ready = Boolean(answersFor(q, e.picks, e.others)) && !blocked;
       const last = step >= count - 1;
       // The hint on the left; Back, then Next or Send answer at the right end.
       box.child(h_flex().gap(10).items_center()
         .child(div().text_size(12).text_color(t.dim).child(count ? `1-9 picks · Enter ${last ? "sends" : "goes on"}` : ""))
         .child(div().flex_1())
-        .when(blocked !== null && Boolean(agent), (el) => el.child(button("terminal", "Answer in terminal", blocked === "option", async () => openTerminal(agent))))
+        .when(blocked !== null && blocked !== "helper", (el) => el.child(button("terminal", "Answer in terminal", blocked === "option", toTerminal)))
         .when(step > 0, (el) => el.child(button("back", "Back", false, async (cx) => { e.step = step - 1; cx.notify(); })))
         .child(last
           ? button("answer", e.sending ? "Sending…" : "Send answer", blocked === null, (cx) => this.answer(cx, address), !ready || e.sending)
           : button("next", "Next", blocked !== "option", async (cx) => { e.step = step + 1; cx.notify(); }, !answered(e, step))));
-      if (blocked) box.child(div().id(`${id}-review`).text_size(12).text_color(t.blocked).child(blocked === "option" ? REVIEW_OPTION : blocked === "type" ? UNTYPEABLE(cant) : REVIEW_OWN));
+      if (blocked && blocked !== "helper") box.child(div().id(`${id}-review`).text_size(12).text_color(t.blocked).child(blocked === "option" ? REVIEW_OPTION : blocked === "type" ? UNTYPEABLE(cant) : REVIEW_OWN));
     }
     const n = tail(); if (n) box.child(n);
     return box;

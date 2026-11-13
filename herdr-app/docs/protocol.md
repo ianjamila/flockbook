@@ -2,8 +2,8 @@
 
 The Flockbook mod draws the screens. A sidecar program reads the agents' session logs and talks to
 herdr-core. This file is the contract between them. Any sidecar that prints these lines works with
-the mod, whatever language it is written in (the first one is Swift, `flockbook-modfeed` in the
-Flockbook repo).
+the mod, whatever language it is written in (the one in the Flockbook repo is Rust,
+`xplat/flockbook-modfeed`).
 
 ## Rules
 
@@ -45,7 +45,7 @@ does not download; `install-isolated.sh` copies the sidecar in.
 | `version` | — | `version` |
 | `feed` | `--terminal <addr>` `[--cursor <c>]` `[--cache <file>]` `[--pictures]` | `log`, then `unchanged`, or `splice` and `row`s |
 | `status` | `--terminal <addr>` `[--cache <file>]` | `status` |
-| `card` | `--terminal <addr>` `[--cache <file>]` | `card` |
+| `card` | `--terminal <addr>` `[--answers <json>]` `[--cache <file>]` | `card` |
 | `approve` | `--terminal <addr> --request <id> --allow\|--deny` `[--cache <file>]` | `done` |
 | `answer` | `--terminal <addr> --request <id> --answers <json>` `[--cache <file>]` | `done` |
 | `send` | `--terminal <addr> --text <s>` `[--file <path>]…` `[--expect-kind <agent>]` `[--expect-path <log>]` `[--cache <file>]` | `done` (`changed` when the terminal now runs another agent or conversation than the expected one; nothing is sent. Its message says "new conversation" when the same agent process wrote the expected log, e.g. after `/clear`. With `--cache` the log is looked up again and written to the cache, so the next `feed` reads it) |
@@ -79,8 +79,7 @@ exactly as given.
 Its lines come back unchanged, so `header`, `end` and everything between are the helper's there.
 The helper there keeps its own cache (`"$HOME"/.cache/flockbook/cache.json` there); this computer's
 `--cache` is not passed on. `send --file`: the file is first put beside the terminal there (`terminal.put`) and the
-text names that copy. Only one level: `a/b/t7` is `bad_terminal`. The Swift sidecar does not do
-this: it answers `not-agent` for these terminals.
+text names that copy. Only one level: `a/b/t7` is `bad_terminal`.
 
 The helper there must be this same version (`protocol` and `sidecar` both). It is never put on
 another machine without the user's yes:
@@ -353,6 +352,7 @@ as blocked, and for a pending `question` row.
 | `answered` | Approval: `true` when this prompt was answered already (by any view) and is still drawn. The mod shows no buttons. |
 | `question` | Question: the same object as in a `question` row. |
 | `unread` | Question: how many more questions exist than the card shows (Claude shows one at a time). `answer` reads them itself. |
+| `blocked` | Question: why `answer` would refuse before any key, because the terminal's review screen could not show the answers (a hooked Claude question set: an option with a comma or a `●`/`→` mark, two options alike, or such an own answer). `card --answers` (the `answer` format, the answers so far) also checks the own answers. Missing while `unread` > 0. The mod turns Send off and shows it with a button that opens the terminal. |
 
 An approval card appears only when the screen shows the prompt ("Do you want …?" with "1. Yes").
 A running tool is not an approval.
@@ -453,12 +453,6 @@ any text); Codex, the last
 two rules (a mode's note "… (shift+tab to cycle)" is empty); Grok Build, "│ ❯" inside the last "╭ … ╰" box. Another
 agent, a screen it cannot read, or a screen where the box is not found (a dialog, a menu): it sends as before, so a
 doubt never blocks a message (but then the text may still go after what is in the box).
-
-Claude Code's suggestion can itself be a command ("/clear"), and then it reads like a typed one. With prompt
-suggestions on, a box of one row holding only "/word" with no command list in the two lines above the box (a typed
-"/" shows that list) is taken for the suggestion (queue.rs `suggested_slash`): `send` presses ctrl+e ctrl+u to clear
-that line (a dim suggestion is untouched; a "/word" typed and closed with Esc goes), reads the screen again, and
-types the text only when the box is down to one row (`box_one_line`); else `box_not_empty`.
 
 `approve` reads the screen again right before the keys and sends only while the box on screen is
 still `request` (the app's `respondIfOpen`). Claude and agy: `--allow` sends `1` (allow once),

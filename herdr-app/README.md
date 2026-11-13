@@ -24,8 +24,7 @@ version comes close or leaves the feature out.
 | `install-isolated.sh` | Copies the same into a test herdr-app home, for development. |
 
 The chat view reads conversations through a sidecar, `flockbook-modfeed`, built from this repo
-(Rust: `cd xplat && cargo build --release -p flockbook-modfeed`; the Swift one,
-`swift build -c release --product flockbook-modfeed`, speaks the same protocol). The mod finds it at
+(Rust: `cd xplat && cargo build --release -p flockbook-modfeed`). The mod finds it at
 `<herdr-app home>/flockbook/bin/flockbook-modfeed`. Its protocol is in `docs/protocol.md`.
 
 The layout and the mod work only together: the layout names the mod's views, and the mod expects
@@ -102,8 +101,10 @@ file by file, is in [`CHANGELOG-plus.md`](CHANGELOG-plus.md).
 **Themes**: VS Code–style colours and a visible selection colour for Flockbook dark and light.
 
 **Helper** (`flockbook-modfeed`, built from this branch by `install.sh --build-helper`)
-- A send while Claude Code shows its "/" command list clears the box first, so the message isn't swallowed.
+- A send over Claude Code's dim "/" suggestion goes through instead of stopping at "the box has text".
 - A comma in a single-choice answer's label is no longer taken as two answers.
+- Both are upstream's own fixes now (main, after the 0.13.0 release): building the helper from this branch gets
+  them before the next official release.
 - If an official Flockbook update puts the official helper back, a notice says which fixes are gone and how to
   rebuild.
 

@@ -42,6 +42,10 @@ pub struct Card {
     /// An approval this sidecar already answered that is still on screen: no buttons.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub answered: Option<bool>,
+    /// Question: why `answer` would refuse these answers before any key (`review_note`). The mod turns Send off and
+    /// shows this with a button that opens the terminal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked: Option<String>,
 }
 
 impl Card {
@@ -92,6 +96,17 @@ pub fn no_identity() -> Done {
 pub fn claude_suggests(home: Option<&Path>) -> bool {
     let v = home.and_then(|h| std::fs::read(h.join(".claude/settings.json")).ok()).and_then(|b| serde_json::from_slice::<Value>(&b).ok());
     v.and_then(|v| v["promptSuggestionEnabled"].as_bool()).unwrap_or(true)
+}
+
+/// How long `send` looks at a pane's first paint for a dim suggestion.
+pub const LOOK_LIMIT: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Claude Code's box shows "/…" that may be its dim prompt suggestion, not typed text (issue #11, item 2). One
+/// watch-only look at the first paint (no keys, no resize; detached at once, `LOOK_LIMIT` at most): true only when it
+/// reads the same text, all dim, with the cursor at the box start. Any error or doubt: false (refused as before).
+fn dim_suggestion(client: &HcClient, pane_id: &str, screen: &str) -> bool {
+    let Some(text) = crate::queue::claude_slash_row(screen) else { return false };
+    client.first_paint(pane_id, LOOK_LIMIT).is_ok_and(|p| crate::queue::claude_suggestion_in_paint(&p, &text))
 }
 
 pub const BOX_NOT_EMPTY: &str = "The agent's box has text in it. Clear it in the terminal first. Nothing was sent.";
@@ -190,8 +205,32 @@ pub fn look<S: PaneScreen + ?Sized>(pane: &Pane, screen: &S, log: Option<&Path>)
     (None, read)
 }
 
+/// The card's `blocked` line (`question::review_blocked`, the rule `answer` refuses with): Some when the terminal's
+/// review screen could not show these answers. The labels alone, or the person's own answer. None while questions
+/// are unread: `answer` reads them first, and the rule needs them all.
+pub const REVIEW_LABELS: &str = "The terminal's review screen could not show which options were picked (an option with a comma or a ● or → mark, or two options alike). Answer in the terminal.";
+pub const REVIEW_OWN: &str = "Your own answer has a comma, a ● or → mark, or is the same as an option, so the terminal's review screen could not show it. Change it, or answer in the terminal.";
+
+pub fn review_note(q: &QuestionRequest, answers: &[QuestionAnswer]) -> Option<String> {
+    if q.unread() > 0 {
+        return None;
+    }
+    if question::review_blocked(q, &[]) {
+        Some(REVIEW_LABELS.into())
+    } else if question::review_blocked(q, answers) {
+        Some(REVIEW_OWN.into())
+    } else {
+        None
+    }
+}
+
 /// `all`: for a question with more behind it, walk the picker's tabs first (keys, on the owner's click).
 pub fn card<S: PaneScreen + ?Sized>(pane: &Pane, screen: &S, log: Option<&Path>, all: bool, cache: Option<&Path>) -> Card {
+    card_with(pane, screen, log, all, cache, &[])
+}
+
+/// `card`, with the answers the mod has so far (`card --answers`): `blocked` covers the person's own answers too.
+pub fn card_with<S: PaneScreen + ?Sized>(pane: &Pane, screen: &S, log: Option<&Path>, all: bool, cache: Option<&Path>, answers: &[QuestionAnswer]) -> Card {
     let (mut now, read) = look(pane, screen, log);
     if all {
         if let Some(Current::Question(q)) = &now {
@@ -234,6 +273,7 @@ pub fn card<S: PaneScreen + ?Sized>(pane: &Pane, screen: &S, log: Option<&Path>,
                 request: Some(q.tool_use_id.clone()),
                 question: row.question,
                 unread: Some(q.unread()),
+                blocked: review_note(&q, answers),
                 ..Default::default()
             }
         }
@@ -336,18 +376,6 @@ pub fn answer<S: PaneScreen + ?Sized>(pane: &Pane, screen: &S, log: Option<&Path
     }
 }
 
-/// Clears the line Claude Code's box shows (ctrl+e ctrl+u: a typed "/word" goes, a dim suggestion is untouched) and
-/// reads the box again: true when it is down to one row, so the text pastes over any dim text and nothing typed is
-/// left in front of it. Tested live on Claude Code 2.1: a typed "/clear" closed with Esc, then a send, gave "/clear…"
-/// as one unknown command without this.
-fn clear_box_line(client: &HcClient, pane_id: &str) -> bool {
-    if client.send_named_keys(&["ctrl+e".to_string(), "ctrl+u".to_string()], pane_id).is_err() {
-        return false;
-    }
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    client.visible_text(pane_id).ok().is_some_and(|s| crate::queue::box_one_line(&s))
-}
-
 /// The composer: the text, with each file in `files` named in it. `was`: the locate cache entry this terminal had
 /// before the send looked its log up again.
 #[allow(clippy::too_many_arguments)]
@@ -383,13 +411,15 @@ pub fn send(pane: &Pane, client: &HcClient, text: &str, files: &[String], log: O
     // not read, or no screen: it goes as before.
     let kind = pane.agent.as_ref().map(|a| a.kind.as_str()).unwrap_or("");
     let suggests = kind == "claude" && claude_suggests(std::env::var_os("HOME").map(std::path::PathBuf::from).as_deref());
-    let screen = client.visible_text(&pane.id).ok();
-    if screen.as_deref().and_then(|s| crate::queue::box_has_text(kind, s, suggests)) == Some(true) {
-        // Claude Code's dim suggestion can be a command ("/clear"): read as typed, it stopped every send. A lone
-        // "/word" with no command list above the box is taken for it; its line is cleared and the text goes.
-        let suggestion = suggests && screen.as_deref().and_then(crate::queue::suggested_slash).is_some();
-        if !suggestion || !clear_box_line(client, &pane.id) {
-            return box_not_empty();
+    if let Ok(screen) = client.visible_text(&pane.id) {
+        if crate::queue::box_has_text(kind, &screen, suggests) == Some(true) {
+            if !(suggests && dim_suggestion(client, &pane.id, &screen)) {
+                return box_not_empty();
+            }
+            // The look took up to LOOK_LIMIT: another agent may have come in meanwhile. Gate again before typing.
+            if !keygate::passes(client, Some(&gate(pane)), &pane.id, None, None) {
+                return refused(pane);
+            }
         }
     }
     let r = if files.is_empty() { client.deliver(text, &pane.id) } else { client.deliver_files(text, &pane.id, files) };
@@ -397,5 +427,42 @@ pub fn send(pane: &Pane, client: &HcClient, text: &str, files: &[String], log: O
         DeliveryOutcome::Sent => Done::new("sent", None),
         DeliveryOutcome::Unconfirmed => Done::new("unconfirmed", Some("no answer in time; the text may still arrive")),
         DeliveryOutcome::Failed => Done::new("failed", Some("herdr-core did not take the text")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn hooked(questions: Value) -> QuestionRequest {
+        let mut q = question::claude("toolu_R", json!({ "questions": questions }).as_object().unwrap()).unwrap();
+        q.headers = vec![];
+        q
+    }
+    fn two(a: &str, b: &str) -> QuestionRequest {
+        hooked(json!([{"question":"First?","header":"One","multiSelect":true,"options":[{"label":a,"description":""},{"label":b,"description":""}]},
+            {"question":"Second?","header":"Two","multiSelect":false,"options":[{"label":"C","description":""},{"label":"D","description":""}]}]))
+    }
+    fn own(text: &str) -> Vec<QuestionAnswer> {
+        vec![QuestionAnswer { picks: vec![], other: Some(text.into()) }, QuestionAnswer::default()]
+    }
+
+    // Issue #11, item 4: the card says so before Send, with the rule `answer` refuses with.
+    #[test]
+    fn review_note_before_send() {
+        assert_eq!(review_note(&two("x, y", "z"), &[]).as_deref(), Some(REVIEW_LABELS), "a comma label: blocked from the start");
+        assert_eq!(review_note(&two("A B", "AB"), &own("fine")).as_deref(), Some(REVIEW_LABELS), "labels first, whatever is typed");
+        assert_eq!(review_note(&two("A", "B"), &[]), None, "clean labels: Send stays on");
+        assert_eq!(review_note(&two("A", "B"), &own("x, y")).as_deref(), Some(REVIEW_OWN), "own answer with a comma");
+        assert_eq!(review_note(&two("A", "B"), &own("  B ")).as_deref(), Some(REVIEW_OWN), "own answer alike an option");
+        assert_eq!(review_note(&two("A", "B"), &own("olive")), None, "a clean own answer");
+        // It is the answer's refusal: the same answers, the same verdict.
+        for (q, a) in [(two("x, y", "z"), vec![]), (two("A", "B"), own("x, y")), (two("A", "B"), own("olive"))] {
+            assert_eq!(review_note(&q, &a).is_some(), question::review_blocked(&q, &a));
+        }
+        let mut unread = two("x, y", "z");
+        unread.headers = vec!["One".into(), "Two".into(), "Three".into()];
+        assert_eq!(review_note(&unread, &[]), None, "questions unread: answer reads them first");
     }
 }

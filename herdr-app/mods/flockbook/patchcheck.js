@@ -1,6 +1,6 @@
 // The plus build's helper (install.sh --build-helper) carries fixes the official release may not have yet: long
-// Claude Code questions, the "edit in <editor>" key line, typed capitals (upstream PR #12) and a send while Claude
-// Code shows its "/" command list (the box is cleared first, so the message isn't swallowed by a suggestion). An
+// Claude Code questions, the "edit in <editor>" key line, typed capitals (upstream PR #12) and a send over Claude
+// Code's dim "/" suggestion (upstream main since 0.13.0: the box's first paint shows it dim). An
 // official Flockbook update installs the official helper over it. This looks every 10 minutes (one copy of the mod
 // acts, through shared state) for one mark per fix that only the patched helper has, and warns once per helper file
 // (its size and time) — only once this machine has run a patched helper (state.everPatched): someone who kept the
@@ -11,11 +11,12 @@ import { setting } from "./config.js";
 
 const KEY = "flockbook.patchcheck";          // { at, file, patched, missing, warned }
 const EVERY_MS = 10 * 60_000;
-// One mark per fix. PR #12: its refusal text for untypeable answers. PR 2: a function name the release build keeps
-// as a symbol (it has no text of its own; checked 2026-11-11: absent from v0.13.0 official and the PR #12-only build).
+// One mark per fix. PR #12: its refusal text for untypeable answers. The suggestion send: upstream's function name,
+// which the release build keeps as a symbol (checked 2026-11-13: absent from v0.13.0 official, present in a build
+// from upstream fe57f10). It replaced this build's own fix (its mark was "suggested_slash").
 export const MARKS = [
   { mark: "cannot type yet", fix: "long questions, typed capitals and \"edit in VS Code\" answers" },
-  { mark: "suggested_slash", fix: "sending while Claude Code shows its / command list" },
+  { mark: "claude_suggestion_in_paint", fix: "sending over Claude Code's dim / suggestion" },
 ];
 // The rebuild command shown in the warning: the "helper_rebuild" setting, else the plus build's installer.
 export const REBUILD = "./install.sh --build-helper (in your flockbook-herdr-plus folder)";

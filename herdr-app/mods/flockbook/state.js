@@ -126,17 +126,18 @@ export function currentAgent() {
     ?? list[0] ?? null;
 }
 
-// What the terminal button and ⌃` open: the shown agent, else the shown tab's own terminal (the focused pane's,
-// else its first). An agent that stopped reporting its status (OSC 7501) is no agent to Herdr, and the tab then
-// had no terminal to open. The stand-in has what openTerminal and agentName read.
+// What the Terminal button and ctrl-` open: the chat's agent; on a tab with no agent, the tab's focused terminal
+// pane, else its first. An agent that stopped reporting its status (issue #11, item 5: Claude Code after a new
+// session id) leaves its tab with no agent while it still runs there. Null for a tab with no terminal pane.
 export function currentTerminal() {
   const a = currentAgent();
   if (a) return a;
   const tab = activeTab();
   if (!tab) return null;
-  const ps = panes().filter((p) => p.tab === tab.id && p.terminal);
-  const p = ps.find((x) => x.focused) ?? ps[0];
-  return p ? { address: p.terminal, tab: tab.id, tab_name: tab.name, title: p.title, app: "Terminal" } : null;
+  const list = (panes() ?? []).filter((p) => p.tab === tab.id && p.terminal);
+  const f = focused();
+  const p = list.find((x) => x.focused) ?? list.find((x) => f && x.terminal === f.terminal) ?? list[0];
+  return p ? { address: p.terminal, tab: p.tab, tab_name: tab.named ? tab.name : null, program: p.program, app: p.app, title: p.title } : null;
 }
 
 // A tab's label: its name when someone named it, else its agent's name, else its number ("3").
