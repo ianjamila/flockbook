@@ -61,7 +61,7 @@ file by file, is in [`CHANGELOG-plus.md`](CHANGELOG-plus.md).
 - **Hover boxes** on cards, tab pills and tab-list rows: the About line and a few sentences more, the last
   steps, the helpers at work, links to **Summarize** and **Rewrite**.
 - **Since you last looked**: what changed in each tab while you were away, grouped by what the tab does now
-  (**Waiting on you**, **Merging, CI or review**, **Working**, **Finished**, **Closed** — folded at first). Each tab is
+  (**Waiting on you**, **Merging, CI or review**, **Working**, **Finished**, **Closed**), every group folded at first: open one by its heading, or **Expand all** / **Collapse all**. Each tab is
   a small card: its name and account, how long ago it changed, what it does now, its About line, and its changes as
   time chips that name the day where it changes ("yesterday 10:15 pm"). A click opens the tab; **Copy** puts the
   same layout on the clipboard as text (with a "Copied" notice); **Mark seen** clears it.

@@ -178,14 +178,15 @@ export class OverviewView {
   // "Since you last looked" (history.js; s13 item 8, redesigned 11-13 for the owner's "hard to read … organized
   // better"): the tabs that changed after the last "Mark seen" (or since midnight), grouped by what they do now
   // (Waiting on you first). A tab is a small card: name, account, how long since its last change, what it does now,
-  // its About line, and its changes as time chips. A click on an open tab's card opens it; Closed starts folded.
+  // its About line, and its changes as time chips. A click on an open tab's card opens it. Every group starts folded (owner 11-13: "collapse this by default"); a
+  // group's heading opens or folds it, Expand all / Collapse all do every group.
   // Copy puts the same layout on the clipboard as text (copyText); Mark seen clears the strip.
   sinceStrip(t) {
     const v = sinceView();
     if (!v.groups.length) return [];
     const now = Date.now();
     const copied = this.copiedAt && now - this.copiedAt < 3000;
-    this.sinceOpen ??= new Set(["needs", "busy", "working", "finished"]);
+    this.sinceOpen ??= new Set();
     const btn = (id, label, on) => div().id(id).h(26).px(10).flex().flex_none().items_center().rounded(7).text_size(12)
       .bg(t.chrome).border(1).border_color(t.border).text_color(t.foreground).hover((s) => s.bg(t.hover)).on_click(on).child(label);
     const tint = { needs: t.blocked, busy: t.accent, working: t.working, finished: t.done, closed: t.dim };
@@ -236,6 +237,8 @@ export class OverviewView {
         .child(v_flex().flex_1().min_w(0)
           .child(div().truncate().text_size(13).font_semibold().text_color(t.foreground).child(v.header))
           .child(div().truncate().text_size(11.5).text_color(t.dim).child(`${v.count} ${v.count === 1 ? "tab" : "tabs"} changed${v.note ? ` · ${v.note}` : ""}`)))
+        .child(btn("ov-since-expand", "Expand all", (_e, cx) => { this.sinceOpen = new Set(v.groups.map((g) => g.key)); cx.notify(); }))
+        .child(btn("ov-since-collapse", "Collapse all", (_e, cx) => { this.sinceOpen = new Set(); cx.notify(); }))
         .child(btn("ov-since-copy", copied ? "Copied" : "Copy", (_e, cx) => copy(_e, cx)))
         .child(btn("ov-since-seen", "Mark seen", (_e, cx) => { markSeen(); cx.notify(); })))
       .children(v.groups.map(group))];

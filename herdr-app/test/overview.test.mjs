@@ -55,8 +55,8 @@ test("ago and greeting", () => {
 });
 
 // Owner 11-13 ("hard to read … should be organized better"): the strip groups tabs by what they do now, a card per tab;
-// a click opens an open tab; Closed starts folded; Copy copies the grouped text and says so.
-test("Since you last looked: groups, cards, click to open, Closed folded, Copy with a notice", async () => {
+// a click opens an open tab; every group starts folded (Expand all / Collapse all); Copy copies the grouped text and says so.
+test("Since you last looked: groups, cards, click to open, folded at first, Expand/Collapse all, Copy with a notice", async () => {
   const { KEY_HIST } = await import("../mods/flockbook/history.js");
   const now = Date.now(), m = 60_000;
   const ev = (addr, label, min, kind, text) => ({ at: now - min * m, addr, label, account: "WORK", kind, text });
@@ -66,19 +66,27 @@ test("Since you last looked: groups, cards, click to open, Closed folded, Copy w
   }, events: [ev("t1", "api", 9, "finished", "finished"), ev("t1", "api", 8, "about", "About: Keeps the API fast. (auto-written)"),
     ev("t2", "docs", 5, "needs", "ready to merge · #5"), ev("gone", "Webshop", 4, "closed", "closed")] };
   const v = new OverviewView(fakeCx());
+  const el0 = v.render(fakeCx());
+  // Every group starts folded: headings with counts, no cards.
+  for (const g of ["needs", "working", "closed"]) assert.ok(byId(el0, `ov-since-h-${g}`), g);
+  for (const id of ["ov-since-needs-0", "ov-since-working-0", "ov-since-closed-0"]) assert.equal(byId(el0, id), null, id);
+  // A heading opens its own group only.
+  byId(el0, "ov-since-h-working")._h.on_click({}, fakeCx());
+  const el1 = v.render(fakeCx());
+  assert.ok(byId(el1, "ov-since-working-0"));
+  assert.equal(byId(el1, "ov-since-needs-0"), null);
+  byId(el1, "ov-since-expand")._h.on_click({}, fakeCx());
   const el = v.render(fakeCx());
   const strip = byId(el, "ov-since");
   const text = textOf(strip);
-  // Waiting on you comes first, then Working, then Closed (folded: its tab is not listed).
+  // Waiting on you comes first, then Working, then Closed.
   assert.ok(text.indexOf("WAITING ON YOU") < text.indexOf("WORKING") && text.indexOf("WORKING") < text.indexOf("CLOSED"), text);
   assert.match(text, /3 tabs changed/);
   assert.match(textOf(byId(el, "ov-since-needs-0")), /docs.*WORK.*ready to merge, #5/);
   assert.match(textOf(byId(el, "ov-since-working-0")), /api.*Keeps the API fast\./);
   assert.doesNotMatch(textOf(byId(el, "ov-since-working-0")), /auto-written/);
-  assert.equal(byId(el, "ov-since-closed-0"), null, "Closed starts folded");
-  byId(el, "ov-since-h-closed")._h.on_click({}, fakeCx());
-  const el2 = v.render(fakeCx());
-  assert.match(textOf(byId(el2, "ov-since-closed-0")), /Webshop/);
+  const el2 = el;
+  assert.match(textOf(byId(el2, "ov-since-closed-0")), /Webshop/, "Expand all opened Closed too");
   assert.equal(byId(el2, "ov-since-closed-0")._h?.on_click, undefined, "a closed tab's card opens nothing");
   log.run = [];
   byId(el2, "ov-since-needs-0")._h.on_click({}, fakeCx());
@@ -89,4 +97,8 @@ test("Since you last looked: groups, cards, click to open, Closed folded, Copy w
   assert.match(copied, /\nWaiting on you \(1\)\n- docs \[WORK\]: ready to merge, #5\n/);
   assert.match(log.notify.at(-1).title, /Copied/);
   assert.match(textOf(byId(v.render(fakeCx()), "ov-since-copy")), /Copied/);
+  // Collapse all folds every group again; a heading click still folds one.
+  byId(el2, "ov-since-collapse")._h.on_click({}, fakeCx());
+  const el3 = v.render(fakeCx());
+  for (const id of ["ov-since-needs-0", "ov-since-working-0", "ov-since-closed-0"]) assert.equal(byId(el3, id), null, id);
 });
