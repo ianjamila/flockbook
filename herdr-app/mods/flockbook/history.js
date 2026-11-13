@@ -10,7 +10,7 @@
 import { agents, terminals, shared, setShared } from "herdr";
 import { agentName, needReason, overlays } from "./state.js";
 import { askOf, askLine, bgOf, handoffOf, prOf } from "./asks.js";
-import { aboutOf, accountFor, accountName, clockText, localOffset } from "./ai.js";
+import { aboutOf, accountFor, accountName, timeOnly, dayWord, localOffset } from "./ai.js";
 
 export const KEY_HIST = "flockbook.history.v1";
 export const KEY_SEEN = "flockbook.history.seen";   // when the owner last pressed "Mark seen" (ms), or null
@@ -78,11 +78,10 @@ export function nowText(snap) {
 // A past time with its day where it matters: "10:15 am" (today), "yesterday 10:15 pm", "Wed 10:15 pm". `clock`: the
 // time of day ("10:15 pm"). With `prevAt`, the day is said only when it differs from that event's day (a timeline).
 export function whenText(at, now, off, clock, prevAt = null) {
-  const day = dayStart(at, off), today = dayStart(now, off);
-  if (prevAt != null && dayStart(prevAt, off) === day) return clock(at);
-  if (day === today) return prevAt == null ? clock(at) : `today ${clock(at)}`;
-  if (today - day <= 26 * 3600_000) return `yesterday ${clock(at)}`;
-  return `${DAYS[new Date(at + off * 60_000).getUTCDay()]} ${clock(at)}`;
+  if (prevAt != null && dayStart(prevAt, off) === dayStart(at, off)) return clock(at);
+  const d = dayWord(at, now, off);   // ai.js: the one day rule (yesterday / weekday / date) every time line uses
+  if (!d) return prevAt == null ? clock(at) : `today ${clock(at)}`;
+  return `${d} ${clock(at)}`;
 }
 // </history-pure>
 
@@ -133,7 +132,7 @@ export function waitingFor(address, now = Date.now()) {
 export function sinceView({ seen = seenAt(), now = Date.now(), off = localOffset() } = {}) {
   const h = history();
   const base = seen ?? dayStart(now, off);
-  const clock = (at) => clockText(at, now, off);
+  const clock = (at) => timeOnly(at, off);   // whenText adds the day
   const by = new Map();
   for (const e of h.events ?? []) {
     if (e.at <= base) continue;

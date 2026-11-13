@@ -4,7 +4,7 @@ import { MOD, WORK_DIR } from "./paths.mjs";
 import fs from "node:fs";
 const src = fs.readFileSync(MOD + "ai.js", "utf8");
 const i = src.indexOf("// <ai-pure>"), j = src.indexOf("// </ai-pure>");
-const { aiInput, oneLine, parseAbout, aboutDue, isStale, normTitle, classifyFailure, parseReset, coolUntil, clockText, dayKey, failureText, agoText, RETRY_MS } = new Function(src.slice(i, j).replaceAll("export ", "") + "; return { aiInput, oneLine, parseAbout, aboutDue, isStale, normTitle, classifyFailure, parseReset, coolUntil, clockText, dayKey, failureText, agoText, RETRY_MS };")();
+const { aiInput, oneLine, parseAbout, aboutDue, isStale, normTitle, classifyFailure, parseReset, coolUntil, clockText, timeOnly, dayWord, dayKey, failureText, agoText, RETRY_MS } = new Function(src.slice(i, j).replaceAll("export ", "") + "; return { aiInput, oneLine, parseAbout, aboutDue, isStale, normTitle, classifyFailure, parseReset, coolUntil, clockText, timeOnly, dayWord, dayKey, failureText, agoText, RETRY_MS };")();
 // accountOfScreen / nameOf come from accounts.js's pure block (its constants and expandHome stood in).
 const asrc = fs.readFileSync(MOD + "accounts.js", "utf8");
 const { accountOfScreen, nameOf } = new Function("expandHome", 'const DEFAULT_ACCOUNT = "default", STATUS_FROM_BOTTOM = 16, RULE_LINE = /^\\s*─{20,}\\s*$/;' + asrc.slice(asrc.indexOf("// <accounts-pure>"), asrc.indexOf("// </accounts-pure>")).replaceAll("export ", "") + "; return { accountOfScreen, nameOf };")((p) => p);
@@ -92,11 +92,23 @@ eq("far date = unreadable", parseReset("resets Dec 30, 1am (Asia/Singapore)", no
 eq("cool: quota without a time = 1 h", coolUntil("quota", "hit your limit", now, 480), now + 3600_000);
 eq("cool: auth = 1 h", coolUntil("auth", "", now, 480), now + 3600_000);
 eq("cool: timeout = none", coolUntil("timeout", "", now, 480), null);
-eq("clock 1am", clockText(Date.UTC(2026, 10, 12, 17, 0), now, 480), "1:00 am");
-eq("clock far = weekday", clockText(Date.UTC(2026, 10, 13, 17, 0), now, 480), "Sat 1:00 am");
+eq("clock later today = time only", clockText(Date.UTC(2026, 10, 12, 15, 59), now, 480), "11:59 pm");
+eq("clock after local midnight = tomorrow (it was a bare 1:00 am)", clockText(Date.UTC(2026, 10, 12, 17, 0), now, 480), "tomorrow 1:00 am");
+eq("clock 2 days on = weekday", clockText(Date.UTC(2026, 10, 13, 17, 0), now, 480), "Sat 1:00 am");
+// s19: a PAST time named no day at all (only future ones beyond 20 h did).
+eq("clock earlier today = time only", clockText(Date.UTC(2026, 10, 11, 16, 0), now, 480), "12:00 am");
+eq("clock past, yesterday", clockText(Date.UTC(2026, 10, 11, 15, 59), now, 480), "yesterday 11:59 pm");
+eq("clock past, 3 days ago = weekday", clockText(Date.UTC(2026, 10, 9, 2, 0), now, 480), "Mon 10:00 am");
+eq("clock past, over 6 days = date", clockText(Date.UTC(2026, 10, 3, 2, 0), now, 480), "3 Nov 10:00 am");
+eq("clock future, over 6 days = date", clockText(Date.UTC(2026, 10, 20, 2, 0), now, 480), "20 Nov 10:00 am");
+eq("clock 6 days on = weekday", clockText(Date.UTC(2026, 10, 18, 2, 0), now, 480), "Wed 10:00 am");
+eq("clock in another zone: the day follows the offset", clockText(Date.UTC(2026, 10, 12, 7, 0), now, -480), "11:00 pm");
+eq("clock in another zone, its next day", clockText(Date.UTC(2026, 10, 12, 9, 0), Date.UTC(2026, 10, 12, 7, 0), -480), "tomorrow 1:00 am");
+eq("time only never names a day", timeOnly(Date.UTC(2026, 10, 3, 2, 0), 480), "10:00 am");
+eq("day word: same day", dayWord(now + 3600_000, now, 480), null);
 eq("day key", dayKey(now, 480), "2026-11-12");
 eq("day key after local midnight", dayKey(Date.UTC(2026, 10, 12, 17, 0), 480), "2026-11-13");
-eq("quota words", failureText("quota", "Personal account (HOME)", Date.UTC(2026, 10, 12, 17, 0), now, 480), "Personal account (HOME) is out of its Claude usage until 1:00 am.");
+eq("quota words", failureText("quota", "Personal account (HOME)", Date.UTC(2026, 10, 12, 17, 0), now, 480), "Personal account (HOME) is out of its Claude usage until tomorrow 1:00 am.");
 eq("auth words take the account's name", failureText("auth", "Work account (WORK)", 0, now, 480), "Work account (WORK) needs signing in again (claude auth login).");
 eq("cap words take the account's name", failureText("cap", "Work account (WORK)", 0, now, 480).startsWith("Work account (WORK) reached"), true);
 eq("unknown account words", failureText("unknown-account", null, 0, now, 480).startsWith("Couldn't tell which Claude account"), true);

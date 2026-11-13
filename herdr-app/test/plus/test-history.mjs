@@ -12,12 +12,15 @@ Date.now = () => now;
 const st = fakeShared();
 let tabs = [], terms = [];
 const info = {};   // per address: { ask, need, ci, handoff, about, pr, account }
+// s19: the real day rule (ai.js timeOnly / dayWord), as every time line now uses it.
+const aiSrc = (await import("node:fs")).readFileSync((await import("./paths.mjs")).MOD + "ai.js", "utf8");
+const { timeOnly, dayWord } = new Function(aiSrc.slice(aiSrc.indexOf("// <ai-pure>"), aiSrc.indexOf("// </ai-pure>")).replaceAll("export ", "") + "; return { timeOnly, dayWord };")();
 const h = await loadMod("history.js", {
   herdr: { ...st, agents: () => tabs, terminals: () => terms },
   // Live names carry the title's marks in front ("🛠✅ Webshop …"); the record keeps the plain name.
   "./state.js": { agentName: (a) => `🛠✅ ${a.name}`, needReason: (a) => info[a.address]?.need ?? null, overlays: () => [] },
   "./asks.js": { askOf: (x) => info[x]?.ask ?? null, askLine: (k) => k.line, bgOf: (x) => (info[x]?.ci || info[x]?.review ? { shells: 1, agents: 0, ci: Boolean(info[x].ci), review: Boolean(info[x].review) } : null), handoffOf: (x) => Boolean(info[x]?.handoff), prOf: (x) => info[x]?.pr ?? null },
-  "./ai.js": { aboutOf: (x) => info[x]?.about ?? null, accountFor: (x) => info[x]?.account ?? null, accountName: (x) => ({ WORK: "Work account (WORK)", HOME: "Personal account (HOME)" })[x] ?? "Unknown account", clockText: (at, n, off) => { const w = new Date(at + off * MIN); const hh = w.getUTCHours(); return `${hh % 12 || 12}:${String(w.getUTCMinutes()).padStart(2, "0")} ${hh < 12 ? "am" : "pm"}`; }, localOffset: () => OFF, agoText: (at, n) => `${Math.floor((n - at) / MIN)} min ago` },
+  "./ai.js": { timeOnly, dayWord, aboutOf: (x) => info[x]?.about ?? null, accountFor: (x) => info[x]?.account ?? null, accountName: (x) => ({ WORK: "Work account (WORK)", HOME: "Personal account (HOME)" })[x] ?? "Unknown account", clockText: (at, n, off) => { const w = new Date(at + off * MIN); const hh = w.getUTCHours(); return `${hh % 12 || 12}:${String(w.getUTCMinutes()).padStart(2, "0")} ${hh < 12 ? "am" : "pm"}`; }, localOffset: () => OFF, agoText: (at, n) => `${Math.floor((n - at) / MIN)} min ago` },
 });
 
 // Pure: snapshot state and diffs.
@@ -98,6 +101,8 @@ eq("strip: nothing after Mark seen", h.sinceView({ seen: now, now, off: OFF }).g
   eq("when: older → weekday", h.whenText(y - 2 * 86_400_000, N, OFF, clk), "Tue 10:15 pm");
   eq("when: same day as the event before → time only", h.whenText(y + 60 * MIN, N, OFF, clk, y), "11:15 pm");
   eq("when: a timeline crossing into today says today", h.whenText(N - 5 * MIN, N, OFF, clk, y), "today 10:15 am");
+  eq("when: a week back says the date", h.whenText(y - 8 * 86_400_000, N, OFF, clk), "4 Nov 10:15 pm");
+  eq("when: the strip clock is the bare time (no day twice)", h.sinceView({ seen: null, now: N, off: OFF }).header.includes("yesterday yesterday"), false);
   eq("when: just after midnight, the evening before is yesterday", h.whenText(Date.UTC(2026, 10, 12, 15, 50), Date.UTC(2026, 10, 12, 16, 10), OFF, clk), "yesterday 11:50 pm");
 }
 // nowText: what a tab does now, in words.

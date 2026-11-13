@@ -163,12 +163,27 @@ export function coolUntil(kind, raw, now, localOffsetMin) {
   if (kind === "auth") return now + 3600_000;
   return null;
 }
-// "1:05 am", or "Sat 1:05 am" when it's not within the next 20 hours. In this Mac's time (`localOffsetMin`).
-export function clockText(at, now, localOffsetMin) {
+// "1:05 am" in this Mac's time (`localOffsetMin`), no day.
+export function timeOnly(at, localOffsetMin) {
   const w = new Date(at + localOffsetMin * 60_000);
   const h = w.getUTCHours(), mm = String(w.getUTCMinutes()).padStart(2, "0");
-  const t = `${h % 12 || 12}:${mm} ${h < 12 ? "am" : "pm"}`;
-  return at - now > 20 * 3600_000 ? `${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][w.getUTCDay()]} ${t}` : t;
+  return `${h % 12 || 12}:${mm} ${h < 12 ? "am" : "pm"}`;
+}
+// The day of `at` as seen from `now`, by local calendar day, past or future (s19: past times used to lose their
+// day): null on the same day, "yesterday", "tomorrow", a weekday within 6 days either way, else "3 Nov".
+export function dayWord(at, now, localOffsetMin) {
+  const day = (x) => Math.floor((x + localOffsetMin * 60_000) / 86_400_000);
+  const d = day(at) - day(now), w = new Date(at + localOffsetMin * 60_000);
+  if (d === 0) return null;
+  if (d === -1) return "yesterday";
+  if (d === 1) return "tomorrow";
+  if (Math.abs(d) <= 6) return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][w.getUTCDay()];
+  return `${w.getUTCDate()} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][w.getUTCMonth()]}`;
+}
+// "1:05 am" today, else with its day: "tomorrow 1:05 am", "yesterday 9:10 pm", "Sat 1:05 am", "3 Nov 1:05 am".
+export function clockText(at, now, localOffsetMin) {
+  const d = dayWord(at, now, localOffsetMin), t = timeOnly(at, localOffsetMin);
+  return d ? `${d} ${t}` : t;
 }
 // The next local midnight after `now`: "Pause automatic About lines until tomorrow" (s13 F6).
 export function nextMidnight(now, localOffsetMin) {
