@@ -7,7 +7,8 @@
 // KEY_HIST = { from, at, last: { [address]: snap }, events: [{ at, addr, label, account, kind, text }] }, versioned
 // in its key. A snap = { label, account, state: working | finished | needs | ci | review, ask, about, pr, handoff, needsAt,
 // needsKnown }. Events stay HISTORY_DAYS (closed tabs' too, with the name they had), at most HISTORY_KEEP.
-import { agents, terminals, shared, setShared } from "herdr";
+import { terminals, shared, setShared } from "herdr";
+import { agents } from "./parked.js";
 import { agentName, needReason, overlays } from "./state.js";
 import { askOf, askLine, bgOf, handoffOf, prOf } from "./asks.js";
 import { aboutOf, accountFor, accountName, timeOnly, dayWord, localOffset } from "./ai.js";

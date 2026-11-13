@@ -122,6 +122,10 @@ Enter sends); the vertical tab list on the right shows each tab's program, statu
   them before the next official release.
 - If an official Flockbook update puts the official helper back, a notice says which fixes are gone and how to
   rebuild.
+- **Parked tabs**: when Claude Code moves a tab's conversation to its background service, the tab stops reporting
+  to Herdr and plain Flockbook shows "No agent to show". This build follows the tab to its background
+  conversation: its chat, cards, Overview and Needs you entries, sidebar marks and phone page work again, with
+  working / done / waiting taken from the background session (needs this build's helper).
 
 ### Install (a friend's Mac)
 

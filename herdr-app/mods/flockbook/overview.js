@@ -2,7 +2,8 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { withHover } from "./hover.js";
-import { theme, spaces, agents, shared, setShared, home, notify } from "herdr";
+import { theme, shared, setShared, home, notify } from "herdr";
+import { spaces, agents } from "./parked.js";
 import { tabLabel, plainLabel, subStatus, SUB_GROUPS, tabAgents, agentName, openTab, showNeeds, needing, icon, FADE, watchEdge, noteWindowHeight } from "./state.js";
 import { openMenu, tabItems, suggestBadge } from "./menu.js";
 import { movedBadge, badgeTip } from "./automove.js";

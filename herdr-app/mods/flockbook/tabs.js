@@ -7,7 +7,8 @@
 // the tab menu, and press-and-drag reorders. While the list shows, the top bar hides its own strip.
 import { div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
-import { theme, spaces, run, openOverlay, props } from "herdr";
+import { theme, run, openOverlay, props } from "herdr";
+import { spaces } from "./parked.js";
 import { openMenu, tabItems, suggestBadge } from "./menu.js";
 import { watchGrace, spaceTabs, tabAgents, tabLabel, sessionTitle, subStatus, tabStatus, needReason, keepOrRename, showTab, closeTab, icon, toggleTablist, answerInTerminal } from "./state.js";
 import { elicitOf } from "./asks.js";

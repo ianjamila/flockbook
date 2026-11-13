@@ -2,7 +2,8 @@
 // The bar drags the window; Esc goes to the terminal, so Close is the way out.
 import { div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { theme, props, closeOverlay, setShared, agents } from "herdr";
+import { theme, props, closeOverlay, setShared } from "herdr";
+import { agents } from "./parked.js";
 import { icon, KEY_TERM, agentName, sessionTitle, resizeTerminal, termSizeFor } from "./state.js";
 import { setting } from "./config.js";
 

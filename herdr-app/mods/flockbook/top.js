@@ -10,6 +10,7 @@ import { spaceAgents, spaceTabs, activeTab, currentAgent, currentTerminal, tabLa
 import { loadConfig, pollUpdate, updateDot, stepTextSize } from "./config.js";
 import { checkHelperPatch } from "./patchcheck.js";
 import { asksTick, TICK_MS as ASKS_MS } from "./asks.js";
+import { parkedTick, TICK_MS as PARKED_MS } from "./parked.js";
 import { aboutTick, ABOUT_TICK_MS, requestRewrite, KEY_REDO, KEY_BUSY, lockFree } from "./ai.js";
 import { historyTick, HISTORY_TICK_MS } from "./history.js";
 import { resumeTick, RESUME_TICK_MS } from "./resume.js";
@@ -114,6 +115,10 @@ export function startTop(cx, owner) {
   // Asks at the end of a reply (extra review round, merge hand-off) for the Needs you page (asks.js; one copy per tick).
   cx?.timer?.every(ASKS_MS, (cx) => cx.spawn(async (cx) => { await asksTick(); cx.notify(); }));
   cx?.spawn?.(async (cx) => { await asksTick(); cx.notify(); });
+  // Claude tabs whose conversation went on in Claude Code's background service (parked.js; owner 11-13): asks the
+  // helper only while a Claude terminal reports no status; one copy per tick.
+  cx?.timer?.every(PARKED_MS, (cx) => cx.spawn(async (cx) => { await parkedTick(); cx.notify(); }));
+  cx?.spawn?.(async (cx) => { await parkedTick(); cx.notify(); });
   // The Overview's About lines (ai.js; Haiku, once per tab and title; one copy per tick).
   cx?.timer?.every(ABOUT_TICK_MS, (cx) => cx.spawn(async () => { await aboutTick(); }));
   cx?.timer?.after?.(8000, (cx) => cx.spawn(async () => { await aboutTick(); }));

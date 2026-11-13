@@ -10,7 +10,8 @@
 // And whether a 🔀 left in a tab's title after the merge is really merged (owner 11-11, 18:15: a merged PR still
 // showed as "Merging"): the PR's number comes from the merge hand-off, or from a "#N is merged" line on screen, and
 // GitHub says (gh pr view, at most every 2 minutes per tab, only while a 🔀 without a hand-off shows).
-import { agents, hc, shared, setShared, exec, panes, home, appHome, readTextFile, writeTextFile } from "herdr";
+import { hc, shared, setShared, exec, panes, home, appHome, readTextFile, writeTextFile } from "herdr";
+import { agents } from "./parked.js";
 import { setting } from "./config.js";
 
 export const KEY_ASKS = "flockbook.asks";       // { [address]: { kind: "round" | "merge" | "migration" | "reply" | "question", pr?, round?, words?, text? } }

@@ -2,7 +2,8 @@
 // Flockbook (its own settings) and Settings.
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { theme, spaces, run, openOverlay, closeOverlay, props } from "herdr";
+import { theme, run, openOverlay, closeOverlay, props } from "herdr";
+import { spaces } from "./parked.js";
 import { openMenu, spaceItems } from "./menu.js";
 import { watchGrace, needing, showNeeds, showOverview, showSettings, shownScreen, icon, showSpace, toggleSidebar, sidebarShown, peekClosed, PEEK_W, PEEK_GAP, SPRING, tabLabel, subStatus, tabAgents, tabStatus, answerInTerminal } from "./state.js";
 import { elicitOf } from "./asks.js";

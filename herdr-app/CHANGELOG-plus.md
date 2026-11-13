@@ -10,6 +10,8 @@ Base: upstream `main` at `0cadf31` (after v0.13.0). What each change is for, in 
 | Helper: send over Claude Code's suggested command (+ red test) | Replaced by upstream's own fix when upstream fe57f10 was merged in (11-13): the helper reads the box's first paint and sends over a dim suggestion (`queue.rs` `claude_suggestion_in_paint`). A "/word" really typed still gets the chat's Send anyway. The helper is now upstream's, unchanged. |
 | Question answers: a comma in a single-choice label is not ambiguous (+ red test) | `herdr-core/src/question/claude_exact.rs`: only a multi-select answer splits on commas. Upstream merged it (PR #12). |
 
+| Parked Claude tabs (11-13) | Claude Code can move a terminal's conversation to its background service ("parked": the client's pid file gets `parkedJobId`; the session runs on as a `bg` process whose pid file has that `jobId`). `herdr-core/src/resolver.rs` `claude_parked` follows it (in the terminal's process tree, else anywhere), and the session lookup now names the job's session (a parked client's own old one, or a `bg` job a client merely started, no longer makes it ambiguous). `flockbook-modfeed/src/parked.rs` gives such an agent the job's status (blocked while a prompt or question picker is on screen, else working/idle from the pid file) in every command, the phone page and queue, and the new `parked` command lists them (docs/protocol.md). |
+
 Upstream PR #12 (long questions, the "edit in <editor>" key line, typed capitals on the hc backend) is
 already in upstream `main`.
 
@@ -26,6 +28,7 @@ New files:
 | `history.js` | "Since you last looked": per-tab snapshots and events (finished, needs you, waiting on CI, waiting on a review, hand-off, About, PR merged/closed), Copy and Mark seen, "waiting 2 h". 11-13: grouped by what each tab does now (`SINCE_GROUPS`), a card per tab (`nowText`, About line, change chips), times name their day (`whenText`); `overview.js` draws it, click opens the tab, every group folded at first + Expand all / Collapse all, Copy = the grouped text with a notice. |
 | `hover.js` | The hover box on cards, tab pills and tab-list rows. |
 | `patchcheck.js` | Warns once when an official update replaced the patched helper (only after a patched one was seen here). |
+| `parked.js` | Parked Claude tabs (their conversation went on in Claude Code's background service, so Herdr lists no agent there): a 3 s tick asks the helper's `parked` command while a Claude terminal reports no status, and `agents()` / `spaces()` (which every module now imports from here, not from "herdr") add them back with their job's status, "done" until you look, as Herdr does. |
 | `resume.js` | Remembers each Claude tab's session and offers them back after a restart (Resume, Resume all, Dismiss, "Opening…"). |
 | `selection.js` | Text selection in the kit's text boxes in the theme's selection colour. |
 | `statusline.js` | Each session's own status line in the chat header (with `extras/flockbook-statusline`). |
@@ -46,6 +49,7 @@ Changed files:
 | `overview.js`, `blocks.js` | Copy prompt on a "Hand-off given" tab's Overview card and its "Since you last looked" card: reads the tab's newest reply through the helper (`sidecar.feed`) and copies its re-entry prompt with the chat's own finder (`replyPrompt`, shared with Copy all), without opening the tab. |
 | `chat.js`, `composer.js`, `sidecar.js`, `cards.js` | Send anyway over a "/" suggestion, sends after `/clear`, ask markers above the reply box, untypeable answers, drafts, the chat's last lines at any zoom, the MCP input card; upstream's `--cache` send kept. |
 | `config.js`, `settings.js` | New settings: About lines (on/off, daily cap, pause until tomorrow), terminal size, dancing tab-list icons (`dance`), and the Workflow switches `pipeline_asks`, `handoff_marks`, `worth_considering`, `auto_move` (all off by default), plus `accounts`, `projects`, `claude_path`, `helper_rebuild` (config.json). The update notice points to this build's own update command. |
+| `asks.js` | 11-13: a running sub-agent row drawn "◯" (newer Claude Code) counts as background work, as "○" did, so a finished turn with a build agent still running stays Working instead of Done. |
 | `estimate.js` | Row heights at a zoom below 1 count prose at its unzoomed line height, so a long reply's last lines (often the ask) are not cut off. |
 
 ## Layout, themes, install

@@ -4,7 +4,8 @@
 // walks the picker's tabs (`card --all`).
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, Textarea, TextareaState } from "gpui-base";
-import { shared, setShared, agents, hc } from "herdr";
+import { shared, setShared, hc } from "herdr";
+import { agents } from "./parked.js";
 import { icon, openTerminal, KEY_TERM } from "./state.js";
 import * as sidecar from "./sidecar.js";
 import { elicitation, noteElicit } from "./asks.js";

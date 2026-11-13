@@ -60,7 +60,22 @@ pub fn run(argv: &[String]) -> String {
     r.out.emit_value(json!({"type": "header", "protocol": PROTOCOL_VERSION, "sidecar": SIDECAR_VERSION, "cmd": cmd}));
     match cmd.as_str() {
         "version" => {
-            r.out.emit_value(json!({"type": "version", "commands": ["version", "feed", "status", "card", "approve", "answer", "send", "paste-image", "helper", "update-check", "queue", "phone", "commands"], "release": update::release()}));
+            r.out.emit_value(json!({"type": "version", "commands": ["version", "feed", "status", "card", "approve", "answer", "send", "paste-image", "helper", "update-check", "queue", "phone", "commands", "parked"], "release": update::release()}));
+            r.finish(true)
+        }
+        "parked" => {
+            // The Claude tabs whose conversation went on in Claude Code's background service, with the job's status.
+            let session = HcSession::resolve_env();
+            if !session.is_available() {
+                return r.fail("no-core", "herdr-core is not running");
+            }
+            let client = HcClient::new(session, 8, 22);
+            let mut ws = match client.snapshot() {
+                Ok(ws) => ws,
+                Err(e) => return r.fail("core", &format!("herdr-core: {e}")),
+            };
+            let list = crate::parked::promote(&mut ws, &client);
+            r.out.emit_value(crate::parked::line(&list));
             r.finish(true)
         }
         "paste-image" => {
@@ -261,7 +276,10 @@ fn find(terminal: &str, cache: Option<&Path>, recheck: bool) -> Result<(locate::
     }
     // exec gives the sidecar 30 s; a send that waits longer reports `unconfirmed`.
     let client = HcClient::new(session.clone(), 8, 22);
-    let ws = client.snapshot().map_err(|e| ("core", format!("herdr-core: {e}")))?;
+    let mut ws = client.snapshot().map_err(|e| ("core", format!("herdr-core: {e}")))?;
+    // A parked Claude (its conversation runs on in the background service) gets its job's status: the card, answer
+    // and send rules read it.
+    crate::parked::promote(&mut ws, &client);
     let now_s = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
     let mut resolver = SessionResolver::new(&session.socket_path);
     let found = if recheck { locate::recheck(terminal, &ws, &mut resolver, cache, now_s) } else { locate::find(terminal, &ws, &mut resolver, cache, now_s).map(|f| (f, None)) };

@@ -55,6 +55,7 @@ does not download; `install-isolated.sh` copies the sidecar in.
 | `helper remove` | `--machine <m> [--cache <file>]` | `removed` |
 | `update-check` | `--home <herdr-app home>` `[--dismiss <x.y.z>]` (Rust sidecar only) | `update` |
 | `phone status` / `on` / `off` | `--home <herdr-app home>` (Rust sidecar only) | `phone` |
+| `parked` | — (Rust sidecar only) | `parked` |
 
 `card` and `commands` only read. `approve` and `answer` send keys to the agent; the mod runs them only when the
 owner presses a button, never on a timer. `send` types a message and presses Enter.
@@ -160,7 +161,7 @@ Targets: `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `universal-a
 ### `version`
 
 ```json
-{"commands":["version","feed","status","card","approve","answer","send","paste-image","helper","update-check","queue","phone","commands"],"release":"0.9.0","type":"version"}
+{"commands":["version","feed","status","card","approve","answer","send","paste-image","helper","update-check","queue","phone","commands","parked"],"release":"0.9.0","type":"version"}
 ```
 
 `commands`: the commands this sidecar has. The mod hides actions whose command is missing.
@@ -369,6 +370,20 @@ while a Claude Code, Codex or Grok Build agent works. No queue: `agent` is `""` 
 - `items`: oldest first; `null` is a queued message whose text neither the log nor the screen shows.
 - `pullable`: the agent's input box is empty, so the queue can be pulled back now.
 - `pullsAll`: Claude Code (Up takes back every queued message as one text).
+
+### `parked` (`parked`)
+
+The Claude Code tabs whose conversation went on in Claude Code's background service ("parked"): the client in the
+terminal stops reporting and the background session has no terminal to report to, so herdr gives the terminal no
+status and the app lists no agent there. Only reads (one process listing when a Claude terminal reports no status,
+Claude's pid files, the screen). `job`: the background job's id; `session`: its conversation id; `status`: `blocked`
+while a permission prompt or a question picker is on screen (`kind` `permission` / `question`), else `working` or
+`idle` from the job's pid file; `name`: the job's session name, or null. Every other command also treats such a
+terminal as that agent with this status (and `feed` reads the job's log).
+
+```json
+{"type":"parked","terminals":[{"terminal":"t7","job":"5c1e2d7a","session":"0d6b3f9e-…","status":"working","kind":null,"name":"Fix the login page"}]}
+```
 
 ### `commands` (`commands`)
 

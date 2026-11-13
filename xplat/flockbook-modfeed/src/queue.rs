@@ -849,7 +849,8 @@ pub struct Live<'a> {
 impl PullIo for Live<'_> {
     fn agent(&mut self) -> Option<Agent> {
         use herdr_core::PaneScreen;
-        let ws = self.client.snapshot().ok()?;
+        let mut ws = self.client.snapshot().ok()?;
+        crate::parked::promote(&mut ws, self.client);
         herdr_core::all_panes(&ws).into_iter().find(|p| p.id == self.pane_id)?.agent.clone()
     }
     fn screen(&mut self) -> Option<String> {

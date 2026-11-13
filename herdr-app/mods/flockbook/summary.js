@@ -3,7 +3,8 @@
 // 400 lines of history (ai.js). Each open asks once; "Again" asks again. Esc, a click beside it or Close closes it.
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { theme, props, closeOverlay, agents } from "herdr";
+import { theme, props, closeOverlay } from "herdr";
+import { agents } from "./parked.js";
 import { agentName, icon, SPIN_MS, sessionTopic, needReason } from "./state.js";
 import { askHaiku, screenOf, aiInput, sendAccount, SUMMARY_SYSTEM, aboutEntry, isStale, agoText, accountName } from "./ai.js";
 import { nowOf, askOf, askLine, elicitOf } from "./asks.js";

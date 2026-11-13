@@ -900,46 +900,108 @@ fn json_i32(v: &Value) -> Option<i32> {
     }
 }
 
-/// `read`: the contents of `<pid>.json` (here, or fetched from another machine).
+/// One `<pid>.json` that belongs to its live process (same pid and start). `kind` "bg": a session Claude Code's
+/// background service runs; `job`: its `jobId`. `parked`: the client's `parkedJobId` (its conversation went on as
+/// that job).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PidFile {
+    pid: i32,
+    session: String,
+    kind: Option<String>,
+    status: Option<String>,
+    name: Option<String>,
+    job: Option<String>,
+    parked: Option<String>,
+}
+
+fn pid_file(pid: i32, by_pid: &HashMap<i32, &Proc>, read: &impl Fn(i32) -> Option<Vec<u8>>) -> Option<PidFile> {
+    let proc_ = by_pid.get(&pid)?;
+    let data = read(pid)?;
+    if data.len() >= 1 << 20 {
+        return None;
+    }
+    let Ok(Value::Object(o)) = serde_json::from_slice::<Value>(&data) else { return None };
+    if o.get("pid").and_then(json_i32) != Some(pid) {
+        return None;
+    }
+    let sid = o.get("sessionId").and_then(|v| v.as_str())?;
+    if sid.is_empty() || sid.contains('/') {
+        return None;
+    }
+    let ps = proc_start(o.get("procStart").and_then(|v| v.as_str())?)?;
+    if (ps - proc_.start).num_milliseconds().abs() > 2000 {
+        return None;
+    }
+    let text = |k: &str| o.get(k).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(String::from);
+    Some(PidFile { pid, session: sid.to_string(), kind: text("kind"), status: text("status"), name: text("name"), job: text("jobId"), parked: text("parkedJobId") })
+}
+
+/// A Claude Code client whose conversation went on in Claude Code's background service ("parked", owner 11-13): the
+/// job's live session. `status`: what its pid file says (`busy`, `idle`, `shell`, ...); `name`: its session name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParkedClaude {
+    pub job: String,
+    pub session: String,
+    pub pid: i32,
+    pub status: String,
+    pub name: Option<String>,
+}
+
+/// The parked conversation behind these pids: the first pid file in search order with `parkedJobId`, and the `bg`
+/// pid file with that `jobId` — in their process trees (the service a client starts runs under it), else anywhere
+/// (a service started elsewhere). None when not parked or the job is gone.
+pub fn claude_parked(pids: &[i32], procs: &[Proc], dir: &str) -> Option<ParkedClaude> {
+    claude_parked_with(pids, procs, |pid| std::fs::read(format!("{dir}/{pid}.json")).ok())
+}
+
+pub fn claude_parked_with(pids: &[i32], procs: &[Proc], read: impl Fn(i32) -> Option<Vec<u8>>) -> Option<ParkedClaude> {
+    let by_pid = procs_by_pid(procs);
+    let files: Vec<PidFile> = claude_search_order(pids, procs).into_iter().filter_map(|pid| pid_file(pid, &by_pid, &read)).collect();
+    parked_in(&files, procs, &by_pid, &read)
+}
+
+fn procs_by_pid(procs: &[Proc]) -> HashMap<i32, &Proc> {
+    let mut by_pid: HashMap<i32, &Proc> = HashMap::new();
+    for p in procs {
+        by_pid.entry(p.pid).or_insert(p);
+    }
+    by_pid
+}
+
+/// A Claude Code process: its program (first or second word, after a wrapper like `node`) is `claude` or `claude.exe`.
+fn claude_like(p: &Proc) -> bool {
+    p.line.split(' ').filter(|w| !w.is_empty()).take(2).any(|w| matches!(last_path_component(w), "claude" | "claude.exe"))
+}
+
+fn parked_in(files: &[PidFile], procs: &[Proc], by_pid: &HashMap<i32, &Proc>, read: &impl Fn(i32) -> Option<Vec<u8>>) -> Option<ParkedClaude> {
+    let job = files.iter().find_map(|f| f.parked.clone())?;
+    let is_job = |f: &PidFile| f.job.as_deref() == Some(job.as_str()) && f.parked.is_none();
+    let live = files.iter().find(|f| is_job(f)).cloned().or_else(|| {
+        let tree: HashSet<i32> = files.iter().map(|f| f.pid).collect();
+        procs.iter().filter(|p| !tree.contains(&p.pid) && claude_like(p)).filter_map(|p| pid_file(p.pid, by_pid, read)).find(|f| is_job(f))
+    })?;
+    Some(ParkedClaude { job, session: live.session, pid: live.pid, status: live.status.unwrap_or_default(), name: live.name })
+}
+
+/// `read`: the contents of `<pid>.json` (here, or fetched from another machine). A parked client names the job's
+/// session (`claude_parked`); otherwise a `bg` job a client started is not its conversation, when it has its own.
 pub fn claude_session_source_with(
     pids: &[i32],
     procs: &[Proc],
     read: impl Fn(i32) -> Option<Vec<u8>>,
 ) -> Option<(String, i32)> {
-    let mut by_pid: HashMap<i32, &Proc> = HashMap::new();
-    for p in procs {
-        by_pid.entry(p.pid).or_insert(p);
+    let by_pid = procs_by_pid(procs);
+    let files: Vec<PidFile> = claude_search_order(pids, procs).into_iter().filter_map(|pid| pid_file(pid, &by_pid, &read)).collect();
+    if files.iter().any(|f| f.parked.is_some()) {
+        return parked_in(&files, procs, &by_pid, &read).map(|p| (p.session, p.pid));
     }
-    let mut found: HashSet<String> = HashSet::new();
-    let mut source: Option<i32> = None;
-    for pid in claude_search_order(pids, procs) {
-        let Some(proc_) = by_pid.get(&pid) else { continue };
-        let Some(data) = read(pid) else { continue };
-        if data.len() >= 1 << 20 {
-            continue;
-        }
-        let Ok(Value::Object(o)) = serde_json::from_slice::<Value>(&data) else { continue };
-        if o.get("pid").and_then(json_i32) != Some(pid) {
-            continue;
-        }
-        let Some(sid) = o.get("sessionId").and_then(|v| v.as_str()) else { continue };
-        if sid.is_empty() || sid.contains('/') {
-            continue;
-        }
-        let Some(ps) = o.get("procStart").and_then(|v| v.as_str()) else { continue };
-        let Some(ps) = proc_start(ps) else { continue };
-        if (ps - proc_.start).num_milliseconds().abs() > 2000 {
-            continue;
-        }
-        found.insert(sid.to_string());
-        if source.is_none() {
-            source = Some(pid);
-        }
-    }
+    let own = files.iter().any(|f| f.kind.as_deref() != Some("bg"));
+    let files: Vec<&PidFile> = files.iter().filter(|f| !own || f.kind.as_deref() != Some("bg")).collect();
+    let found: HashSet<&str> = files.iter().map(|f| f.session.as_str()).collect();
     if found.len() != 1 {
         return None;
     }
-    Some((found.into_iter().next()?, source?))
+    Some((files[0].session.clone(), files[0].pid))
 }
 
 /// `pid` and its descendants, breadth first.

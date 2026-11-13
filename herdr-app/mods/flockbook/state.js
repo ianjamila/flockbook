@@ -1,6 +1,7 @@
 // What every view agrees on: the agent shown in the chat, and the screen in the stack.
 // Kept in shared() so the copies of this mod (one per layout block) see the same value.
-import { agents, focused, shared, setShared, run, spaces, openOverlay, closeOverlay, appHome, readTextFile, panes } from "herdr";
+import { focused, shared, setShared, run, openOverlay, closeOverlay, appHome, readTextFile, panes } from "herdr";
+import { agents, spaces } from "./parked.js";
 import { loadConfig, updateSeen, setting, setSetting, setSettings } from "./config.js";
 import { gripFrame, geom } from "./termresize.js";
 import { askOf, prOf, bgOf, bgWords, askMark, handoffOf } from "./asks.js";

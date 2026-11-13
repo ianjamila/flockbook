@@ -9,7 +9,8 @@
 // never in its first minute. Off unless the "Move sessions to their project" setting is on.
 // Also: the tab menu's "Move to <workspace>" (a "flockbook.move-to:<t>:<space>" command → requestMove → serveMoveRequest
 // in the top bar, which has a timer; the menu popup closes at once), and the "moved here" badge a tab gets for BADGE_MS after an automatic move (movedBadge).
-import { spaces, agents, terminals, panes, run, hc, exec, home, appHome, readTextFile, writeTextFile, shared, setShared, notify } from "herdr";
+import { terminals, panes, run, hc, exec, home, appHome, readTextFile, writeTextFile, shared, setShared, notify } from "herdr";
+import { spaces, agents } from "./parked.js";
 import * as sidecar from "./sidecar.js";
 import { setting, expandHome } from "./config.js";
 import { sessionTopic } from "./state.js";

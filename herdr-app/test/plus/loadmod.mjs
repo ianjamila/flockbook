@@ -6,12 +6,15 @@ import fs from "node:fs";
 import { MOD, LOADED as OUT } from "./paths.mjs";
 let n = 0;
 const stub = () => new Proxy({}, { get: (_, k) => (typeof k === "symbol" ? undefined : () => undefined) });
+// parked.js with no parked tab: Herdr's own lists, as the mod reads them through it (owner 11-13). A test that
+// loads the real parked.js passes it as "./parked.js".
+const herdrLists = (h = {}) => ({ agents: () => h.agents?.(), spaces: () => h.spaces?.(), parkedOf: () => null, parkedTick: async () => {} });
 export async function loadMod(file, fakes = {}) {
   let src = fs.readFileSync(MOD + file, "utf8");
   src = src
     .replace(/^import\s+\*\s+as\s+(\w+)\s+from\s+"([^"]+)";/gm, (_, name, m) => `const ${name} = globalThis.__fk(${JSON.stringify(m)});`)
     .replace(/^import\s+\{([^}]*)\}\s+from\s+"([^"]+)";/gm, (_, names, m) => `const {${names.replace(/\s+as\s+/g, ": ")}} = globalThis.__fk(${JSON.stringify(m)});`);
-  globalThis.__fk = (m) => fakes[m] ?? stub();
+  globalThis.__fk = (m) => fakes[m] ?? (m === "./parked.js" ? herdrLists(fakes.herdr) : stub());
   fs.mkdirSync(OUT, { recursive: true });
   const out = `${OUT}${file.replace(/\W/g, "_")}.${process.pid}.${++n}.mjs`;
   fs.writeFileSync(out, src);

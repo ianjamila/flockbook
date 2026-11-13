@@ -2,11 +2,11 @@
 // and its arguments, or one of the mod's own actions) because the popup is another copy of the mod.
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { theme, props, run, openOverlay, closeOverlay, agents, shared, setShared, notify } from "herdr";
+import { theme, props, run, openOverlay, closeOverlay, shared, setShared, notify } from "herdr";
+import { agents, spaces as allSpaces } from "./parked.js";
 import { openTerminal, showScreen, shownScreen, showAgent, openTab, showSettings, KEY_SCREEN, KEY_REMOVE, machineOf, sessionTopic, autoNamed } from "./state.js";
 import { setting } from "./config.js";
 import { moveTargets, suggestOf, suggestTip } from "./automove.js";
-import { spaces as allSpaces } from "herdr";
 import { SUMMARY_W, SUMMARY_H } from "./summary.js";
 import { aboutSupported } from "./ai.js";
 

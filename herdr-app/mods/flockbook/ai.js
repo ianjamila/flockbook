@@ -15,7 +15,8 @@
 //   apart from the last try (triedAt / error), so a failed refresh never makes an old line look new.
 // - "Rewrite About line" (hover link, tab menu) → KEY_REDO → done by the same one-copy tick, never alongside it.
 // - Tabs idle or done for IDLE_MS are left alone once they have a line.
-import { exec, hc, home, appHome, agents, terminals, spaces, shared, setShared } from "herdr";
+import { exec, hc, home, appHome, terminals, shared, setShared } from "herdr";
+import { agents, spaces } from "./parked.js";
 import { setting } from "./config.js";
 import { sessionTopic } from "./state.js";
 import { accountOf, accountName, claudeCommand } from "./accounts.js";

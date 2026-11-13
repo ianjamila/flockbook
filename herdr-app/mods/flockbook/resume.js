@@ -6,7 +6,8 @@
 // back: Resume (one), Resume all, Dismiss. A resume opens a tab in the same workspace and folder, as the same
 // account, running `claude --resume <id>`. A tab closed on purpose (alone, while the rest go on) or a /clear (same
 // process, new conversation) is just forgotten. Nothing runs without a click.
-import { agents, terminals, spaces, shared, setShared, readTextFile, appHome, home, run, notify } from "herdr";
+import { terminals, shared, setShared, readTextFile, appHome, home, run, notify } from "herdr";
+import { agents, spaces } from "./parked.js";
 import { accounts, claudeCommand, sessionOfLog } from "./accounts.js";
 
 export const KEY_RESUME = "flockbook.resume.v1";   // { at, tabs: { [sid]: rec } }
