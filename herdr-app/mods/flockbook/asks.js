@@ -35,6 +35,7 @@ const SAY = /\b(?:say|reply|type|answer)\s*(?:with\s+)?:?\s*(?:"([^"\n]{1,60})"|
 // A merge that happened: "#1821 is merged", "#1821 was merged", "merged #1821", "#1821 merged".
 const MERGED = /(?:#(\d{1,6})\b[^.\n]{0,30}?\b(?:is|was|has been|got)?\s*merged\b|\bmerged\s+(?:PR\s+)?#(\d{1,6})\b)/gi;
 const REPO = /\brepo\s+([\w.-]+\/[\w.-]+)/g;
+const RIGHT_NOTICE = /^\s{10,}[✔✓✗⚠]\s/;
 const AGENT_NOTICE = /^⏺\s+(?:Agent|Background (?:agent|command|task|shell)|Task|Shell)\b.*\b(?:finished|completed|failed|stopped|killed|was stopped)\b/i;
 // Lines Claude Code draws between a finished reply and the input box: its status/spinner line and the tip
 // under it. A user prompt (❯ / >) or new output (⏺, ⎿ of a tool) after the ask means the turn moved on.
@@ -59,6 +60,13 @@ export function pendingAsk(screen, { pipeline = true, worth = true } = {}) {
     if (/^\S/.test(lines[i]) && !/^⏺/.test(lines[i])) continue;
     // A background agent's or task's notice under the reply ('⏺ Agent "Opus check" finished · 1m 36s') is not a new turn.
     if (AGENT_NOTICE.test(lines[i])) continue;
+    // A right-aligned notice Claude Code draws above the box ("✔ Update installed · Restart to apply") is not reply text.
+    if (RIGHT_NOTICE.test(lines[i])) continue;
+    // Claude Code's "※ recap: …" under a finished reply wraps onto indented lines; the whole block is its summary, not
+    // the reply (owner 11-13: 'type "extra round"' in a recap hid the round line and its Extra round button).
+    let r = i;
+    while (r > 0 && lines[r - 1].trim() && /^\s/.test(lines[r])) r--;
+    if (/^※/.test(lines[r])) { i = r; continue; }
     const l = lines[i].replace(/^⏺\s?/, "  ");
     // The last lines of the reply: the ask's line may wrap ("· repo acme-co" / "/webshop").
     for (const tail of pipeline ? [l, `${lines[i - 1] ?? ""}${l.trim()}`, `${lines[i - 1] ?? ""} ${l.trim()}`] : []) {

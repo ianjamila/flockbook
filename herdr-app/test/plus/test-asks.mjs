@@ -144,6 +144,14 @@ eq("now: nothing on screen", nowDoing(box()), null);
 const HEAD = "  Head ca9448d05d74 · items none · repo acme/app";
 eq("recap hint after the merge marker", pendingAsk(`${HEAD}\n  🔀 Ready to merge #13 — say "merge" (disable recaps in /config)\n\n${box()}`), { kind: "merge", pr: 13 });
 eq("recap hint after the round line", pendingAsk(`  🔁 Extra review round needed #13: round 2 · head abc · repo acme/app (disable recaps in /config)\n\n${box()}`), { kind: "round", pr: 13, round: 2 });
+// Owner 11-13 (#326 tab): a "※ recap:" block that wraps, and a right-aligned "✔ Update installed" notice, under the
+// round line. The recap's 'type "extra round"' must not hide the round line (no Extra round button otherwise).
+const RECAP = `\n✻ Crunched for 8m 44s · done 9:57 AM · 2 shells still running\n\n※ recap: We're finishing the review of PR #326. Next,\n  type "extra round" to approve review round 8. (disable recaps in /config)\n${" ".repeat(80)}✔ Update installed · Restart to apply\n`;
+eq("recap block + update notice under the round line", pendingAsk(`  🔁 Extra review round needed #326: round 8 · head e9aae19c0017 · repo acme/pipeline\n${RECAP}${box()}`), { kind: "round", pr: 326, round: 8 });
+eq("recap block under a merge marker", pendingAsk(`${HEAD}\n  🔀 Ready to merge #13 — say "merge"\n${RECAP}${box()}`), { kind: "merge", pr: 13 });
+eq("recap block under a plain reply: nothing asked", pendingAsk(`⏺ Fixed it; tests pass.\n${RECAP}${box()}`), null);
+eq("a one-line recap is skipped too", pendingAsk(`  🔁 Extra review round needed #3: round 2 · head abc · repo acme/app\n\n※ recap: Waiting for you to approve round 2.\n\n${box()}`), { kind: "round", pr: 3, round: 2 });
+eq("an indented reply line far right is still reply text", pendingAsk(`⏺ Which one?\n${" ".repeat(12)}Should I use A or B?\n\n${box()}`)?.kind, "question");
 eq("other words after the marker are not the hint", pendingAsk(`${HEAD}\n  Ready to merge #13 — say "merge" (or not)\n\n${box()}`)?.kind, "reply");
 
 // The workflow switches (config pipeline_asks / worth_considering): off, the pipeline's lines are plain text and an
