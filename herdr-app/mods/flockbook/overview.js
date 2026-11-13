@@ -4,6 +4,7 @@ import { v_flex, h_flex } from "gpui-base";
 import { withHover } from "./hover.js";
 import { theme, shared, setShared, home, notify } from "herdr";
 import { spaces, agents } from "./parked.js";
+import { spaceTitle } from "./machines.js";
 import { tabLabel, plainLabel, subStatus, SUB_GROUPS, tabAgents, agentName, openTab, showNeeds, needing, icon, FADE, watchEdge, noteWindowHeight } from "./state.js";
 import { openMenu, tabItems, suggestBadge } from "./menu.js";
 import { movedBadge, badgeTip } from "./automove.js";
@@ -92,7 +93,7 @@ export function groups(items, by, sub = subStatus) {
   if (by === "space") {
     const out = new Map();
     for (const it of items) {
-      if (!out.has(it.space.id)) out.set(it.space.id, { title: it.space.name, items: [] });
+      if (!out.has(it.space.id)) out.set(it.space.id, { title: spaceTitle(it.space), items: [] });
       out.get(it.space.id).items.push(it);
     }
     return [...out.values()];
@@ -160,7 +161,7 @@ export class OverviewView {
   card(it, t, w) {
     const { space, tab } = it;
     const a = tabAgents(tab.id)[0];
-    const sub = [space.name, a ? agentName(a) : null].filter(Boolean).filter((x, i, l) => l.indexOf(x) === i && x !== tabLabel(tab)).join(" · ");
+    const sub = [spaceTitle(space), a ? agentName(a) : null].filter(Boolean).filter((x, i, l) => l.indexOf(x) === i && x !== tabLabel(tab)).join(" · ");
     const when = since(tab);
     const moved = movedBadge(a?.address);
     // Background work (the tab-title hook's symbols): a line of its own, the title without them.

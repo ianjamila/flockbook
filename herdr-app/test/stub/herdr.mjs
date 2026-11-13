@@ -2,9 +2,10 @@
 export const fake = { spaces: [], agents: [], panes: [], focused: null, shared: {}, home: "/home/test", appHome: "/home/test/.config/herdr-app", exec: null,
   layout: null, window: { platform: "macos", titlebar: "none", buttons: false, maximized: false, fullscreen: false, active: true }, settings: { zoom: 1 } };
 export const log = { run: [], exec: [], notify: [], shared: [], overlays: [], order: [], writes: [] };
-export function reset() { Object.assign(fake, { props: {}, spaces: [], agents: [], panes: [], focused: null, shared: {}, exec: null, layout: null, readText: null, writeText: null }); for (const k of Object.keys(log)) log[k] = []; }
+export function reset() { Object.assign(fake, { props: {}, machines: [], spaces: [], agents: [], panes: [], focused: null, shared: {}, exec: null, layout: null, readText: null, writeText: null }); for (const k of Object.keys(log)) log[k] = []; }
 export const theme = () => new Proxy({}, { get: (_t, k) => (typeof k === "string" ? `#${k}` : undefined) });
 export const spaces = () => fake.spaces;
+export const machines = () => fake.machines ?? [];
 export const agents = () => fake.agents;
 export const panes = () => fake.panes;
 export const terminals = () => [];

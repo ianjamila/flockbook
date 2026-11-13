@@ -20,8 +20,10 @@ const S = new Function("AGENTS", "askMark", "askOf", "prOf", "bgOf", "bgWords", 
   + "; function tabAgents(id) { return AGENTS[id] ? [{ ...AGENTS[id], address: id }] : []; }"
   + "; return { overlays, subStatus, plainLabel, tabLabel, withAsk, SUB_GROUPS };")(AGENTS, askMark, (addr) => ASKS[addr] ?? null, (addr) => PRS[addr] ?? null, (addr) => BG[addr] ?? null, bgWords, (addr) => Boolean(HO[addr]));
 const ovCode = cut(ov, "// Grouped by status", "export class OverviewView");
-const O = new Function("subStatus", "SUB_GROUPS", "tabAgents", "askOf", ovCode.replaceAll("export ", "") + "; return { groups, subGroups, waitingOn, waitingLabel, statusOf };")(
-  S.subStatus, S.SUB_GROUPS, (id) => (AGENTS[id] ? [{ ...AGENTS[id], address: id }] : []), (addr) => ASKS[addr] ?? null);
+// machines.js spaceTitle ("api on pc-wsl"), as the Overview names a workspace by it (owner 11-14).
+const spaceTitle = new Function(/^export const spaceTitle = .*$/m.exec(fs.readFileSync(MOD + "machines.js", "utf8"))[0].replace("export ", "") + "; return spaceTitle;")();
+const O = new Function("subStatus", "SUB_GROUPS", "tabAgents", "askOf", "spaceTitle", ovCode.replaceAll("export ", "") + "; return { groups, subGroups, waitingOn, waitingLabel, statusOf };")(
+  S.subStatus, S.SUB_GROUPS, (id) => (AGENTS[id] ? [{ ...AGENTS[id], address: id }] : []), (addr) => ASKS[addr] ?? null, spaceTitle);
 
 let bad = 0;
 const eq = (name, got, want) => { const ok = JSON.stringify(got) === JSON.stringify(want); if (!ok) bad++; console.log(ok ? "PASS" : "FAIL", name, ok ? "" : `→ ${JSON.stringify(got)} want ${JSON.stringify(want)}`); };

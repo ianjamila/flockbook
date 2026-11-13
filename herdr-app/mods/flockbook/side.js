@@ -12,6 +12,7 @@ import { statusMark, lightsRoom, BAR_H } from "./top.js";
 import { updateLine } from "./settings.js";
 import { updateSeen } from "./config.js";
 import { dragger, dropPlace } from "./drag.js";
+import { machineGroups, machinesTick, machineHeader, machineEmpty, folded, MACHINES_MS } from "./machines.js";
 
 // The workspace being dragged up or down (drag.js): one at a time, so the docked and the floating
 // sidebar draw from the same one.
@@ -39,6 +40,10 @@ export class SideView {
     // Slide in: the first frame left of its spot, then a spring to it.
     this.slid = !this.floating;
     watchGrace(cx, this);   // the Needs you count once a blocked agent outlasts its grace
+    // The machines (owner 11-14): asked now and every 15 s (one copy asks for all), so a connected PC shows.
+    this.copiedLogin = null;
+    cx?.spawn?.(async (c2) => { await machinesTick(); c2?.notify?.(); });
+    cx?.timer?.every?.(MACHINES_MS, (c2) => c2?.spawn?.(async (c3) => { await machinesTick(); c3?.notify?.(); }));
     if (!this.slid) cx?.timer?.after?.(16, (cx2) => { this.slid = true; cx2?.notify?.(); });
   }
 
@@ -50,6 +55,19 @@ export class SideView {
   }
 
   close(_cx) { const id = props()?.overlay ?? this.peek; if (this.floating && id) peekClosed(id); }
+
+  // The workspace rows; once another machine is known, under a header per machine (machines.js), as Herdr's own
+  // sidebar draws them: a folded machine shows its header only, one with no workspace a row to make one there.
+  rows(list, space, t) {
+    const groups = machineGroups(list);
+    if (!groups) return list.map(space);
+    const shut = folded();
+    return groups.flatMap((g) => {
+      const head = machineHeader(g, t, this);
+      if (g.rebuilt || shut.has(g.name)) return head;
+      return [...head, ...(g.spaces.length ? g.spaces.map(space) : [machineEmpty(g, t)])];
+    });
+  }
 
   render(_cx) {
     const t = theme();
@@ -73,7 +91,10 @@ export class SideView {
     // "Workspaces" heading and the right edges (badge, marks, +) line up.
     const list = spaces();
     const dragging = drag.shown;
-    const lineOn = dragging && dropPlace(list, dragging) >= 0 ? dragging.target : null;
+    // A workspace moves among its own machine's only (owner 11-14: the PC's workspaces sit under their own header).
+    const machineOfSpace = (id) => list.find((x) => x.id === id)?.machine ?? null;
+    const sameMachine = (d) => (d ? list.filter((x) => (x.machine ?? null) === machineOfSpace(d.id)) : list);
+    const lineOn = dragging && dropPlace(sameMachine(dragging), dragging) >= 0 ? dragging.target : null;
     const space = (s) => {
       const { shown, more } = tabMarks(s.tabs ?? []);
       const line = lineOn?.id === s.id ? lineOn : null;
@@ -156,10 +177,11 @@ export class SideView {
         // On the whole list, not the rows: a release between rows or below the last ends the press too.
         .on_mouse_up("left", (_e, cx) => {
           const d = drag.release(cx);
-          const to = d ? dropPlace(list, d) : -1;
-          if (to >= 0) run("space.move", { id: d.id, index: list[to].index });
+          const mine = sameMachine(d);
+          const to = d ? dropPlace(mine, d) : -1;
+          if (to >= 0) run("space.move", { id: d.id, index: mine[to].index });
         })
-        .children(list.map(space)))
+        .children(this.rows(list, space, t)))
       .when(Boolean(update), (el) => el.child(div().pb(4).child(update)))
       .child(row("side-flockbook", "sliders", "Flockbook", () => showSettings(), null, false))
       .child(row("side-settings", "gear", "Settings", () => run("app.settings")));

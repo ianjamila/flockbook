@@ -30,6 +30,7 @@ New files:
 | `history.js` | "Since you last looked": per-tab snapshots and events (finished, needs you, waiting on CI, waiting on a review, hand-off, About, PR merged/closed), Copy and Mark seen, "waiting 2 h". 11-13: grouped by what each tab does now (`SINCE_GROUPS`), a card per tab (`nowText`, About line, change chips), times name their day (`whenText`); `overview.js` draws it, click opens the tab, every group folded at first + Expand all / Collapse all, Copy = the grouped text with a notice. |
 | `hover.js` | The hover box on cards, tab pills and tab-list rows. |
 | `patchcheck.js` | Warns once when an official update replaced the patched helper (only after a patched one was seen here). |
+| `machines.js` | Other machines in the sidebar, as Herdr's own sidebar groups them: a header per machine once one besides this computer is known (`hc machine ls` every 15 s, `machines()`, the spaces' `machine`), with fold, + for a new workspace there, a New workspace there / Loading… row, its state, the login command with Copy, Connect for a rebuilt machine; `spaceTitle` ("api on pc-wsl"). |
 | `parked.js` | Parked Claude tabs (their conversation went on in Claude Code's background service, so Herdr lists no agent there): a 3 s tick asks the helper's `parked` command while a Claude terminal reports no status, and `agents()` / `spaces()` (which every module now imports from here, not from "herdr") add them back with their job's status, "done" until you look, as Herdr does. |
 | `resume.js` | Remembers each Claude tab's session and offers them back after a restart (Resume, Resume all, Dismiss, "Opening…"). |
 | `selection.js` | Text selection in the kit's text boxes in the theme's selection colour. |
@@ -37,7 +38,7 @@ New files:
 | `summary.js` | The "Summarize this tab" dialog. |
 | `tabs.js` | The vertical tab list. A working agent's icon dances (two native `loop`s: hop + sway; `dances`, setting `dance`, on by default). |
 | `termresize.js` | Drag-resize grips for the terminal window, and its size presets. `fitTerm`/`termAt`: the window stays clear of the tab list (it only shrinks, to the work column right of its remembered spot; a window never dropped is centered in the work column). |
-| `icons/moved.svg`, `icons/tablist.svg` | Their icons. |
+| `icons/moved.svg`, `icons/tablist.svg`, `icons/monitor.svg`, `icons/server.svg`, `icons/chevron-down.svg`, `icons/chevron-right.svg` | Their icons. |
 
 Changed files:
 
