@@ -2408,3 +2408,68 @@ fn review_blocked_is_the_answer_refusal() {
     message.delivery = Delivery::Message;
     assert!(!review_blocked(&message, &[]), "a message answer: no review screen");
 }
+
+/// A named session (one sent to Claude Code's background service, or renamed) draws its name in a rule under the
+/// picker, below the key line (live 2026-11-13, a parked tab: "────── Flockbook plus PR 1 continuation ─"). The rule
+/// is drawing under the picker: the exact compares look above it. Any other line there still refuses.
+#[test]
+fn claude_session_name_rule_under_picker() {
+    let q = hooked(
+        "toolu_name",
+        json!([{"question":"Ready?","header":"Capture","multiSelect":false,"options":[
+            {"label":"Done, waited 15 s","description":"Answered in the terminal after the capture."},
+            {"label":"Stop debugging","description":"Leave the parked-answer bug for later."}]}]),
+    );
+    let screen = |under: &str| sw(&format!(r#"
+    ❯ the prompt
+    ─────────────────────────────────────────────────────────────────────────────
+     ☐ Capture
+
+    Ready?
+
+    ❯ 1. Done, waited 15 s
+         Answered in the terminal after the capture.
+      2. Stop debugging
+         Leave the parked-answer bug for later.
+      3. Type something.
+    ─────────────────────────────────────────────────────────────────────────────
+      4. Chat about this
+
+    Enter to select · ↑/↓ to navigate · Esc to cancel
+    {under}
+    "#));
+    let e = |s: &str| ex(&q, 0, s, None, FieldFocus::Auto, None);
+    assert!(e(&screen("")), "name rule: none, as before");
+    let named = screen("────────────────────────────────────────────── Flockbook plus PR 1 continuation ─");
+    assert!(e(&named), "name rule: the session name under the key line matches");
+    assert!(shows_plain(&q, 0, &named), "name rule: shows() uses the same exact compare");
+    assert!(e(&screen("───── a name with ─ dashes ─")), "name rule: a name may hold a dash");
+    assert!(!e(&screen("some text")), "name rule: other text under the key line refuses");
+    assert!(!e(&screen("───── ─")), "name rule: a rule with no name is not one");
+    assert!(!e(&screen("Flockbook plus PR 1 continuation ─")), "name rule: a name without its rule refuses");
+    assert!(!e(&format!("{named}\n    ───── another name ─")), "name rule: one rule only");
+    let review = |under: &str| sw(&format!(r#"
+    ─────────────────────────────────────────────────────────────────────────────
+    ←  ☒ Size  ☒ Tops  ✔ Submit  →
+
+    Review your answers
+
+     ● Which size?
+       → Large
+     ● Which toppings?
+       → Cheese
+
+    Ready to submit your answers?
+
+    ❯ 1. Submit answers
+      2. Cancel
+    {under}
+    "#));
+    let r = hooked("toolu_name_r", json!([
+        {"question":"Which size?","header":"Size","multiSelect":false,"options":[{"label":"Small","description":"s"},{"label":"Large","description":"l"}]},
+        {"question":"Which toppings?","header":"Tops","multiSelect":true,"options":[{"label":"Cheese","description":"y"},{"label":"Ham","description":"p"}]}]));
+    let a = [ans(&[1]), ans(&[0])];
+    assert!(claude_review_exact(&r, &a, &review("")), "name rule review: none, as before");
+    assert!(claude_review_exact(&r, &a, &review("──────────────────── Flockbook plus PR 1 continuation ─")), "name rule review: matches");
+    assert!(!claude_review_exact(&r, &a, &review("some text")), "name rule review: other text refuses");
+}
