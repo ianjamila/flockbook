@@ -100,7 +100,8 @@ export function historyTick() {
   const subs = new Set(terminals().filter((t) => t.parent).map((t) => t.address));
   const last = {}, fresh = [];
   for (const a of agents()) {
-    if (!a.address || a.address.includes("/") || subs.has(a.address)) continue;
+    // Tabs on other machines too ("pc-wsl/t3"; owner 11-14), now that asks.js reads their screens.
+    if (!a.address || subs.has(a.address)) continue;
     const ask = askOf(a.address), need = needReason(a);
     // The plain name: without the title's marks in front ("🛠✅ Webshop …").
     const snap = snapOf({ label: String(agentName(a) ?? "").replace(/^[^\p{L}\p{N}#~/]+/u, "").trim() || a.address, account: accountFor(a.address), status: a.status, need, askText: ask ? askLine(ask) : null,

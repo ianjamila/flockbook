@@ -445,14 +445,15 @@ export async function asksTick() {
 }
 async function tickOnce() {
   const out = {};
-  // Local agents only (a remote one's address has its machine in front: "box/t7"); a question card
-  // already covers a blocked agent.
+  // Every agent, on this Mac and on other machines (owner 11-14: a PC tab's address has its machine in front,
+  // "pc-wsl/t3", and `hc read` reaches it through Herdr); a question card already covers a blocked agent.
   const prsWas = shared(KEY_PRS) ?? {}, prs = {}, bg = {}, elicit = {}, now = {}, handoff = {};
   // The plus build's workflow switches (Settings → Workflow).
   const opts = { pipeline: setting("pipeline_asks") === "on", worth: setting("worth_considering") === "on" };
   const handoffs = setting("handoff_marks") === "on";
   for (const a of agents()) {
-    if (!a.address || a.address.includes("/")) continue;
+    if (!a.address) continue;
+    const remote = a.address.includes("/");
     // Blocked: only whether it is an MCP server's input request (the sidebar's 🔌).
     if (a.status === "blocked") {
       try { const r = await hc(["read", a.address]); const el = r.code === 0 ? elicitation(r.stdout) : null; if (el) elicit[a.address] = el; const n = r.code === 0 ? nowDoing(r.stdout) : null; if (n) now[a.address] = n; } catch { /* gone meanwhile */ }
@@ -474,7 +475,8 @@ async function tickOnce() {
       const hint = ask?.kind === "merge" ? { pr: ask.pr, repo: [...r.stdout.matchAll(REPO)].pop()?.[1] ?? null } : r.code === 0 ? mergedHint(r.stdout) : null;
       prs[a.address] = hint && (!old || old.pr !== hint.pr) ? { pr: hint.pr, repo: hint.repo ?? old?.repo ?? null } : old;
       if (!prs[a.address]) { delete prs[a.address]; continue; }
-      const dir = r.code === 0 ? footerFolder(r.stdout, home()) : null;
+      // The session's folder, for gh: only on this Mac (another machine's folders aren't here; its repo still works).
+      const dir = r.code === 0 && !remote ? footerFolder(r.stdout, home()) : null;
       if (dir && !prs[a.address].dir) prs[a.address] = { ...prs[a.address], dir };
     } catch { /* gone meanwhile */ }
   }
@@ -566,6 +568,7 @@ export function askWords(ask) {
 // own words go to the session exactly as the chat's reply box sends them, only after its screen is read again and
 // still ends with that same ask (kind, PR, round): a round already granted, a newer one, or a merge hand-off replaced
 // since, gets nothing. A send that went out marks the ask answered. { text, bad, sent }.
+const REMOTE_HELPER = new Set(["remote_helper_missing", "remote_helper_outdated", "remote_helper_unsupported"]);
 export async function grantAsk(address, ask) {
   const words = askWords(ask);
   if (!words) return { text: "Not sent: this ask has no button. Reply in its chat.", bad: true, sent: false };
@@ -573,6 +576,8 @@ export async function grantAsk(address, ask) {
   if (!(r?.code === 0 && stillAsks(r.stdout, ask))) return { text: `Not sent: its screen no longer ends with this ask (${askLine(ask)}). Open the chat to see where it is.`, bad: true, sent: false };
   const res = await sidecar.send(address, words);
   const done = res?.lines?.find((l) => l.type === "done");
+  // A tab on another machine with no Flockbook helper there yet: the chat's card installs it (owner 11-14).
+  if (REMOTE_HELPER.has(res?.error?.code)) return { text: `Not sent: ${address.split("/")[0]} has no working Flockbook helper yet. Open its chat to install it, then press again (or type “${words}” there).`, bad: true, sent: false };
   if (res?.error || !done || (done.result !== "sent" && done.result !== "unconfirmed")) return { text: (res?.error?.message ?? done?.message) || `Not sent. Type “${words}” in its chat.`, bad: true, sent: false };
   answered(address);
   return { text: done.result === "sent" ? `Sent “${words}”.` : `Sent “${words}”. The agent did not confirm it yet.`, bad: false, sent: true };

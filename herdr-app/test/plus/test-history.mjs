@@ -151,5 +151,11 @@ h.historyTick();
 now += MIN; info.t1.review = true;
 h.historyTick();
 eq("tick: review event recorded", h.history().events.at(-1).text, "waiting on a review");
+// Owner 11-14: a tab on another machine ("pc-wsl/t3") is followed like the Mac's (its asks are read now too).
+now += MIN; tabs.push({ address: "pc-wsl/t3", name: "PC shop", status: "working" }); info["pc-wsl/t3"] = {};
+h.historyTick();
+now += MIN; tabs.at(-1).status = "idle";
+h.historyTick();
+eq("tick: a PC tab is followed", ["pc-wsl/t3" in h.history().last, h.history().events.at(-1).label, h.history().events.at(-1).text], [true, "PC shop", "finished"]);
 eq("keep: old dropped", h.keepEvents([{ at: now - 4 * 86_400_000, text: "old" }], [{ at: now, text: "new" }], now).map((e) => e.text), ["new"]);
 process.exit(bad ? 1 : 0);
