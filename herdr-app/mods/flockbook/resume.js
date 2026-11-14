@@ -12,7 +12,7 @@ import { accounts, claudeCommand, claudeRun, sessionOfLog } from "./accounts.js"
 import { claudeMachine, localWindows, connected, machineOf, terminalOf, remoteEntries, knownHome, sameMachine } from "./where.js";
 import * as sidecar from "./sidecar.js";
 
-export const KEY_RESUME = "flockbook.resume.v1";   // { at, tabs: { [sid]: rec } }
+export const KEY_RESUME = "flockbook.resume.v1";   // { at, polledAt, gapMax, gaps?, away, awayFor?, tabs: { [sid]: rec } }
 export const KEY_OFFER = "flockbook.resume.offer";   // { at, tabs: [rec] } or null
 export const RESUME_TICK_MS = 30_000;
 
@@ -182,10 +182,11 @@ async function tick(mine) {
   // Sessions resumed by hand leave the offer.
   const o = offer();
   if (o && o.tabs.some((x) => sids.has(x.sid))) setShared(KEY_OFFER, { ...o, tabs: o.tabs.filter((x) => !sids.has(x.sid)) });
-  // Downtime = the longest wait between two polls since the last complete look (`gapMax`), so polls that went on
-  // while a tab was unidentified are not downtime (R2 P2), and a real gap before them still counts (R1 P2).
-  const prev = was.polledAt ?? was.at;
-  const gapMax = Math.max(was.gapMax ?? 0, prev ? now - prev : 0);
+  // Downtime = the longest wait between two polls since the machine's last complete look, so polls that went on
+  // while a tab was unidentified are not downtime (R2 P2), and a real gap before them still counts (R1 P2). Kept per
+  // machine (`gaps`, s29 Fable P3) for a machine held back below; `gapMax` is an older poll's (one for all).
+  const prev = was.polledAt ?? was.at, step = prev ? now - prev : 0;
+  const gapOf = (m) => Math.max(was.gapMax ?? 0, was.gaps?.[m] ?? 0, step);
   // Remembered sessions by where they run (s26): a machine no longer the "claude_machine" (or this computer, when it
   // can't resume here) → forgotten; one not looked at now (disconnected) → set aside as it is, neither live nor lost;
   // the rest are judged. How long a machine was away counts as downtime for its sessions when it is back (a WSL
@@ -201,11 +202,12 @@ async function tick(mine) {
   // Away time noted by a poll that had to wait for an unidentified tab still counts (s28 Codex R1 P2: merged before
   // the early return below too, so two such polls in a row keep it).
   for (const [m, ms] of Object.entries(was.awayFor ?? {})) if (m === cm) awayFor[m] = Math.max(awayFor[m] ?? 0, ms);
-  // A live Claude tab whose session the helper has not found yet: no decision now (it would look gone).
-  if (live.unknown) { setShared(KEY_RESUME, { at: was.at ?? now, polledAt: now, gapMax, away, ...(Object.keys(awayFor).length ? { awayFor } : {}), tabs: { ...aside, ...judged, ...tabs } }); return; }
-  const byMachine = {};
-  for (const [sid, x] of Object.entries(judged)) (byMachine[x.machine ?? ""] ??= {})[sid] = x;
-  const lost = Object.entries(byMachine).flatMap(([m, group]) => lostSessions(group, { sids, pids }, Math.max(gapMax, awayFor[m] ?? 0)).offer).filter((x) => !keep[x.sid]);
+  // A live Claude tab whose session the helper has not found yet: no decision now for ITS machine (that session would
+  // look gone); its records, downtime and away time wait for a later poll. Other machines are judged (s29 Fable P3).
+  const hold = new Set(live.unknownTabs.map((u) => u.machine)), byMachine = {}, held = {}, gaps = {}, heldAway = {};
+  for (const [sid, x] of Object.entries(judged)) { const m = x.machine ?? ""; if (hold.has(m)) held[sid] = x; else (byMachine[m] ??= {})[sid] = x; }
+  for (const m of hold) { gaps[m] = gapOf(m); if (awayFor[m]) heldAway[m] = awayFor[m]; }
+  const lost = Object.entries(byMachine).flatMap(([m, group]) => lostSessions(group, { sids, pids }, Math.max(gapOf(m), awayFor[m] ?? 0)).offer).filter((x) => !keep[x.sid]);
   if (lost.length) {
     const cur = offer()?.tabs ?? [];
     const add = lost.filter((x) => !cur.some((y) => y.sid === x.sid));
@@ -213,7 +215,8 @@ async function tick(mine) {
     if (add.length) notify?.(`${add.length} Claude ${add.length === 1 ? "session was" : "sessions were"} open before the restart. Resume ${add.length === 1 ? "it" : "them"} from the Overview.`);
   }
   // What is live now (and what waits for its machine) is what is remembered; the offered ones live on in the offer.
-  setShared(KEY_RESUME, { at: now, polledAt: now, gapMax: 0, away, tabs: { ...aside, ...tabs } });
+  const more = { ...(Object.keys(gaps).length ? { gaps } : {}), ...(Object.keys(heldAway).length ? { awayFor: heldAway } : {}) };
+  setShared(KEY_RESUME, { at: now, polledAt: now, gapMax: 0, away, ...more, tabs: { ...aside, ...held, ...tabs } });
 }
 
 // Opens a tab that resumes the offered session `sid`; then it leaves the offer. Its row is claimed before anything is
