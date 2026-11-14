@@ -50,10 +50,13 @@ impl HcSession {
         }
         let session = non_empty(env, "HC_SESSION").unwrap_or("default");
         if cfg!(windows) {
-            // TODO(windows): herdr-core's endpoint on Windows is not documented upstream (docs/security.md names Unix
-            // sockets only). Until it is, only an explicit HC_SOCKET / HERDR_DESK_HC_SOCKET is used; this path never
-            // exists, so the sidecar answers `no-core`.
-            return HcSession::new(&format!("<no herdr-core endpoint on Windows yet: set HC_SOCKET> ({session})"));
+            // Windows: herdr-core listens on a named pipe, \\.\pipe\herdr-core-… (its name is made at run time and
+            // not documented upstream), so the pipe is found among this machine's pipes. None found: a path that is
+            // never there, so the sidecar answers `no-core`.
+            let user = non_empty(env, "USERNAME");
+            return HcSession::new(&pick_core_pipe(&pipe_names(), session, user)
+                .map(|n| format!("{PIPE_DIR}{n}"))
+                .unwrap_or_else(|| format!("<no herdr-core pipe found: set HC_SOCKET> ({session})")));
         }
         if let Some(r) = non_empty(env, "XDG_RUNTIME_DIR") {
             return HcSession::new(&format!("{r}/herdr-core/{session}.sock"));
@@ -74,10 +77,49 @@ impl HcSession {
         }
         #[cfg(not(unix))]
         {
-            // TODO(windows): see `resolve`; no endpoint kind is known, so nothing counts as available.
-            false
+            // Windows: a pipe that is listed now (opening it to look would take one of the core's instances).
+            match self.socket_path.strip_prefix(PIPE_DIR) {
+                Some(name) => pipe_names().iter().any(|n| n.eq_ignore_ascii_case(name)),
+                None => std::path::Path::new(&self.socket_path).exists(),
+            }
         }
     }
+}
+
+/// Where every named pipe lives (Windows).
+pub const PIPE_DIR: &str = r"\\.\pipe\";
+
+/// The pipes on this machine by name (Windows; elsewhere none).
+pub fn pipe_names() -> Vec<String> {
+    if !cfg!(windows) {
+        return vec![];
+    }
+    std::fs::read_dir(PIPE_DIR)
+        .map(|d| d.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default()
+}
+
+/// herdr-core's pipe among `names` (Windows): one named `herdr-core-…` that is not a holder's; with several, the
+/// one that ends in `-<session>` (or is `herdr-core-<session>`), then the one that names this user (pipes are
+/// machine-wide, so other users' cores show too). None: no such pipe, or no way to tell several apart.
+pub fn pick_core_pipe(names: &[String], session: &str, user: Option<&str>) -> Option<String> {
+    let lower = |s: &str| s.to_ascii_lowercase();
+    let core: Vec<&String> = names
+        .iter()
+        .filter(|n| lower(n).starts_with("herdr-core-") && !lower(n).contains("holder"))
+        .collect();
+    let one = |v: Vec<&String>| (v.len() == 1).then(|| v[0].clone());
+    if core.len() <= 1 {
+        return one(core);
+    }
+    let tail = format!("-{}", lower(session));
+    let by_session: Vec<&String> = core.iter().copied().filter(|n| lower(n).ends_with(&tail)).collect();
+    let pool = if by_session.is_empty() { core } else { by_session };
+    if pool.len() == 1 {
+        return one(pool);
+    }
+    let user = lower(user?);
+    one(pool.into_iter().filter(|n| !user.is_empty() && lower(n).contains(&user)).collect())
 }
 
 /// `/run/user/<uid>` when it exists.
@@ -120,5 +162,37 @@ mod tests {
     #[test]
     fn missing_socket_is_not_available() {
         assert!(!HcSession::new("/nonexistent/herdr-core/x.sock").is_available());
+    }
+
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    // Windows: herdr-core's pipe among the machine's pipes (the rule runs everywhere; only Windows lists pipes).
+    #[test]
+    fn core_pipe_rules() {
+        let pick = |v: &[&str], session: &str, user: Option<&str>| pick_core_pipe(&names(v), session, user);
+        // One core pipe: it, whatever its middle; holders and other programs' pipes do not count.
+        assert_eq!(pick(&["ProtectedPrefix", "herdr-core-jamil-default", "herdr-core-jamil-default.holder"], "default", None).as_deref(), Some("herdr-core-jamil-default"));
+        assert_eq!(pick(&["herdr-core-3f2a9c"], "default", Some("jamil")).as_deref(), Some("herdr-core-3f2a9c"));
+        assert_eq!(pick(&["HERDR-CORE-X"], "default", None).as_deref(), Some("HERDR-CORE-X"));
+        // None: no core pipe at all, or only holders.
+        assert_eq!(pick(&[], "default", None), None);
+        assert_eq!(pick(&["mojo.1.2", "herdr-core-a-holder"], "default", None), None);
+        // Several: the session decides, then the user (pipes are machine-wide).
+        assert_eq!(pick(&["herdr-core-jamil-default", "herdr-core-jamil-work"], "work", None).as_deref(), Some("herdr-core-jamil-work"));
+        assert_eq!(pick(&["herdr-core-ana-default", "herdr-core-jamil-default"], "default", Some("Jamil")).as_deref(), Some("herdr-core-jamil-default"));
+        assert_eq!(pick(&["herdr-core-default", "herdr-core-work"], "default", None).as_deref(), Some("herdr-core-default"));
+        // Several and nothing tells them apart: None (HC_SOCKET picks one).
+        assert_eq!(pick(&["herdr-core-ana-default", "herdr-core-bo-default"], "default", None), None);
+        assert_eq!(pick(&["herdr-core-ana-default", "herdr-core-bo-default"], "default", Some("cy")), None);
+    }
+
+    #[test]
+    fn no_pipes_off_windows() {
+        if !cfg!(windows) {
+            assert!(pipe_names().is_empty());
+            assert!(!HcSession::new(r"\\.\pipe\herdr-core-x").is_available());
+        }
     }
 }

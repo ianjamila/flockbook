@@ -1,8 +1,10 @@
 // Calls the sidecar (docs/protocol.md): one command per exec, JSON Lines back.
-import { exec, appHome, readTextFile, writeTextFile } from "herdr";
+import { exec, appHome, readTextFile, writeTextFile, window } from "herdr";
 
 export const PROTOCOL = 1;
-export const sidecarPath = () => `${appHome()}/flockbook/bin/flockbook-modfeed`;
+// Windows runs flockbook-modfeed.exe (owner 11-14: the PC's Herdr app).
+const onWindows = () => { try { return window()?.platform === "windows"; } catch { return false; } };
+export const sidecarPath = () => `${appHome()}/flockbook/bin/flockbook-modfeed${onWindows() ? ".exe" : ""}`;
 export const cachePath = () => `${appHome()}/flockbook/cache.json`;
 
 // Splits an answer into its header, end, error and the lines between. Unknown types stay in `lines`.
