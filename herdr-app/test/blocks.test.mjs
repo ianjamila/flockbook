@@ -105,3 +105,38 @@ test("replyPrompt: the newest reply's prompt (its footer skipped), back to the o
   assert.equal(askBefore(rows, 3), null, "a footer first: no ask");
   assert.equal(replyPrompt([]), null);
 });
+
+// s27 (owner 11-14 "make re entry prompts as handoffs ... just add a button if the user wants the long re entry
+// message"): a short prompt names the full one's file, ~/claude-notes/handoffs/<topic>.md. handoffFile finds it.
+test("handoffFile: the hand-off file a re-entry prompt names, or null", async () => {
+  const { handoffFile, expandHome } = await import("../mods/flockbook/blocks.js");
+  assert.equal(handoffFile("Continue X.\nFull prompt: ~/claude-notes/handoffs/flockbook-s27.md — read it first."), "~/claude-notes/handoffs/flockbook-s27.md");
+  assert.equal(handoffFile("Read `~/claude-notes/handoffs/a_b.2.md` first"), "~/claude-notes/handoffs/a_b.2.md", "in backticks");
+  assert.equal(handoffFile("Full prompt: /home/you/claude-notes/handoffs/x.md."), "/home/you/claude-notes/handoffs/x.md", "absolute, a full stop after it");
+  assert.equal(handoffFile("see (~/notes/handoffs/y.md)"), "~/notes/handoffs/y.md", "any folder named handoffs");
+  assert.equal(handoffFile("**~/claude-notes/handoffs/z.md**"), "~/claude-notes/handoffs/z.md", "in bold");
+  assert.equal(handoffFile("~/claude-notes/handoffs/one.md then ~/claude-notes/handoffs/two.md"), "~/claude-notes/handoffs/one.md", "the first");
+  assert.equal(handoffFile("~/claude-notes/handoffs/../secrets.md"), null, "no way out of the folder");
+  assert.equal(handoffFile("~/claude-notes/handoffs/sub/x.md"), null, "a file right in handoffs/ only");
+  assert.equal(handoffFile("~/claude-notes/notes/x.md"), null, "not a hand-off folder");
+  assert.equal(handoffFile("~/claude-notes/handoffs/x.txt"), null, "markdown only");
+  assert.equal(handoffFile("relative claude-notes/handoffs/x.md"), null, "a relative path has no machine-independent meaning");
+  assert.equal(handoffFile(""), null);
+  assert.equal(handoffFile(null), null);
+  assert.equal(expandHome("~/claude-notes/handoffs/x.md", "/Users/you"), "/Users/you/claude-notes/handoffs/x.md");
+  assert.equal(expandHome("/abs/handoffs/x.md", "/Users/you"), "/abs/handoffs/x.md");
+  assert.equal(expandHome("~/x.md", null), null, "no home known");
+});
+
+test("replyHandoff: the newest reply's prompt and the file it (or its reply) names", async () => {
+  const { replyHandoff } = await import("../mods/flockbook/blocks.js");
+  const r = (id, k, text) => ({ id, k, text });
+  const short = "Done.\n\nRe-entry prompt:\n\n> Continue the work.\n> Full prompt: ~/claude-notes/handoffs/w.md — read it first.";
+  assert.deepEqual(replyHandoff([r("u", "user", "go"), r("a", "assistant", short), r("f", "footer", "1")]),
+    { prompt: "Continue the work.\nFull prompt: ~/claude-notes/handoffs/w.md — read it first.", file: "~/claude-notes/handoffs/w.md" });
+  const outside = "Full prompt written to ~/claude-notes/handoffs/v.md.\n\nRe-entry prompt:\n\n> Continue.";
+  assert.deepEqual(replyHandoff([r("u", "user", "go"), r("a", "assistant", outside)]), { prompt: "Continue.", file: "~/claude-notes/handoffs/v.md" }, "named in the reply around the prompt");
+  assert.deepEqual(replyHandoff([r("u", "user", "go"), r("a", "assistant", "Re-entry prompt:\n\n> Continue.")]), { prompt: "Continue.", file: null });
+  assert.equal(replyHandoff([r("u", "user", "go"), r("a", "assistant", "No prompt; ~/claude-notes/handoffs/v.md exists.")]), null, "no prompt, no hand-off");
+  assert.deepEqual(replyHandoff([r("u", "user", "go"), r("a", "assistant", short), r("f", "footer", "1"), r("u2", "user", "x")], 3).file, "~/claude-notes/handoffs/w.md", "an explicit end");
+});

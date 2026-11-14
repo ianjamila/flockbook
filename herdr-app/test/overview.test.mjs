@@ -174,3 +174,36 @@ test("Hand-off given: the Since you last looked card of a hand-off tab has Copy 
   assert.ok(byId(el, "ov-since-finished-0-copy"), "the hand-off tab's card");
   assert.equal(byId(el, "ov-since-working-0-copy"), null);
 });
+
+// s27: a hand-off card also gets "Copy full", the file its newest reply's prompt names (~/claude-notes/handoffs/…),
+// read without opening the tab. A prompt naming no file: a notice says so and nothing is copied.
+test("Hand-off given: Copy full copies the hand-off file the newest prompt names", async () => {
+  const jl = (...lines) => ({ code: 0, stdout: lines.map((l) => JSON.stringify(l)).join("\n") + "\n", stderr: "" });
+  const head = { type: "header", protocol: 1, sidecar: "0.1.0", command: "feed" }, end = { type: "end", ok: true };
+  const logLine = { type: "log", agent: "claude", path: "/logs/s.jsonl", start: 0, size: 10, cursor: "c1", model: "m" };
+  const row = (id, k, text) => ({ type: "row", id, k, text, ts: 1 });
+  let reply = "Done.\n\nRe-entry prompt:\n\n> Continue.\n> Full prompt: ~/claude-notes/handoffs/ov.md — read it first.";
+  const feed = () => [row("u1", "user", "go"), row("a1", "assistant", reply), row("f1", "footer", "10:04")];
+  fake.exec = (_c, args) => (args[0] === "feed" ? jl(head, logLine, { type: "splice", at: 0, count: 3 }, ...feed(), end) : { code: 127, stdout: "", stderr: "" });
+  fake.readText = (p) => (p === "/home/test/claude-notes/handoffs/ov.md" ? "FULL PROMPT\n" : null);
+  const render = () => { fake.shared["flockbook.handoff"] = { t2: true }; return v.render(fakeCx()); };
+  const v = new OverviewView(fakeCx());
+  const el = render();
+  assert.ok(byId(el, "ov-full-tb-t2"), "the hand-off card has Copy full");
+  assert.equal(byId(el, "ov-full-tb-t1"), null);
+  let copied = null, stopped = 0;
+  const ccx = Object.assign(fakeCx(), { write_to_clipboard: (s) => { copied = s; }, stop_propagation: () => { stopped++; } });
+  log.run = [];
+  byId(el, "ov-full-tb-t2")._h.on_click({}, ccx); await Promise.all(ccx.tasks);
+  assert.equal(copied, "FULL PROMPT");
+  assert.match(log.notify.at(-1).title, /Full re-entry prompt copied/);
+  assert.equal(stopped, 1); assert.deepEqual(log.run, [], "the tab is not opened");
+  assert.match(textOf(byId(render(), "ov-full-tb-t2")), /Copied/);
+  // No file named: nothing copied, a notice.
+  reply = "Re-entry prompt:\n\n> Continue.";
+  copied = null; v.copiedFull = null;
+  const ccx2 = Object.assign(fakeCx(), { write_to_clipboard: (s) => { copied = s; } });
+  byId(render(), "ov-full-tb-t2")._h.on_click({}, ccx2); await Promise.all(ccx2.tasks);
+  assert.equal(copied, null);
+  assert.match(log.notify.at(-1).title, /names no full-prompt file/);
+});

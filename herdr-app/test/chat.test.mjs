@@ -512,6 +512,109 @@ test("Copy all when the owner asked for a re-entry prompt and the reply is only 
   assert.deepEqual(log.overlays.at(-1).props.items.map((i) => i.label), ["Copy re-entry prompt", "Copy message"]);
 });
 
+// s27 (owner 11-14: short re-entry prompts, "just add a button if the user wants the long re entry message"): a
+// prompt that names its hand-off file (~/claude-notes/handoffs/<topic>.md) gets "Copy full prompt" at the right end of
+// its footer line, beside Copy all. A list row has no buttons of its own (RECIPE.md), so the chat tells the two apart
+// by where the press was: the right half of the line is the full prompt, the rest Copy all, as before.
+const shortReply = "Done.\n\nRe-entry prompt:\n\n> Continue the work.\n> Full prompt: ~/claude-notes/handoffs/w.md — read it first.";
+const pressAt = (root, x, w = 900) => byId(root, "chat-list")._h.on_mouse_down({ button: "left", position: { x, y: 10 }, local_position: { x, y: 10 }, bounds: { origin: { x: 0, y: 0 }, size: { width: w, height: 600 } } }, fakeCx());
+
+test("a prompt naming its hand-off file: Copy full prompt on the right of the footer copies the file", async () => {
+  const { MenuView } = await import("../mods/flockbook/menu.js");
+  fake.exec = () => jl(header, logLine("c1"), { type: "splice", at: 0, count: 3 }, user("u1", "go"), asst("a1", shortReply),
+    { type: "row", id: "f-a1", k: "footer", text: "10:04 · Worked 14m" }, end);
+  const FULL = "Continue the work.\n\n**Also worth considering (in scope):**\n1. One.\n";
+  fake.readText = (p) => (p === "/home/test/claude-notes/handoffs/w.md" ? FULL : null);
+  const cx = fakeCx(); const v = new ChatView(cx); await cx.settle(); v.width = 900;
+  const root = v.render(cx);
+  const footer = () => textOf(lastList._args.render({ start: 2, end: 3 })[0]);
+  assert.match(footer(), /Copy all/);
+  assert.match(footer(), /Copy full prompt/);
+  const sizes = lastList._args.sizes.slice();
+  let copied = null;
+  const ccx = { ...fakeCx(), write_to_clipboard: (s) => { copied = s; } };
+  // Right half: the file, read on this computer with ~ as its home.
+  pressAt(root, 700);
+  lastList._h.on_item_click("f-a1", ccx); await Promise.all(ccx.tasks);
+  assert.equal(copied, FULL.trimEnd());
+  assert.deepEqual(log.reads.at(-1), ["/home/test/claude-notes/handoffs/w.md", undefined]);
+  assert.match(log.notify.at(-1).title, /Full re-entry prompt copied/);
+  v.render(cx);
+  assert.match(footer(), /Copied/);
+  assert.match(footer(), /Copy all/, "only the full prompt's button says Copied");
+  assert.deepEqual(lastList._args.sizes, sizes, "the buttons change no row's height");
+  const t = ccx.timers.find((x) => x.once && x.ms === 2000);
+  t.f(ccx); v.render(cx);
+  assert.match(footer(), /Copy full prompt/);
+  // Left half: the short prompt, as before.
+  pressAt(root, 200); copied = null;
+  const ccx2 = { ...fakeCx(), write_to_clipboard: (s) => { copied = s; } };
+  lastList._h.on_item_click("f-a1", ccx2); await Promise.all(ccx2.tasks);
+  assert.equal(copied, "Continue the work.\nFull prompt: ~/claude-notes/handoffs/w.md — read it first.");
+  // No press seen (a keyboard click, or the press went elsewhere): Copy all, never a guess at the file.
+  v.pressed = null; copied = null;
+  const ccx3 = { ...fakeCx(), write_to_clipboard: (s) => { copied = s; } };
+  lastList._h.on_item_click("f-a1", ccx3); await Promise.all(ccx3.tasks);
+  assert.match(copied, /^Continue the work\.\nFull prompt/);
+  // Right-click on the reply, once the file was read: Copy full re-entry prompt before Copy re-entry prompt.
+  lastList._h.on_item_secondary_click("a1", { button: "right", position: { x: 0, y: 4 }, local_position: { x: 50, y: 4 } }, cx);
+  const items = log.overlays.at(-1).props.items;
+  assert.deepEqual(items.map((i) => i.label), ["Copy full re-entry prompt", "Copy re-entry prompt", "Copy message"]);
+  fake.props = { view: "menu", items, overlay: "o1" };
+  copied = null;
+  const m = new MenuView(fakeCx()).render(fakeCx());
+  byId(m, "menu-0")._h.on_click({}, { ...fakeCx(), write_to_clipboard: (s) => { copied = s; } });
+  assert.equal(copied, FULL.trimEnd());
+});
+
+test("Copy full prompt: a file that can't be read says so and copies nothing; the chat reads it ahead on its tick", async () => {
+  fake.exec = () => jl(header, logLine("c1"), { type: "splice", at: 0, count: 3 }, user("u1", "go"), asst("a1", shortReply),
+    { type: "row", id: "f-a1", k: "footer", text: "10:04" }, end);
+  fake.readText = () => null;
+  const cx = fakeCx(); const v = new ChatView(cx); await cx.settle(); v.width = 900;
+  const root = v.render(cx);
+  lastList._args.render({ start: 2, end: 3 });
+  let copied = null;
+  const ccx = { ...fakeCx(), write_to_clipboard: (s) => { copied = s; } };
+  pressAt(root, 800);
+  lastList._h.on_item_click("f-a1", ccx); await Promise.all(ccx.tasks);
+  assert.equal(copied, null);
+  assert.equal(log.notify.at(-1).level, "warning");
+  assert.match(log.notify.at(-1).title, /Couldn't read the full prompt/);
+  assert.match(log.notify.at(-1).title, /w\.md/);
+  // No menu item for a file that could not be read.
+  lastList._h.on_item_secondary_click("a1", { button: "right", position: { x: 0, y: 4 }, local_position: { x: 50, y: 4 } }, cx);
+  assert.deepEqual(log.overlays.at(-1).props.items.map((i) => i.label), ["Copy re-entry prompt", "Copy message"]);
+  // The tick reads a named file ahead (once), so the menu item and the copy need no wait.
+  const FULL = "The full prompt.";
+  fake.readText = () => FULL;
+  v.fullPrompts.clear(); log.reads = [];
+  const tcx = fakeCx();
+  v.tick(tcx); await Promise.all(tcx.tasks);
+  v.tick(tcx); await Promise.all(tcx.tasks);
+  assert.equal(log.reads.filter(([p]) => p.endsWith("/handoffs/w.md")).length, 1, "read once");
+  lastList._h.on_item_secondary_click("a1", { button: "right", position: { x: 0, y: 4 }, local_position: { x: 50, y: 4 } }, cx);
+  assert.equal(log.overlays.at(-1).props.items[0].label, "Copy full re-entry prompt");
+  assert.equal(log.overlays.at(-1).props.items[0].args.text, FULL);
+});
+
+test("Copy full prompt on another machine's tab reads the file there, with that machine's home", async () => {
+  fake.agents = [agent("wsl/t3", "idle")];
+  fake.machines = [{ name: null, layout: "ready" }, { name: "wsl", layout: "ready" }];
+  fake.shared["flockbook.homes"] = { wsl: { home: "/home/you", at: Date.now() } };
+  fake.exec = (_c, args) => (args[0] === "feed" ? jl(header, logLine("c1"), { type: "splice", at: 0, count: 3 }, user("u1", "go"), asst("a1", shortReply),
+    { type: "row", id: "f-a1", k: "footer", text: "10:04" }, end) : { code: 1, stdout: "", stderr: "" });
+  fake.readText = (p, o) => (p === "/home/you/claude-notes/handoffs/w.md" && o?.on === "wsl" ? "On WSL." : null);
+  const cx = fakeCx(); const v = new ChatView(cx); await cx.settle(); v.width = 900;
+  const root = v.render(cx);
+  let copied = null;
+  const ccx = { ...fakeCx(), write_to_clipboard: (s) => { copied = s; } };
+  pressAt(root, 700);
+  lastList._h.on_item_click("f-a1", ccx); await Promise.all(ccx.tasks);
+  assert.equal(copied, "On WSL.");
+});
+
+
 // Owner 11-13: a long reply's footer (and its Copy all) sat half under the status rows. The list kept its
 // scroll when the room under it grew (status rows, an ask strip, a card) or the pane narrowed, so a list that
 // was showing the newest row no longer did. Its size change now scrolls back to the newest row.
