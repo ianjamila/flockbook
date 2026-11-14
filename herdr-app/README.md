@@ -86,7 +86,8 @@ Enter sends); the vertical tab list on the right shows each tab's program, statu
   machine. A session that is open in a tab is not listed (and is skipped if it opened since, while the restart offer is opening
   it, or while a Claude tab on its machine isn't identified yet); the list is cached, so reopening is instant,
   and **Refresh** reads the logs again. On Windows it needs
-  `claude_machine`, and says so.
+  `claude_machine`, and says so. Known limit: Claude tabs running natively on Windows (not in WSL) are not resumed, from
+  this dialog or after a restart.
 - An account that ran out of usage shows when it comes back, and its tabs say they are likely paused.
 - Fix: the cards no longer spill off both sides after the window shrinks.
 
