@@ -431,6 +431,44 @@ const LISTING = {
   const r = await w.ses.resumeSessions([{ sid: "s2", account: "WORK", machine: "", cwd: "/Users/you/code/tools", title: "Tools" }]);
   eq("unidentified tab, folder unknown: every pick on that machine skipped", [r.opened, r.skipped.map((s) => s.why)], [0, ["may be open already"]]);
 }
+// s31 (owner 11-14: precise identity): an unidentified tab holds back only the sessions its command line may hold.
+{
+  const S1 = "51515151-0000-4000-8000-000000000051", S2 = "52525252-0000-4000-8000-000000000052";
+  const picks = [
+    { sid: S1, account: "HOME", machine: "", cwd: "/Users/you/code/webshop", title: "Cart fix" },
+    { sid: S2, account: "WORK", machine: "", cwd: "/Users/you/code/tools", title: "Tools" },
+  ];
+  const files = { [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: {} } };
+  const mk = async (argv, cwd = "/Users/you/code/webshop") => {
+    const w = await world({ listing: LISTING, agents: [AGENT("t5", "sp1", "")], files, spaces: [{ id: "sp1", name: "~", machine: null, tabs: [] }] });
+    w.herdr.termsNow = () => [{ address: "t5", foreground: { argv, cwd, pid: 55 } }];
+    return w;
+  };
+  let w = await mk(["claude"]);
+  let r = await w.ses.resumeSessions(picks);
+  eq("s31: a plain `claude` tab not identified yet holds nothing back", [r.opened, r.skipped.length], [2, 0]);
+  w = await mk(["claude", "--resume", S1]);
+  r = await w.ses.resumeSessions(picks);
+  eq("s31: a tab resuming S1 holds back only S1", [r.opened, r.skipped.map((s) => [s.row.sid, s.why])], [1, [[S1, "may be open already"]]]);
+  w = await mk(["claude", "--continue"], "/Users/you/code/tools");
+  r = await w.ses.resumeSessions(picks);
+  eq("s31: a --continue tab holds back only its folder's sessions", [r.opened, r.skipped.map((s) => s.row.sid)], [1, [S2]]);
+  w = await mk(["claude"]);
+  const L = await w.res.liveSids();
+  eq("s31: a tab that can only be new is not 'unidentified' (no banner)", L.unknown, false);
+}
+// s31 (from herdr-sessions, owner 11-14): after Resume selected, the workspace and tab shown before are shown again.
+{
+  const files = { [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: {} } };
+  const sp = [{ id: "sp1", name: "~", machine: null, active: true, tabs: [{ id: "tb1", active: true }] }, { id: "sp2", name: "webshop", machine: null, folder: "/Users/you/code/webshop", tabs: [{ id: "tb2" }] }];
+  const w = await world({ listing: LISTING, files, spaces: sp });
+  w.herdr.spaces = () => sp;
+  const onRun = (name) => { if (name === "tab.new") { sp[0].active = false; sp[0].tabs[0].active = false; sp[1].active = true; sp[1].tabs.push({ id: `new${sp[1].tabs.length}`, active: true }); } };
+  const runWas = w.herdr.run;
+  w.herdr.run = (n, a) => { const out = runWas(n, a); onRun(n); return out; };
+  const r = await w.ses.resumeSessions([{ sid: "s1", account: "HOME", machine: "", cwd: "/Users/you/code/webshop", title: "Cart fix" }], { wait: async () => {} });
+  eq("s31: back where you were after Resume selected", [r.opened, w.runs.map(([n, a]) => [n, a.id ?? null])], [1, [["tab.new", null], ["space.select", "sp1"], ["tab.select", "tb1"]]]);
+}
 {
   // An unidentified tab on this computer does not hold back wsl's picks.
   const agents = [AGENT("t5", "sp1", "")];

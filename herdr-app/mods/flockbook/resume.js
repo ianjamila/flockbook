@@ -48,6 +48,70 @@ export function ownName(a) {
 }
 // A title without the marks in front (✳, spinners, 🔀 …).
 export const plainTitle = (s) => String(s ?? "").replace(/^[^\p{L}\p{N}#~/]+/u, "").trim();
+// s31 (owner 11-14): the session a helper cache entry names: its log, else — a Claude tab before its first message, or
+// right after /clear — the id Claude Code's pid file names (`sid`) under its config folder (`config`, which account).
+export function sessionOfEntry(e, list = accounts(), homeDir = home()) {
+  if (!e) return null;
+  if (e.path) return sessionOf(e.path, list, homeDir);
+  if (e.sid && e.config) return sessionOf(`${String(e.config).replace(/\/+$/, "")}/projects/-/${e.sid}.jsonl`, list, homeDir);
+  return null;
+}
+// s31 (owner 11-14: "precise identity, no timer"): which sessions a Claude tab the helper has not identified can be,
+// read from its live command line (Herdr core's foreground argv) and folder. { none } a new conversation (plain
+// `claude`, a prompt, a --fork-session); { sid } `--resume <id>` / `--session-id <id>`; { cwd } `--continue` (the
+// newest session of that folder); { any } anything else: the picker (`--resume` with no id or with search words),
+// `--from-pr`, `attach`, combined short flags, a command line that isn't Claude's, or none at all.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SID = /^[A-Za-z0-9_][A-Za-z0-9_-]*$/;
+const baseName = (p) => String(p ?? "").split(/[\\/]/).pop().toLowerCase();
+function claudeArgs(argv) {
+  if (!Array.isArray(argv) || !argv.length) return null;
+  if (/^claude(\.exe)?$/.test(baseName(argv[0]))) return argv.slice(1);
+  if (/^(node|bun)(\.exe)?$/.test(baseName(argv[0])) && /claude-code[\\/]cli\.m?js$|[\\/]claude(\.exe)?$/i.test(String(argv[1] ?? ""))) return argv.slice(2);
+  return null;
+}
+export function couldBe(argv, cwd) {
+  const a = claudeArgs(argv);
+  if (!a) return { any: true };
+  let resume = false, value = null, cont = false, fork = false, given = null;
+  for (let i = 0; i < a.length; i++) {
+    const x = String(a[i]);
+    if (x === "--") break;
+    if (x === "-r" || x === "--resume") { resume = true; const v = a[i + 1]; if (v != null && !String(v).startsWith("-")) { value = String(v); i++; } else value = null; continue; }
+    if (x.startsWith("--resume=")) { resume = true; value = x.slice(9) || null; continue; }
+    if (x === "-c" || x === "--continue") { cont = true; continue; }
+    if (x === "--fork-session") { fork = true; continue; }
+    if (x === "--session-id") { given = a[i + 1] == null ? "" : String(a[i + 1]); i++; continue; }
+    if (x.startsWith("--session-id=")) { given = x.slice(13); continue; }
+    if (x === "--from-pr" || x.startsWith("--from-pr=") || x === "--bg" || /^-[A-Za-z]{2,}$/.test(x) || x === "attach" || x === "agents" || x === "respawn") return { any: true };
+  }
+  if ((resume || cont) && fork) return { none: true };
+  if (resume) return value && UUID.test(value) ? { sid: value } : { any: true };
+  if (cont) return cwd ? { cwd: String(cwd) } : { any: true };
+  if (given != null) return SID.test(given) ? { sid: given } : { any: true };
+  return { none: true };
+}
+const sameDir = (a, b) => String(a ?? "").replace(/\/+$/, "") === String(b ?? "").replace(/\/+$/, "");
+// Whether an unidentified tab that `could` be these sessions may hold `rec` ({ sid, cwd }).
+export function mayBe(rec, could) {
+  if (!could || could.any) return true;
+  if (could.none) return false;
+  if (could.sid) return rec?.sid === could.sid;
+  if (could.cwd) return !rec?.cwd || sameDir(rec.cwd, could.cwd);
+  return true;
+}
+// s31 (from herdr-sessions, owner 11-14): the workspace and tab shown now, and the commands that show them again after
+// a batch of resumes opened tabs elsewhere (each new tab is shown as it opens). A workspace that is gone: nothing; a
+// tab that is gone: its workspace only.
+export function placeNow(list) {
+  const s = (list ?? []).find((x) => x.active);
+  return s ? { space: s.id, tab: (s.tabs ?? []).find((t) => t.active)?.id ?? null } : null;
+}
+export function backTo(was, list) {
+  const s = was ? (list ?? []).find((x) => x.id === was.space) : null;
+  if (!s) return [];
+  return [["space.select", { id: s.id }], ...(was.tab && (s.tabs ?? []).some((t) => t.id === was.tab) ? [["tab.select", { id: was.tab }]] : [])];
+}
 // </resume-pure>
 
 export const remembered = () => shared(KEY_RESUME) ?? { at: null, tabs: {} };
@@ -61,7 +125,7 @@ const KEY_HANDLED = "flockbook.resume.handled";
 const KEY_TICK = "flockbook.resume.busy";
 // A Resume click claims its offer row for CLAIM_MS (`claimAt` on the row) instead of removing it before it knows the
 // result: a mod reload in between leaves the row, clickable again once the claim is old (R2 P2).
-const TICK_LOCK_MS = 20_000, HANDLED_KEEP_MS = 24 * 3600_000, UNSURE_WAIT_MS = 30_000, CLAIM_MS = 60_000;
+const TICK_LOCK_MS = 20_000, HANDLED_KEEP_MS = 24 * 3600_000, CLAIM_MS = 60_000;
 // Whether a click claimed this offer row and is still opening it (s14 follow-up: the Overview shows "Opening…" in
 // place of its Resume for those CLAIM_MS, so a second click has nothing to press).
 export const opening = (rec, now = Date.now()) => Boolean(rec?.claimAt && now - rec.claimAt < CLAIM_MS);
@@ -108,12 +172,15 @@ async function helperCache() {
 // The Claude tabs looked at now: this computer's own (not on Windows: no /usr/bin/env to resume them with) and those on
 // the "claude_machine" while it is connected (s26: the PC resumes its WSL tabs; a computer that doesn't name that
 // machine never does, so two computers never both resume one session). { tabs (by session), sids, pids, looked
-// (machine names looked at, "" = this computer), unknown (a live Claude tab the helper hasn't identified yet),
-// unknownTitles (their titles), unknownTabs ([{ machine ("" = this computer), title, cwd (its pane's folder, or null)
-// }]) }. Process ids are per machine ("wsl:30"), so two machines' never mix.
+// (machine names looked at, "" = this computer), unknown (a live Claude tab the helper hasn't identified yet that may
+// hold a session that isn't new), unknownTitles (their titles), unknownTabs ([{ machine ("" = this computer), title,
+// cwd (its pane's folder, or null), could (couldBe: which sessions it may hold) }]) }. Process ids are per machine
+// ("wsl:30"), so two machines' never mix. s31: a tab before its first message is identified by its pid file's id
+// (sessionOfEntry); one still unidentified is read by its command line.
 const statusAsked = new Map(), STATUS_EVERY_MS = 60_000;
 async function liveNow(now) {
-  const subs = new Set(terminals().filter((t) => t.parent).map((t) => t.address));
+  const terms = terminals(), byAddr = new Map(terms.map((t) => [t.address, t]));
+  const subs = new Set(terms.filter((t) => t.parent).map((t) => t.address));
   const cm = claudeMachine(), looked = new Set();
   if (!localWindows()) looked.add("");
   const remote = cm && connected(cm) ? await remoteEntries(cm) : null;
@@ -125,14 +192,17 @@ async function liveNow(now) {
   const subLive = [];   // s28 (Fable): sessions in sub-agent tabs, open but never offered (liveSids only)
   for (const a of claudes) {
     const m = machineOf(a.address);
-    const e = m ? remote[terminalOf(a.address)] : entries[a.address], s = sessionOf(e?.path, accounts(), m ? knownHome(m) : home());
+    const e = m ? remote[terminalOf(a.address)] : entries[a.address], s = sessionOfEntry(e, accounts(), m ? knownHome(m) : home());
     if (subs.has(a.address)) { if (s) subLive.push({ machine: m ?? "", sid: s.sid }); continue; }
     if (!s) {
-      unknown = true; if (plainTitle(a.title)) unknownTitles.add(plainTitle(a.title));
-      unknownTabs.push({ machine: m ?? "", title: plainTitle(a.title), cwd: paneCwd(a.address) });
-      // The helper there has no entry for it yet: a status call through this computer's helper makes one (once a
-      // minute at most per tab, s28 Fable: every poll and the dialog's 10 s refresh used to send one).
-      if (m && !(now - (statusAsked.get(a.address) ?? -Infinity) < STATUS_EVERY_MS)) { statusAsked.set(a.address, now); sidecar.status(a.address); }
+      const fg = byAddr.get(a.address)?.foreground, cwd = paneCwd(a.address);
+      const could = couldBe(fg?.argv, fg?.cwd || cwd);
+      if (!could.none) { unknown = true; if (plainTitle(a.title)) unknownTitles.add(plainTitle(a.title)); }
+      unknownTabs.push({ machine: m ?? "", title: plainTitle(a.title), cwd, could });
+      // The helper has no entry for it yet: a status call through this computer's helper makes one (once a minute at
+      // most per tab, s28 Fable: every poll and the dialog's 10 s refresh used to send one). s31: this computer's tabs
+      // too (the helper names a new tab's session from its pid file), not only another machine's.
+      if (!(now - (statusAsked.get(a.address) ?? -Infinity) < STATUS_EVERY_MS)) { statusAsked.set(a.address, now); sidecar.status(a.address); }
       continue;
     }
     sids.add(s.sid);
@@ -204,7 +274,9 @@ async function tick(mine) {
   for (const [m, ms] of Object.entries(was.awayFor ?? {})) if (m === cm) awayFor[m] = Math.max(awayFor[m] ?? 0, ms);
   // A live Claude tab whose session the helper has not found yet: no decision now for ITS machine (that session would
   // look gone); its records, downtime and away time wait for a later poll. Other machines are judged (s29 Fable P3).
-  const hold = new Set(live.unknownTabs.map((u) => u.machine)), byMachine = {}, held = {}, gaps = {}, heldAway = {};
+  // s31: only a tab that may hold one of that machine's remembered sessions (a new conversation holds none of them).
+  const mayHold = (u) => Object.values(judged).some((x) => (x.machine ?? "") === u.machine && mayBe(x, u.could));
+  const hold = new Set(live.unknownTabs.filter(mayHold).map((u) => u.machine)), byMachine = {}, held = {}, gaps = {}, heldAway = {};
   for (const [sid, x] of Object.entries(judged)) { const m = x.machine ?? ""; if (hold.has(m)) held[sid] = x; else (byMachine[m] ??= {})[sid] = x; }
   for (const m of hold) { gaps[m] = gapOf(m); if (awayFor[m]) heldAway[m] = awayFor[m]; }
   const lost = Object.entries(byMachine).flatMap(([m, group]) => lostSessions(group, { sids, pids }, Math.max(gapOf(m), awayFor[m] ?? 0)).offer).filter((x) => !keep[x.sid]);
@@ -221,9 +293,9 @@ async function tick(mine) {
 
 // Opens a tab that resumes the offered session `sid`; then it leaves the offer. Its row is claimed before anything is
 // awaited, so a double click or a second view opens nothing more. Never opens a session that runs now (resumed by
-// hand since the last poll: s13 Codex R1 P1). While a Claude tab is not identified yet it waits: for good when that
-// tab carries this session's title (it is likely this session, R2 P1); otherwise a click UNSURE_WAIT_MS after the
-// first opens it (a brand-new Claude tab has no conversation log to identify it by until its first message).
+// hand since the last poll: s13 Codex R1 P1). While a Claude tab on its machine is not identified yet and may hold this
+// session (s31: by its command line, mayBe), it waits — no timer opens it anyway (owner 11-14: it could reopen a session
+// resumed by hand). A brand-new tab is identified at once by its pid file's id (sessionOfEntry), or can only be new.
 // `made`: a Set the caller (resumeAll) keeps; the machine gets added when this call made a new workspace there.
 export async function resumeOne(sid, { quiet = false, made = null } = {}) {
   const now = Date.now(), first = offer()?.tabs.find((x) => x.sid === sid);
@@ -239,14 +311,12 @@ export async function resumeOne(sid, { quiet = false, made = null } = {}) {
     return false;
   }
   if (running(rec, live) || justOpened(rec.machine ?? null, sid, now)) { markHandled([sid]); dropFromOffer(sid); return false; }
-  // Only an unidentified tab on its own machine can be this session (s28 Fable).
-  const unsure = live.unknownTabs.filter((u) => u.machine === (rec.machine ?? ""));
-  const sameTitle = Boolean(rec.title) && unsure.some((u) => u.title === rec.title);
-  if (unsure.length && (sameTitle || !(rec.unsureAt && now - rec.unsureAt >= UNSURE_WAIT_MS))) {
-    patchOffer(sid, { claimAt: null, unsureAt: rec.unsureAt ?? now });
-    if (!quiet) notify?.(sameTitle
-      ? `A Claude tab named “${rec.title}” isn't identified yet — it is probably that session, already open. Not resumed.`
-      : "A Claude tab isn't identified yet — it could be that session. Click Resume again in half a minute.");
+  // Only an unidentified tab on its own machine can be this session (s28 Fable), and only one that may hold it (s31).
+  const unsure = live.unknownTabs.filter((u) => u.machine === (rec.machine ?? "") && mayBe(rec, u.could));
+  if (unsure.length) {
+    patchOffer(sid, { claimAt: null });
+    const named = unsure.find((u) => u.title)?.title;
+    if (!quiet) notify?.(`A Claude tab${named ? ` (“${named}”)` : ""} isn't identified yet and could be “${rec.title ?? "that session"}”, already open. Not resumed — try again in a moment, once it is identified.`);
     return "wait";
   }
   // On another machine (s26): resumed there, in its workspace if that is still there, else in that machine's "~"
@@ -286,9 +356,18 @@ export async function resumeCommand(rec) {
 // next session on that machine, so they share it instead of making one each. `pause(ms)`: a pause.
 const WAIT_STEP_MS = 150, NEW_SPACE_WAIT_MS = 3000;
 const sleep = (ms) => new Promise((res) => (typeof setTimeout === "function" ? setTimeout(res, ms) : res()));
+// s31 (from herdr-sessions, owner 11-14): once the tabs it opened show (TAB_WAIT_MS at most), the workspace and tab
+// shown before are shown again (placeNow / backTo), not the last tab it opened.
+const TAB_WAIT_MS = 3000;
+const tabCount = () => spaces().reduce((n, s) => n + (s.tabs?.length ?? 0), 0);
+export async function returnTo(was, before, opened, pause = sleep) {
+  if (!was || !opened) return;
+  for (let t = 0; tabCount() < before + opened && t < TAB_WAIT_MS; t += WAIT_STEP_MS) await pause(WAIT_STEP_MS);
+  for (const [name, args] of backTo(was, spaces())) run(name, args);
+}
 export async function resumeAll({ wait: pause = sleep } = {}) {
-  let wait = 0;
-  const made = new Set();
+  let wait = 0, opened = 0;
+  const made = new Set(), was = placeNow(spaces()), before = tabCount();
   for (const x of offer()?.tabs ?? []) {
     const m = x.machine ?? null;
     if (made.has(m ?? "")) {
@@ -296,8 +375,10 @@ export async function resumeAll({ wait: pause = sleep } = {}) {
       for (let t = 0; !there() && t < NEW_SPACE_WAIT_MS; t += WAIT_STEP_MS) await pause(WAIT_STEP_MS);
       made.delete(m ?? "");
     }
-    if (await resumeOne(x.sid, { quiet: true, made }) === "wait") wait++;
+    const r = await resumeOne(x.sid, { quiet: true, made });
+    if (r === "wait") wait++; else if (r === true) opened++;
   }
-  if (wait) notify?.(`A Claude tab isn't identified yet — it could be one of the ${wait === 1 ? "sessions" : `${wait} sessions`} still offered. Click Resume all again in half a minute.`);
+  await returnTo(was, before, opened, pause);
+  if (wait) notify?.(`A Claude tab isn't identified yet — it could be ${wait === 1 ? "the session" : `one of the ${wait} sessions`} still offered, already open. Try Resume all again in a moment, once it is identified.`);
 }
 export function dismissOffer() { const o = offer(); if (o) markHandled(o.tabs.map((x) => x.sid)); setShared(KEY_OFFER, null); }

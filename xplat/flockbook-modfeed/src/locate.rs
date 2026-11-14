@@ -18,6 +18,13 @@ pub struct Entry {
     pub path: Option<String>,
     /// Seconds since 1970.
     pub checked: f64,
+    /// s31: a Claude agent with no log yet (a new tab before its first message, or right after `/clear`): the session
+    /// id its pid file names, and the config folder that holds that file (which account it runs as). The mod tells
+    /// which session the tab holds from these until `path` is found.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub sid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub config: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
@@ -162,10 +169,10 @@ fn look(terminal: &str, ws: &[Workspace], resolver: &mut SessionResolver, cache_
     let mut next = Cache { feeds: cache.feeds.clone(), ..Default::default() };
     for p in &agents {
         let k = &p.agent.as_ref().unwrap().kind;
-        next.entries.insert(
-            p.terminal_id.clone(),
-            Entry { kind: k.clone(), cwd: p.cwd.clone(), pids: p.process_ids.clone(), path: latest(absolute(found.get(&p.id), k), k), checked: now_s },
-        );
+        let path = latest(absolute(found.get(&p.id), k), k);
+        let bare = if path.is_none() && k == "claude" { resolver.claude_bare_session(&p.id) } else { None };
+        let (sid, config) = bare.map_or((None, None), |(s, c)| (Some(s), Some(c)));
+        next.entries.insert(p.terminal_id.clone(), Entry { kind: k.clone(), cwd: p.cwd.clone(), pids: p.process_ids.clone(), path, checked: now_s, sid, config });
     }
     write_cache(&next, cache_path);
     let path = latest(absolute(found.get(&pane.id), &kind), &kind);

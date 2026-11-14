@@ -538,6 +538,18 @@ impl SessionResolver {
         omp_session_dir(&real_path(cwd), &sessions, &real_path(&self.home), &real_path(&tmp))
     }
 
+    /// s31: the bare session id a Claude pane's pid file named (Claude Code writes it at start and on `/clear`, before
+    /// the conversation has a log), and the config folder whose `sessions/` holds that file. None when the resolver
+    /// holds a log path instead, or the pane was not found by its pid file. Whether a log exists under the default
+    /// folder is the caller's to check (a default-folder pane always gives the bare id).
+    pub fn claude_bare_session(&self, pane_id: &str) -> Option<(String, String)> {
+        let e = self.cache.get(pane_id)?;
+        e.stamp.as_ref()?;
+        let sid = e.path.as_ref().filter(|p| !p.is_empty() && !p.contains('/') && !p.contains('\\'))?;
+        let config = Path::new(&e.stamp_dir).parent()?.to_string_lossy().into_owned();
+        Some((sid.clone(), config))
+    }
+
     fn waits_for_log(&self, e: &Entry) -> bool {
         e.stamp.is_some() && e.stamp_dir != self.claude_dir && e.path.as_deref().is_some_and(|p| !Path::new(p).exists())
     }

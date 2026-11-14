@@ -15,7 +15,7 @@ import { theme, props, closeOverlay, shared, setShared, run, notify } from "herd
 import { spaces } from "./parked.js";
 import { accounts, accountName, sessionOfLog, claudeRun, configDirOf } from "./accounts.js";
 import { claudeMachine, localWindows, connected, machineHome, knownHome, execAt, sameMachine, NEEDS_MACHINE } from "./where.js";
-import { liveSids, claimOpening, releaseOpening, noteOpened } from "./resume.js";
+import { liveSids, claimOpening, releaseOpening, noteOpened, mayBe, placeNow, returnTo } from "./resume.js";
 import { projects, projectsOn, projectSpace } from "./automove.js";
 import { agoText } from "./ai.js";
 import { sessionsClosed } from "./state.js";
@@ -162,7 +162,9 @@ export const cached = () => shared(KEY_LIST) ?? null;
 // at most NEW_SPACE_WAIT_MS) before the next pick there, which then opens as a tab in it. `wait(ms)`: a pause.
 const WAIT_STEP_MS = 150, NEW_SPACE_WAIT_MS = 3000;
 const pause = (ms) => new Promise((res) => (typeof setTimeout === "function" ? setTimeout(res, ms) : res()));
+// s31 (from herdr-sessions, owner 11-14): once the picks show, the workspace and tab shown before are shown again.
 export async function resumeSessions(rows, { wait = pause } = {}) {
+  const was = placeNow(spaces()), before = spaces().reduce((n, s) => n + (s.tabs?.length ?? 0), 0);
   const skipped = [], live = await liveSids(), projs = projects(), done = new Set(), named = new Set();
   let opened = 0;
   const skip = (row, why) => skipped.push({ row, why });
@@ -173,8 +175,9 @@ export async function resumeSessions(rows, { wait = pause } = {}) {
     if (!live.looked.has(row.machine ?? "")) { skip(row, m ? (connected(m) ? `couldn't reach ${m}` : `${m} isn't connected now`) : "this computer can't run Claude here"); continue; }
     if (live.by[row.machine ?? ""]?.has(row.sid)) { skip(row, "already open"); continue; }
     // s28 (Codex R1 + R2 P2): a Claude tab there not identified yet may be this very session (a folder or title that
-    // differs proves nothing: it may have moved, or be named anew), so nothing opens on that machine until it is.
-    if ((live.unknownTabs ?? []).some((u) => u.machine === (row.machine ?? ""))) { skip(row, "may be open already"); continue; }
+    // differs proves nothing: it may have moved, or be named anew), so it doesn't open until that tab is identified.
+    // s31: only when that tab's command line says it may hold it (resume.js mayBe; a plain `claude` holds none).
+    if ((live.unknownTabs ?? []).some((u) => u.machine === (row.machine ?? "") && mayBe(row, u.could))) { skip(row, "may be open already"); continue; }
     if (!row.cwd) { skip(row, "its folder is unknown"); continue; }
     // Claimed before anything is awaited (R2 P2), so another resume at the same time (a second dialog, the restart
     // offer) opens nothing more; given up again when this pick can't open.
@@ -196,6 +199,7 @@ export async function resumeSessions(rows, { wait = pause } = {}) {
       for (let t = 0; !there() && t < NEW_SPACE_WAIT_MS; t += WAIT_STEP_MS) await wait(WAIT_STEP_MS);
     }
   }
+  await returnTo(was, before, opened, wait);
   return { opened, skipped };
 }
 
@@ -320,7 +324,7 @@ export class SessionsView {
         .child(div().flex_1().text_size(12).text_color(t.muted).child(`${shown.length}${match.length > shown.length ? ` of ${match.length}` : ""} shown · ${picked} selected${hidden > 0 ? ` (${hidden} hidden by the search)` : ""}`)))
       .children(this.errors().map((e, i) => div().id(`ses-err-${i}`).text_size(12).text_color(t.blocked).child(e)))
       .when(Boolean(this.live?.unknown), (el) => el.child(div().id("ses-unknown").text_size(12).text_color(t.muted)
-        .child("A Claude tab isn't identified yet (a new one is, after its first message). Until then nothing opens on its machine.")))
+        .child("A Claude tab isn't identified yet. Sessions it could be won't open until it is (usually a moment).")))
       .child(v_flex().id("ses-list").flex_1().min_h(0).overflow_y_scrollbar().gap(2)
         .children(shown.map(rowEl))
         .when(match.length > shown.length, (el) => el.child(div().id("ses-more").p(8).text_size(12).text_color(t.dim).child(`Showing the newest ${SHOW_MAX} of ${match.length}. Type in the search to narrow the list.`)))

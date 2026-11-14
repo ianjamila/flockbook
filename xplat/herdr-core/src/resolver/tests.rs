@@ -885,6 +885,41 @@ fn hc_claude_config_dir_log_later() {
     assert_eq!(get(&mut res), Some(log), "the first turn writes the log under the config dir: the same pid file now gives its path");
 }
 
+/// s31 (owner 11-14, Resume sessions): a Claude tab is identified before its first message. The pid file names the
+/// session at start (live-checked 11-14 on Claude Code 2.1.323: sessionId written, no log yet); the resolver tells its
+/// bare id and the config folder that holds it, so the helper's cache can carry them.
+#[test]
+fn claude_bare_session_names_the_config_folder() {
+    let (_t, cfg) = tmp();
+    let (_d, home_cfg) = tmp();
+    fs::create_dir_all(format!("{cfg}/sessions")).unwrap();
+    fs::create_dir_all(format!("{home_cfg}/sessions")).unwrap();
+    let procs = parse_ps(&format!(
+        "  500     1 Sat Oct 31 10:00:00 2026     -zsh HC_TERMINAL_ID=t1\n  501   500 Sat Oct 31 10:01:00 2026     claude CLAUDE_CONFIG_DIR={cfg} HC_TERMINAL_ID=t1\n  600     1 Sat Oct 31 10:00:00 2026     -zsh HC_TERMINAL_ID=t2\n  601   600 Sat Oct 31 10:02:00 2026     claude HC_TERMINAL_ID=t2\n  700     1 Sat Oct 31 10:00:00 2026     node /opt/bin/codex HC_TERMINAL_ID=t3\n"
+    ));
+    let start = |pid| procs.iter().find(|p| p.pid == pid).unwrap().start;
+    write_pid_file(&format!("{cfg}/sessions"), 501, "sid-own", start(501));
+    write_pid_file(&format!("{home_cfg}/sessions"), 601, "sid-default", start(601));
+    let mut res = resolver(|r| {
+        r.claude_dir = format!("{home_cfg}/sessions");
+        r.retry = 0.0;
+    });
+    let needs = [
+        Need::new("hc:t1", "claude", "/w", vec![501, 500]),
+        Need::new("hc:t2", "claude", "/w", vec![601, 600]),
+        Need::new("hc:t3", "codex", "/w", vec![700]),
+    ];
+    res.resolve_with(&needs, &set(&[]), &HashMap::new(), Some(&procs));
+    assert_eq!(res.claude_bare_session("hc:t1"), Some(("sid-own".into(), cfg.clone())), "its own CLAUDE_CONFIG_DIR, no log yet");
+    assert_eq!(res.claude_bare_session("hc:t2"), Some(("sid-default".into(), home_cfg.clone())), "the default config folder");
+    assert_eq!(res.claude_bare_session("hc:t3"), None, "not a Claude pane found by its pid file");
+    assert_eq!(res.claude_bare_session("hc:t9"), None, "no such pane");
+    fs::create_dir_all(format!("{cfg}/projects/-w")).unwrap();
+    fs::write(format!("{cfg}/projects/-w/sid-own.jsonl"), "{}\n").unwrap();
+    res.resolve_with(&needs, &set(&[]), &HashMap::new(), Some(&procs));
+    assert_eq!(res.claude_bare_session("hc:t1"), None, "the log is found: a path, not a bare id");
+}
+
 #[test]
 fn hc_edge_claude_clear() {
     let procs = parse_ps("  500     1 Sat Oct 31 10:00:00 2026     -zsh HC_TERMINAL_ID=t1\n  501   500 Sat Oct 31 10:01:00 2026     claude HC_TERMINAL_ID=t1\n");
