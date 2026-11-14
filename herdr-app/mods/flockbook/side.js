@@ -14,6 +14,7 @@ import { updateSeen } from "./config.js";
 import { dragger, dropPlace } from "./drag.js";
 import { machineGroups, machinesTick, machineHeader, machineEmpty, folded, MACHINES_MS } from "./machines.js";
 import { pollUsage, usageBlock, USAGE_MS } from "./usage.js";
+import { pollSpend, spendBlock } from "./cispend.js";
 import { awakeBlock, awakeText, AWAKE_MS } from "./awake.js";
 
 // The workspace being dragged up or down (drag.js): one at a time, so the docked and the floating
@@ -47,8 +48,8 @@ export class SideView {
     cx?.spawn?.(async (c2) => { await machinesTick(); c2?.notify?.(); });
     cx?.timer?.every?.(MACHINES_MS, (c2) => c2?.spawn?.(async (c3) => { await machinesTick(); c3?.notify?.(); }));
     // Weekly usage left (usage.js, owner 11-15 s35): asked now (after the machines are known) and every 60 s; one copy asks for all.
-    cx?.spawn?.(async (c2) => { await machinesTick(); await pollUsage(); c2?.notify?.(); });
-    cx?.timer?.every?.(USAGE_MS, (c2) => c2?.spawn?.(async (c3) => { await pollUsage(); c3?.notify?.(); }));
+    cx?.spawn?.(async (c2) => { await machinesTick(); await Promise.all([pollUsage(), pollSpend()]); c2?.notify?.(); });
+    cx?.timer?.every?.(USAGE_MS, (c2) => c2?.spawn?.(async (c3) => { await Promise.all([pollUsage(), pollSpend()]); c3?.notify?.(); }));
     // Stay awake (awake.js): the top bar ticks; this copy redraws when its line's words changed.
     this.awakeShown = awakeText();
     cx?.timer?.every?.(AWAKE_MS, (c2) => { const w = awakeText(); if (w !== this.awakeShown) { this.awakeShown = w; c2?.notify?.(); } });
@@ -95,6 +96,7 @@ export class SideView {
       .when(Boolean(extra), (el) => el.child(extra));
 
     const awake = awakeBlock(t);
+    const spend = spendBlock(t);
     const update = updateLine(t, this);
     // Drawn in the open sidebar (docked or floating): seen, so the top bar's dot goes (once per version).
     if (update && (this.floating || sidebarShown())) updateSeen();
@@ -203,6 +205,8 @@ export class SideView {
       .child(row("side-sessions", "refresh", "Resume sessions", () => showSessions(), null, false))
       .child(row("side-flockbook", "sliders", "Flockbook", () => showSettings(), null, false))
       .child(row("side-settings", "gear", "Settings", () => run("app.settings")))
+      // CI spending this month (cispend.js, owner 11-15 s39), above the weekly usage; nothing until a reading exists.
+      .when(Boolean(spend), (el) => el.child(spend))
       .child(usageBlock(t));
   }
 }
