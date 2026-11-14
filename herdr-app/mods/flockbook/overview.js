@@ -333,7 +333,7 @@ export class OverviewView {
     const o = offer();
     if (!o) return [];
     const n = o.tabs.length, now = Date.now(), h = home();
-    const link = (id, label, on) => div().id(id).flex_none().text_size(12.5).text_color(t.accent).hover((s) => s.opacity(0.8)).on_click((_e, cx) => { on(); cx.notify(); }).child(label);
+    const link = (id, label, on) => div().id(id).flex_none().text_size(12.5).text_color(t.accent).hover((s) => s.opacity(0.8)).on_click((_e, cx) => { on(cx); cx.notify(); }).child(label);
     // A row a click is opening (its claim is fresh): "Opening…", nothing to press, until it opens or the claim ends.
     const busy = (id) => div().id(id).flex_none().text_size(12.5).text_color(t.muted).child("Opening…");
     const allOpening = o.tabs.every((x) => opening(x, now));
@@ -342,7 +342,7 @@ export class OverviewView {
       .child(h_flex().gap(12).items_center()
         .child(div().flex_none().text_size(13).child("↻"))
         .child(div().flex_1().min_w(0).text_size(13).font_semibold().text_color(t.foreground).child(`${n} Claude ${n === 1 ? "session was" : "sessions were"} open before the restart`))
-        .child(allOpening ? busy("ov-resume-all") : link("ov-resume-all", n === 1 ? "Resume" : "Resume all", () => resumeAll()))
+        .child(allOpening ? busy("ov-resume-all") : link("ov-resume-all", n === 1 ? "Resume" : "Resume all", (cx) => resumeAll({ wait: (ms) => new Promise((res) => (cx?.timer?.after ? cx.timer.after(ms, () => res()) : res())) })))
         .child(link("ov-resume-sessions", "All sessions…", () => showSessions()))
         .child(link("ov-resume-dismiss", "Dismiss", () => dismissOffer())))
       .children(o.tabs.map((x) => h_flex().id(`ov-resume-${x.sid}`).gap(10).items_center().pl(25)

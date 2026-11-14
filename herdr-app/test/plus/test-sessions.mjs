@@ -338,5 +338,54 @@ const LISTING = {
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 
+{
+  // s27 (hand-off item 11): several picks on a machine with no "~" or project workspace share ONE new workspace, named
+  // "~" (that machine's home workspace, so the auto-mover files them as usual), not one workspace each.
+  const files = { [`wsl:${WSL}/.cache/flockbook/cache.json`]: { entries: {} }, [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: {} } };
+  const spaces = [];
+  const w = await world({ settings: { claude_machine: "wsl" }, listing: LISTING, spaces, files,
+    onRun: (name, args) => { if (name === "space.new") spaces.push({ id: "wsl/sp9", name: args.name ?? "1", machine: args.machine, folder: args.folder, tabs: [] }); } });
+  await w.where.machineHome("wsl");
+  const waits = [];
+  const r = await w.ses.resumeSessions([1, 2, 3].map((n) => ({ sid: `w${n}`, account: "HOME", machine: "wsl", cwd: `/home/you/n${n}`, title: `t${n}` })),
+    { wait: async (ms) => { waits.push(ms); } });
+  eq("pile-up: one space.new named ~ on wsl, then tabs in it", w.runs.map(([n, a]) => [n, a.name ?? null, a.space ?? null, a.machine ?? null, a.argv.at(-1)]),
+    [["space.new", "~", null, "wsl", "w1"], ["tab.new", null, "wsl/sp9", null, "w2"], ["tab.new", null, "wsl/sp9", null, "w3"]]);
+  eq("pile-up: 3 opened", r.opened, 3);
+  eq("pile-up: no wait when the new workspace is there at the first look", waits.length, 0);
+}
+{
+  // The new workspace shows up only after a few looks: the batch waits for it (short steps, capped).
+  const files = { [`wsl:${WSL}/.cache/flockbook/cache.json`]: { entries: {} }, [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: {} } };
+  const spaces = [];
+  let pending = null;
+  const w = await world({ settings: { claude_machine: "wsl" }, listing: LISTING, spaces, files, onRun: (name, args) => { if (name === "space.new") pending = { id: "wsl/sp9", name: args.name ?? "1", machine: args.machine, tabs: [] }; } });
+  await w.where.machineHome("wsl");
+  const waits = [];
+  await w.ses.resumeSessions([1, 2].map((n) => ({ sid: `w${n}`, account: "HOME", machine: "wsl", cwd: "/home/you/n", title: "t" })),
+    { wait: async (ms) => { waits.push(ms); if (waits.length === 3 && pending) spaces.push(pending); } });
+  eq("pile-up (late): the second pick goes into it", w.runs.map(([n, a]) => [n, a.space ?? null]), [["space.new", null], ["tab.new", "wsl/sp9"]]);
+  eq("pile-up (late): three short waits", waits, [150, 150, 150]);
+}
+{
+  // It never shows up (the app refused it?): the rest open as before, one new workspace each, none named ~ again; the
+  // wait is capped.
+  const files = { [`wsl:${WSL}/.cache/flockbook/cache.json`]: { entries: {} }, [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: {} } };
+  const w = await world({ settings: { claude_machine: "wsl" }, listing: LISTING, spaces: [], files });
+  await w.where.machineHome("wsl");
+  let waited = 0;
+  await w.ses.resumeSessions([1, 2, 3].map((n) => ({ sid: `w${n}`, account: "HOME", machine: "wsl", cwd: "/home/you/n", title: "t" })), { wait: async (ms) => { waited += ms; } });
+  eq("pile-up (never): space.new each, only the first named ~", w.runs.map(([n, a]) => [n, a.name ?? null]), [["space.new", "~"], ["space.new", null], ["space.new", null]]);
+  eq("pile-up (never): waited at most 3 s, once", waited <= 3000 && waited >= 2000, true);
+}
+{
+  // One pick only: named ~, no wait (nothing else to place).
+  const files = { [`wsl:${WSL}/.cache/flockbook/cache.json`]: { entries: {} }, [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: {} } };
+  const w = await world({ settings: { claude_machine: "wsl" }, listing: LISTING, spaces: [], files });
+  await w.where.machineHome("wsl");
+  let waited = 0;
+  await w.ses.resumeSessions([{ sid: "w1", account: "HOME", machine: "wsl", cwd: "/home/you/n", title: "t" }], { wait: async (ms) => { waited += ms; } });
+  eq("pile-up (one pick): named ~, no wait", [w.runs[0][1].name, waited], ["~", 0]);
+}
 console.log(bad ? `${bad} FAILED` : "all passed");
 process.exit(bad ? 1 : 0);

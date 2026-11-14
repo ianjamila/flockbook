@@ -146,8 +146,13 @@ export const cached = () => shared(KEY_LIST) ?? null;
 // Opens each of `rows` as its account on its machine. A pick is skipped (and told why) when it runs in a tab now (asked
 // again here, not taken from the list), its machine isn't connected or reachable, its account is no longer set or its folder
 // is unknown. { opened, skipped: [{ row, why }] }.
-export async function resumeSessions(rows) {
-  const skipped = [], live = await liveSids(), projs = projects(), done = new Set();
+// Picks on a machine with no "~" or project workspace share one new workspace (s27): the first makes it, named "~" (that
+// machine's home workspace, so the auto-mover files its sessions as usual); the batch waits for it (WAIT_STEP_MS steps,
+// at most NEW_SPACE_WAIT_MS) before the next pick there, which then opens as a tab in it. `wait(ms)`: a pause.
+const WAIT_STEP_MS = 150, NEW_SPACE_WAIT_MS = 3000;
+const pause = (ms) => new Promise((res) => (typeof setTimeout === "function" ? setTimeout(res, ms) : res()));
+export async function resumeSessions(rows, { wait = pause } = {}) {
+  const skipped = [], live = await liveSids(), projs = projects(), done = new Set(), named = new Set();
   let opened = 0;
   const skip = (row, why) => skipped.push({ row, why });
   for (const row of rows) {
@@ -162,8 +167,16 @@ export async function resumeSessions(rows) {
     if (!c) { skip(row, "its account isn't set any more"); continue; }
     if (c.unreachable) { skip(row, `couldn't reach ${c.unreachable}`); continue; }
     const place = placeOf(row, projs, spaces());
-    run(place.name, { ...place.args, argv: [c.cmd, ...c.args] });
+    const fresh = place.name === "space.new" && !named.has(m);
+    if (fresh) named.add(m);
+    run(place.name, { ...place.args, ...(fresh ? { name: "~" } : {}), argv: [c.cmd, ...c.args] });
     opened++;
+    // More picks for that machine still to place: wait for the new "~" workspace to show (not on the last one).
+    const more = rows.slice(rows.indexOf(row) + 1).some((r) => (r.machine || null) === m && !done.has(keyOf(r)));
+    if (fresh && more) {
+      const there = () => spaces().some((x) => x.name === "~" && sameMachine(x.machine, m));
+      for (let t = 0; !there() && t < NEW_SPACE_WAIT_MS; t += WAIT_STEP_MS) await wait(WAIT_STEP_MS);
+    }
   }
   return { opened, skipped };
 }
@@ -226,7 +239,7 @@ export class SessionsView {
     if (!rows.length) return;
     this.busy = true; cx?.notify?.();
     try {
-      const r = await resumeSessions(rows);
+      const r = await resumeSessions(rows, { wait: (ms) => new Promise((res) => (cx?.timer?.after ? cx.timer.after(ms, () => res()) : pause(ms).then(res))) });
       notify?.(resumeNotice(r));
       if (r.opened) { sessionsClosed(this.overlay); if (this.overlay) closeOverlay(this.overlay); }
       else for (const s of r.skipped) if (s.why === "already open") this.picked.delete(keyOf(s.row));

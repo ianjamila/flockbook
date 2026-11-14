@@ -180,7 +180,8 @@ async function tick(mine) {
 // hand since the last poll: s13 Codex R1 P1). While a Claude tab is not identified yet it waits: for good when that
 // tab carries this session's title (it is likely this session, R2 P1); otherwise a click UNSURE_WAIT_MS after the
 // first opens it (a brand-new Claude tab has no conversation log to identify it by until its first message).
-export async function resumeOne(sid, { quiet = false } = {}) {
+// `made`: a Set the caller (resumeAll) keeps; the machine gets added when this call made a new workspace there.
+export async function resumeOne(sid, { quiet = false, made = null } = {}) {
   const now = Date.now(), first = offer()?.tabs.find((x) => x.sid === sid);
   if (!first || (first.claimAt && now - first.claimAt < CLAIM_MS)) return false;
   patchOffer(sid, { claimAt: now });
@@ -202,8 +203,9 @@ export async function resumeOne(sid, { quiet = false } = {}) {
       : "A Claude tab isn't identified yet — it could be that session. Click Resume again in half a minute.");
     return "wait";
   }
-  // On another machine (s26): resumed there, in its workspace if that is still there, else in a new workspace on that
-  // machine — never on this computer. Its machine away or unreachable: the row stays, for a later click.
+  // On another machine (s26): resumed there, in its workspace if that is still there, else in that machine's "~"
+  // workspace, else in a new one there named "~" (s27: so several resumes share it, and the auto-mover files them) —
+  // never on this computer. Its machine away or unreachable: the row stays, for a later click.
   const c = await resumeCommand(rec);
   if (c?.unreachable) {
     patchOffer(sid, { claimAt: null });
@@ -212,9 +214,11 @@ export async function resumeOne(sid, { quiet = false } = {}) {
   }
   const argv = c;
   if (argv) {
-    const space = spaces().find((s) => s.id === rec.space && sameMachine(s.machine, rec.machine));
+    const all = spaces();
+    const space = all.find((s) => s.id === rec.space && sameMachine(s.machine, rec.machine))
+      ?? (rec.machine ? all.find((s) => s.name === "~" && sameMachine(s.machine, rec.machine)) : null);
     if (space || !rec.machine) run("tab.new", { ...(space ? { space: space.id } : {}), folder: rec.cwd, argv, ...(rec.name ? { name: rec.name } : {}) });
-    else run("space.new", { machine: rec.machine, folder: rec.cwd, argv, ...(rec.name ? { tab: rec.name } : {}) });
+    else { run("space.new", { machine: rec.machine, name: "~", folder: rec.cwd, argv, ...(rec.name ? { tab: rec.name } : {}) }); made?.add(rec.machine); }
   }
   markHandled([sid]); dropFromOffer(sid);
   return Boolean(argv);
@@ -228,9 +232,22 @@ export async function resumeCommand(rec) {
   if (c?.unreachable) return c;
   return c?.cmd ? [c.cmd, ...c.args] : null;
 }
-export async function resumeAll() {
+// s27: a new "~" workspace made for one session is waited for (WAIT_STEP_MS steps, at most NEW_SPACE_WAIT_MS) before the
+// next session on that machine, so they share it instead of making one each. `pause(ms)`: a pause.
+const WAIT_STEP_MS = 150, NEW_SPACE_WAIT_MS = 3000;
+const sleep = (ms) => new Promise((res) => (typeof setTimeout === "function" ? setTimeout(res, ms) : res()));
+export async function resumeAll({ wait: pause = sleep } = {}) {
   let wait = 0;
-  for (const x of offer()?.tabs ?? []) if (await resumeOne(x.sid, { quiet: true }) === "wait") wait++;
+  const made = new Set();
+  for (const x of offer()?.tabs ?? []) {
+    const m = x.machine ?? null;
+    if (m && made.has(m)) {
+      const there = () => spaces().some((s) => s.name === "~" && sameMachine(s.machine, m));
+      for (let t = 0; !there() && t < NEW_SPACE_WAIT_MS; t += WAIT_STEP_MS) await pause(WAIT_STEP_MS);
+      made.delete(m);
+    }
+    if (await resumeOne(x.sid, { quiet: true, made }) === "wait") wait++;
+  }
   if (wait) notify?.(`A Claude tab isn't identified yet — it could be one of the ${wait === 1 ? "sessions" : `${wait} sessions`} still offered. Click Resume all again in half a minute.`);
 }
 export function dismissOffer() { const o = offer(); if (o) markHandled(o.tabs.map((x) => x.sid)); setShared(KEY_OFFER, null); }

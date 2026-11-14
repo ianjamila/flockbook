@@ -172,8 +172,34 @@ async function resumeWorld(opts) {
   spaces.splice(0, spaces.length);
   await w.r.resumeOne("s-home");
   const [n2, a2] = w.runs.at(-1) ?? [];
-  eq("resumeOne(s-home), space gone: space.new on wsl", [n2, a2?.machine, a2?.argv?.slice(-2)], ["space.new", "wsl", ["--resume", "s-home"]]);
+  eq("resumeOne(s-home), space gone: space.new on wsl, named ~", [n2, a2?.machine, a2?.name, a2?.argv?.slice(-2)], ["space.new", "wsl", "~", ["--resume", "s-home"]]);
   void ag;
+}
+{
+  // s27 (hand-off item 11): Resume all after wsl lost its sessions AND its workspaces: one new workspace on wsl, named
+  // "~", for all of them (the first makes it, the rest wait for it and open as tabs there), never one workspace each.
+  const cacheW = { entries: { t3: { path: WORKLOG("s-work"), cwd: `${WSL}/projects/webshop`, pids: [30] }, t4: { path: LOGW("s-home"), cwd: WSL, pids: [40] } } };
+  const files = { [`wsl:${WSL}/.cache/flockbook/cache.json`]: cacheW, [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: {} } };
+  const agents = [
+    { app: "claude-code", address: "wsl/t3", space: "wsl/sp1", space_name: "webshop", title: "Shop work", tab_name: "1", tab_index: 0, program: { name: "Claude Code" } },
+    { app: "claude-code", address: "wsl/t4", space: "wsl/sp2", space_name: "~", title: "Notes", tab_name: "1", tab_index: 0, program: { name: "Claude Code" } },
+  ];
+  const spaces = [{ id: "wsl/sp1", name: "webshop", machine: "wsl", tabs: [] }, { id: "wsl/sp2", name: "~", machine: "wsl", tabs: [] }];
+  const w = await resumeWorld({ settings: { claude_machine: "wsl" }, platform: "windows", files, agents, spaces, ready: ["wsl"] });
+  await w.r.resumeTick();
+  agents.length = 0; spaces.length = 0;
+  files[`wsl:${WSL}/.cache/flockbook/cache.json`] = { entries: {} };
+  now += 60_000;
+  await w.r.resumeTick();
+  eq("resume all (pile-up): both offered", (w.r.offer()?.tabs ?? []).map((x) => x.sid).sort(), ["s-home", "s-work"]);
+  let made = null;
+  w.herdr.hooks.onRun = (name, args) => { if (name === "space.new") made = { id: "wsl/sp9", name: args.name ?? "1", machine: args.machine, tabs: [] }; };
+  const waits = [];
+  const n0 = w.runs.length;
+  await w.r.resumeAll({ wait: async (ms) => { waits.push(ms); if (made && !spaces.includes(made)) spaces.push(made); } });
+  eq("resume all (pile-up): one space.new named ~ on wsl, then a tab in it", w.runs.slice(n0).map(([n, a]) => [n, a.name ?? null, a.space ?? null, a.machine ?? null]),
+    [["space.new", "~", null, "wsl"], ["tab.new", null, "wsl/sp9", null]]);
+  eq("resume all (pile-up): waited for it", waits.length >= 1, true);
 }
 {
   // The Mac (no claude_machine): remote tabs are never remembered (the PC that names wsl resumes them, not both).
