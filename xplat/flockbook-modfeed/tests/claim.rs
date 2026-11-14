@@ -160,6 +160,42 @@ fn many_runs_after_a_dead_run_one_claim_wins() {
     }
 }
 
+// s35 (owner, 11-15): an agent applying five migrations one after another, each box too tall for the pane (clipped:
+// no tool, no command read). After Allow on the first, the second box showed "Answer sent. Waiting for the agent." for
+// the rest of the minute: every clipped box has the same empty tool and command, so the first claim matched it.
+// A box with no tool and no command read is known by its id alone.
+
+#[test]
+fn a_clipped_box_is_not_the_one_answered_before_it() {
+    let (_d, cache, _folder) = setup();
+    let a = FeedAnswered::new(Some(&cache));
+    assert!(claimed(a.claim(T, "screen-first", "", "", true, SystemTime::now())));
+    assert!(a.is_claimed(T, "screen-first", "", "", true, SystemTime::now()), "the box pressed is answered");
+    assert!(!a.is_claimed(T, "screen-second", "", "", true, SystemTime::now()), "the next clipped box is not");
+    assert!(claimed(a.claim(T, "screen-second", "", "", true, SystemTime::now())), "and can be answered");
+}
+
+#[test]
+fn seen_keeps_a_clipped_claim_only_while_its_own_box_shows() {
+    let (_d, cache, folder) = setup();
+    let a = FeedAnswered::new(Some(&cache));
+    assert!(claimed(a.claim(T, "screen-first", "", "", true, SystemTime::now())));
+    a.seen(T, Some(("screen-first", "", "")));
+    assert!(folder.join(fnv1a("screen-first")).exists(), "its own box still shows: kept");
+    a.seen(T, Some(("screen-second", "", "")));
+    assert!(!folder.join(fnv1a("screen-first")).exists(), "another clipped box shows: the first one left, its claim goes");
+}
+
+#[test]
+fn a_read_box_still_matches_by_tool_and_command_after_a_rewrap() {
+    let (_d, cache, folder) = setup();
+    let a = FeedAnswered::new(Some(&cache));
+    assert!(claimed(a.claim(T, "screen-wide", "Bash", "ls -la", true, SystemTime::now())));
+    a.seen(T, Some(("screen-narrow", "Bash", "ls\n-la")));
+    assert!(folder.join(fnv1a("screen-wide")).exists(), "the same box re-wrapped keeps its claim");
+    assert!(a.is_claimed(T, "screen-narrow", "Bash", "ls\n-la", true, SystemTime::now()));
+}
+
 fn claimed(c: Claim) -> bool {
     c == Claim::Got
 }

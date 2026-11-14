@@ -284,7 +284,7 @@ pub fn card_with<S: PaneScreen + ?Sized>(pane: &Pane, screen: &S, log: Option<&P
     let blocked = pane.agent.as_ref().is_some_and(|a| a.status == AgentStatus::Blocked);
     if read {
         match &now {
-            Some(Current::Approval { command, tool, .. }) => answered.seen(&pane.id, Some((tool, command))),
+            Some(Current::Approval { id, command, tool, .. }) => answered.seen(&pane.id, Some((id, tool, command))),
             _ => answered.seen(&pane.id, None),
         }
     }

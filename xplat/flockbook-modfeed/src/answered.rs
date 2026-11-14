@@ -72,9 +72,13 @@ impl FeedAnswered {
         }
     }
 
+    /// The same prompt: its id, or its tool and command (a re-wrapped box). A box with neither read (clipped: taller
+    /// than the pane) is known by its id alone: every clipped box has the same empty tool and command, so one press
+    /// would otherwise mark the next clipped box answered too (s35: five migrations, one Allow each).
     fn same(m: &Option<Mark>, id: &str, tool: &str, command: &str) -> bool {
         let Some(m) = m else { return false };
-        m.id == id || (m.tool == tool && m.command == Self::flat(command))
+        let flat = Self::flat(command);
+        m.id == id || ((!tool.is_empty() || !flat.is_empty()) && m.tool == tool && m.command == flat)
     }
 
     /// A file that does not parse and is younger than this may be another run's claim mid-write (an older sidecar
@@ -176,16 +180,16 @@ impl FeedAnswered {
         self.marks(terminal).iter().any(|(p, m)| Self::same(m, id, tool, command) && Self::live(p, m, blocked, now))
     }
 
-    /// A screen read that worked shows `bx` (None: no approval box): the claims of other prompts go. Never called
-    /// when the read failed: that is no evidence.
-    pub fn seen(&self, terminal: &str, bx: Option<(&str, &str)>) {
+    /// A screen read that worked shows `bx` (id, tool, command; None: no approval box): the claims of other prompts
+    /// go. Never called when the read failed: that is no evidence.
+    pub fn seen(&self, terminal: &str, bx: Option<(&str, &str, &str)>) {
         let now = SystemTime::now();
         for (p, m) in self.marks(terminal) {
             if Self::fresh_unread(&p, &m, now) {
                 continue;
             }
-            if let (Some((tool, command)), Some(m)) = (bx, &m) {
-                if m.tool == tool && m.command == Self::flat(command) {
+            if let Some((id, tool, command)) = bx {
+                if Self::same(&m, id, tool, command) {
                     continue;
                 }
             }
