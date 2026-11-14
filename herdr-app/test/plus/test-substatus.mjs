@@ -39,7 +39,7 @@ eq("null agent", S.overlays(null), []);
 AGENTS.a = ag("✅🔀 Deployment Statistics PR 5");
 AGENTS.b = ag("🛠 Auto tab renaming");
 AGENTS.c = ag("Herdr handoff");
-AGENTS.d = ag("🟣✅ Tools repo move");
+AGENTS.d = { ...ag("🟣✅ Tools repo move"), status: "working" };   // while the turn runs
 AGENTS.e = ag("⏳ Merge gate");
 const tab = (id, status, extra = {}) => ({ id, status, name: "1", named: false, ...extra });
 ASKS.a = { kind: "merge", pr: 1818 };   // the reply still ends with the hand-off
@@ -52,7 +52,20 @@ eq("🔀 without an open ask = merging", S.subStatus(tab("a"))?.key, "merging");
 eq("merging hint", S.subStatus(tab("a"))?.hint, "✅ results waiting · 🔀 merging");
 AGENTS.m = ag("🔀 Employee search #1801");
 eq("🔀 alone without an ask → Merging group", S.subStatus(tab("m"))?.key, "merging");
-eq("results outrank review", S.subStatus(tab("d"))?.key, "results");
+eq("results outrank review (turn running)", S.subStatus(tab("d"))?.key, "results");
+// Owner 11-14 s29: a review dot on a FINISHED turn is a review agent still running (the hook re-checks the dots at
+// every turn end), as ⏳ / 🔍 are: In review, working, ahead of the ✅.
+AGENTS.d.status = "done";
+eq("finished 🟣✅: In review", S.subStatus(tab("d", "done"))?.key, "review");
+eq("finished 🟣✅: working", S.subStatus(tab("d", "done"))?.background, true);
+eq("finished 🟣✅ → pipeline, In review", O.groups([tab("d", "done")].map((t) => ({ space: { id: "s", name: "S" }, tab: t })), "status").map((x) => [x.title, x.subs.map((y) => y.title)]), [["CI / Final Review / Merging", ["In review"]]]);
+for (const dot of ["🟠", "🔵", "🟢", "⚪"]) {
+  AGENTS.dd = { ...ag(dot + "✅ X"), status: "idle" };
+  eq(`finished ${dot}✅: In review, working`, [S.subStatus(tab("dd", "idle"))?.key, S.subStatus(tab("dd", "idle"))?.background], ["review", true]);
+}
+delete AGENTS.dd;
+// The groups below: a finished tab with only its ✅ left (the review agent is over, so its dot is gone).
+AGENTS.d = { ...ag("✅ Tools repo move"), status: "idle" };
 eq("plain tab", S.subStatus(tab("c")), null);
 eq("plainLabel strips symbols", S.plainLabel(tab("a")), "Deployment Statistics PR 5");
 eq("plainLabel of a named tab", S.plainLabel(tab("b", "working", { named: true, name: "Renamer" })), "Renamer");

@@ -113,4 +113,13 @@ agent.status = "working"; tab.status = "working";
 agent.title = "⏳✅ EagleWatch PR #2049 signed-out redirect";
 eq("title ⏳✅ while the turn runs: no wait flag (the turn itself is the work)", state.subStatus(tab)?.background, false);
 agent.status = "done"; tab.status = "done";
+
+// s29: the title's ⏳ and the footer's CI wait are the same wait: one ⏳ in the hint, not "⏳ waiting on CI · ⏳ CI running".
+bg = { shells: 1, agents: 0, ci: true };
+agent.title = "⏳✅ EagleWatch PR #2049 signed-out redirect";
+eq("title ⏳ + footer CI wait: one ⏳", [state.subStatus(tab)?.glyphs, state.subStatus(tab)?.hint], ["⏳✅", "⏳ waiting on CI · ✅ results waiting"]);
+bg = { shells: 1, agents: 0, review: true };
+agent.title = "🔍✅ Claude-pipeline PR #299 follow-ups";
+eq("title 🔍 + footer review wait: one 🔍", [state.subStatus(tab)?.glyphs, state.subStatus(tab)?.hint], ["🔍✅", "🔍 waiting on a review · ✅ results waiting"]);
+bg = null;
 process.exit(bad ? 1 : 0);
