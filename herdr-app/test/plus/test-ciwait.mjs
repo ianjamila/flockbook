@@ -63,6 +63,13 @@ eq("Codex review running in the background: review", backgroundWork(`⏺ The Cod
 eq("Codex review still running: review", backgroundWork(`⏺ The Codex review is still running (effort high).\n\n${foot(" · 1 shell")}`)?.review, true);
 eq("Codex findings reported, shell left: no review wait", backgroundWork(`⏺ Codex found 7 issues; all fixed and tested.\n\n${foot(" · 1 shell")}`), { shells: 1, agents: 0 });
 eq("Codex wait without a shell: nothing", backgroundWork(`⏺ Waiting on the Codex recheck.\n\n${foot()}`), null);
+// Owner 11-14 (#2049): the pipeline's own Codex call — "Waiting for the round 10 Codex job".
+eq("round N Codex job: review", backgroundWork(`⏺ Waiting for the round 10 Codex job.\n\n${foot(" · 1 shell")}`)?.review, true);
+eq("R3 Codex review: review", backgroundWork(`⏺ Now waiting on the R3 Codex review.\n\n${foot(" · 1 shell")}`)?.review, true);
+st.setShared("flockbook.now", { t1: { now: "Waiting for the round 10 Codex job", steps: [], helpers: [] }, t2: { now: "Waiting for the browser tests to finish", steps: [], helpers: [] }, t3: { now: "Editing state.js", steps: [], helpers: [] } });
+eq("nowWait: Codex job → review", asks.nowWait("t1"), "review");
+eq("nowWait: browser tests → ci", asks.nowWait("t2"), "ci");
+eq("nowWait: plain work → null", [asks.nowWait("t3"), asks.nowWait("nope"), asks.nowWait(null)], [null, null, null]);
 eq("CI wins over review when both", backgroundWork(`⏺ Waiting for CI on #3; the Codex review is still running too.\n\n${foot(" · 1 shell")}`), { shells: 1, agents: 0, ci: true });
 
 // state.js: a ✅ tab (results) whose turn ended waiting on CI sits under "Waiting on CI" and counts as working.

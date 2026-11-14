@@ -12,13 +12,13 @@ const stateCode = cut(st, "const AGENT_MARK", "// The topic alone")
   + "\n" + cut(st, "export function tabLabel", "// The screen for a tab")
   + "\n" + cut(st, "export function agentName", "const programName");
 const ASKS = {};
-const PRS = {}, BG = {}, HO = {};
+const PRS = {}, BG = {}, HO = {}, NOWW = {};
 const bgWords = (b) => [b?.shells ? `${b.shells} ${b.shells === 1 ? "shell" : "shells"} running` : null, b?.agents ? `${b.agents} ${b.agents === 1 ? "agent" : "agents"} running` : null].filter(Boolean).join(" · ");
 const asksSrc = fs.readFileSync(MOD + "asks.js", "utf8");
 const askMark = new Function(cut(asksSrc, "export function askMark", "export function askDetail").replaceAll("export ", "") + "; return askMark;")();
-const S = new Function("AGENTS", "askMark", "askOf", "prOf", "bgOf", "bgWords", "handoffOf", stateCode.replaceAll("export ", "")
+const S = new Function("AGENTS", "askMark", "askOf", "prOf", "bgOf", "bgWords", "handoffOf", "nowWait", stateCode.replaceAll("export ", "")
   + "; function tabAgents(id) { return AGENTS[id] ? [{ ...AGENTS[id], address: id }] : []; }"
-  + "; return { overlays, subStatus, plainLabel, tabLabel, withAsk, SUB_GROUPS };")(AGENTS, askMark, (addr) => ASKS[addr] ?? null, (addr) => PRS[addr] ?? null, (addr) => BG[addr] ?? null, bgWords, (addr) => Boolean(HO[addr]));
+  + "; return { overlays, subStatus, plainLabel, tabLabel, withAsk, SUB_GROUPS };")(AGENTS, askMark, (addr) => ASKS[addr] ?? null, (addr) => PRS[addr] ?? null, (addr) => BG[addr] ?? null, bgWords, (addr) => Boolean(HO[addr]), (addr) => NOWW[addr] ?? null);
 const ovCode = cut(ov, "// Grouped by status", "export class OverviewView");
 // machines.js spaceTitle ("api on pc-wsl"), as the Overview names a workspace by it (owner 11-14).
 const spaceTitle = new Function(/^export const spaceTitle = .*$/m.exec(fs.readFileSync(MOD + "machines.js", "utf8"))[0].replace("export ", "") + "; return spaceTitle;")();
@@ -52,7 +52,10 @@ eq("🔀 without an open ask = merging", S.subStatus(tab("a"))?.key, "merging");
 eq("merging hint", S.subStatus(tab("a"))?.hint, "✅ results waiting · 🔀 merging");
 AGENTS.m = ag("🔀 Employee search #1801");
 eq("🔀 alone without an ask → Merging group", S.subStatus(tab("m"))?.key, "merging");
-eq("results outrank review (turn running)", S.subStatus(tab("d"))?.key, "results");
+// Owner 11-14 s29 ("Live work wins"): what a working tab does now leads; ✅ is only a hint word on it.
+eq("live work wins: working 🟣✅ → In review", S.subStatus(tab("d", "working"))?.key, "review");
+eq("live work wins: its ✅ is not waiting on you", S.subStatus(tab("d", "working"))?.owner, false);
+eq("live work wins: ✅ stays in the hint", S.subStatus(tab("d", "working"))?.hint, "🟣 Fable review · ✅ results waiting");
 // Owner 11-14 s29: a review dot on a FINISHED turn is a review agent still running (the hook re-checks the dots at
 // every turn end), as ⏳ / 🔍 are: In review, working, ahead of the ✅.
 AGENTS.d.status = "done";
@@ -80,7 +83,23 @@ eq("done + answered 🔀 → Done, under Merging", g[2].subs.map((s) => [s.title
 eq("idle + ✅ → Resting, under results", g[3].subs.map((s) => [s.title, s.items.map((i) => i.tab.id)]), [["Review results waiting", ["d"]]]);
 AGENTS.r = ag("✅ Webshop PRs #1448 and #1533 review and merge");
 eq("owner's case: done + ✅ only → Done", O.groups([tab("r", "done")].map((t) => ({ space: { id: "s", name: "S" }, tab: t })), "status").map((x) => [x.title, x.items.map((i) => i.tab.id)]), [["Done", ["r"]]]);
-eq("working + ✅ stays in the pipeline section", O.groups([tab("r", "working")].map((t) => ({ space: { id: "s", name: "S" }, tab: t })), "status").map((x) => x.title), ["CI / Final Review / Merging"]);
+eq("live work wins: working + ✅ only → Working (results wait only on idle tabs)", O.groups([tab("r", "working")].map((t) => ({ space: { id: "s", name: "S" }, tab: t })), "status").map((x) => [x.title, x.subs.map((y) => y.title)]), [["Working", [""]]]);
+eq("live work wins: working + ✅ only is not waiting on you", O.waitingOn([{ space: { id: "s", name: "S" }, tab: tab("r", "working") }]), 0);
+eq("idle + ✅ only still waits on you", O.waitingOn([{ space: { id: "s", name: "S" }, tab: tab("r", "idle") }]), 1);
+// Owner 11-14 20:23 screenshot: five working "🛠 building · ✅ results waiting" tabs sat under Review results waiting.
+AGENTS.bw = { ...ag("🛠✅ EW #2058 round-2 fixes"), status: "working" };
+eq("live work wins: working 🛠✅ → Agents at work", O.groups([tab("bw", "working")].map((t) => ({ space: { id: "s", name: "S" }, tab: t })), "status").map((x) => [x.title, x.subs.map((y) => y.title)]), [["Working", ["Agents at work"]]]);
+eq("live work wins: 🛠✅ hint keeps both", S.subStatus(tab("bw", "working"))?.hint, "🛠 building · ✅ results waiting");
+// #2049: "Now: Waiting for the round 10 Codex job" with no 🔍 in its title (the pipeline's own Codex call).
+AGENTS.cx = { ...ag("✅ EagleWatch PR #2049"), status: "working" };
+NOWW.cx = "review";
+eq("working, Now line waits on a Codex job → Waiting on a review (pipeline section)", O.groups([tab("cx", "working")].map((t) => ({ space: { id: "s", name: "S" }, tab: t })), "status").map((x) => [x.title, x.subs.map((y) => y.title)]), [["CI / Final Review / Merging", ["Waiting on a review"]]]);
+eq("…its hint", S.subStatus(tab("cx", "working"))?.hint, "🔍 waiting on a review · ✅ results waiting");
+NOWW.cx = "ci";
+eq("working, Now line waits on CI → Waiting on CI", S.subStatus(tab("cx", "working"))?.key, "ci");
+AGENTS.cx.status = "done"; NOWW.cx = "review";
+eq("a finished turn's old Now line is not live work", S.subStatus(tab("cx", "done"))?.key, "results");
+delete AGENTS.bw; delete AGENTS.cx; delete NOWW.cx;
 eq("finished merging tab: Done, Merging sub-group", O.groups([tab("m", "done")].map((t) => ({ space: { id: "s", name: "S" }, tab: t })), "status").map((x) => [x.title, x.subs.map((s) => [s.title, s.items.map((i) => i.tab.id)])]), [["Done", [["Merging", ["m"]]]]]);
 eq("Working keeps build agents + plain", g[0].subs.map((s) => [s.title, s.items.map((i) => i.tab.id)]), [["Agents at work", ["b"]], ["Other", ["c"]]]);
 eq("blocked tab left out", g.flatMap((x) => x.items).some((i) => i.tab.status === "blocked"), false);
