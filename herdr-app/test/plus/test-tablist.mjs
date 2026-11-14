@@ -64,4 +64,15 @@ eq("all rows: a tab row carries its workspace", rows.filter((r) => r.kind === "t
 eq("all rows: no spaces → none", R2.allRows([], title), []);
 eq("all rows: a workspace without a tabs list → skipped", R2.allRows([{ id: "x", name: "x" }], title), []);
 eq("all head: count of every tab", R2.allHeadText(3), "All workspaces · 3");
+// Owner 11-14 s29 ("i want to do your suggestions"): Needs you spans every workspace too; tabs waiting on you lead their
+// workspace's group (in tab order among themselves); a heading knows the tab to open (the workspace's shown tab, else its first).
+eq("mode: Needs you → all", R2.listMode("needs"), "all");
+const W = [{ id: "w", name: "w", tabs: [{ id: "p", index: 1 }, { id: "q", index: 2, active: true }, { id: "r", index: 3 }, { id: "s", index: 4 }] }];
+const waits = (tab) => tab.id === "r" || tab.id === "s";
+eq("all rows: tabs waiting on you first, each part in tab order", R2.allRows(W, title, waits).filter((r) => r.kind === "tab").map((r) => r.tab.id), ["r", "s", "p", "q"]);
+eq("all rows: waiting rows are marked", R2.allRows(W, title, waits).filter((r) => r.kind === "tab").map((r) => r.waits), [true, true, false, false]);
+eq("all rows: no waits fn → tab order", R2.allRows(W, title).filter((r) => r.kind === "tab").map((r) => r.tab.id), ["p", "q", "r", "s"]);
+eq("all rows: heading opens the shown tab", R2.allRows(W, title)[0].open.id, "q");
+eq("all rows: heading with no shown tab opens the first (put-away tabs skipped)", R2.allRows([{ id: "v", name: "v", tabs: [{ id: "x", settled: true, active: true }, { id: "y" }] }], title)[0].open.id, "y");
+eq("all rows: heading counts the waiting tabs", R2.allRows(W, title, waits)[0].text, "w · 4 · 2 waiting");
 process.exit(bad ? 1 : 0);
