@@ -33,7 +33,7 @@ async function world({ settings = {}, platform = "macos", ready = ["wsl"], homeO
   const herdr = {
     ...st, hooks, home: () => MAC, appHome: () => `${MAC}/.config/herdr-app`,
     window: () => ({ platform }), machines: () => hooks.machines,
-    agents: () => agents, spaces: () => spaces, terminals: () => [], panes: () => [],
+    agents: () => agents, spaces: () => spaces, terminals: () => [], panes: () => herdr.panesNow(), panesNow: () => [],
     theme: () => new Proxy({}, { get: (_t, k) => (typeof k === "string" ? `#${k}` : undefined) }),
     props: () => ({ view: "sessions", overlay: "ov1" }), closeOverlay: (id) => { closed.push(id); return null; },
     run: (name, args) => { runs.push([name, args]); onRun?.(name, args); return null; }, notify: (n) => { notes.push(n); return null; },
@@ -136,7 +136,7 @@ const row = (mtime, p, cwd, title, prompt) => line(String(mtime), p, cwd == null
   eq("place: a project on wsl → wsl's workspace, not the Mac one", at("/home/you/code/tools/a", "wsl"), { name: "tab.new", args: { space: "wsl/sp8", folder: "/home/you/code/tools/a" } });
   eq("place: a Mac project folder is no project for wsl", at("/Users/you/code/webshop", "wsl")?.args.space, "wsl/sp7");
   eq("place: no ~ on wsl → a new workspace on wsl", at("/home/you/x", "wsl", spaces.filter((s) => s.machine !== "wsl")), { name: "space.new", args: { machine: "wsl", folder: "/home/you/x" } });
-  eq("place: no ~ here → a tab here, never a space on another machine", at("/Users/you/x", "", spaces.filter((s) => s.machine)), { name: "tab.new", args: { folder: "/Users/you/x" } });
+  eq("place: no ~ here and none shown here → a new workspace on this computer, never another machine's", at("/Users/you/x", "", spaces.filter((s) => s.machine)), { name: "space.new", args: { machine: "", folder: "/Users/you/x" } });
   eq("place: project workspace missing → falls to ~", at("/Users/you/code/webshop", "", spaces.filter((s) => s.name !== "webshop" && s.name !== "deep"))?.args.space, "sp1");
 }
 
@@ -248,14 +248,14 @@ const LISTING = {
   eq("resume: each argv ends with --resume <sid>", w.runs.map(([, a]) => a.argv.slice(-2)).sort(), [["--resume", "s1"], ["--resume", "s2"], ["--resume", "w1"], ["--resume", "w2"]]);
 }
 {
-  // No workspace on wsl at all → space.new on wsl; no ~ here → tab.new here with no space.
+  // No workspace on wsl at all → space.new on wsl; none here → space.new here (s28: machine "", never the shown one elsewhere).
   const files = { [`wsl:${WSL}/.cache/flockbook/cache.json`]: { entries: {} }, [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: {} } };
   const w = await world({ settings: { claude_machine: "wsl" }, listing: LISTING, spaces: [], files });
   await w.where.machineHome("wsl");
   await w.ses.resumeSessions([{ sid: "w1", account: "HOME", machine: "wsl", cwd: "/home/you/notes", title: "n" }, { sid: "s1", account: "HOME", machine: "", cwd: "/Users/you/x", title: "m" }]);
   const [a, b] = w.runs;
   eq("resume: space.new on wsl with its folder and argv", [a[0], a[1].machine, a[1].folder, a[1].argv.slice(-2), "space" in a[1]], ["space.new", "wsl", "/home/you/notes", ["--resume", "w1"], false]);
-  eq("resume: tab.new here with no space and no machine", [b[0], "space" in b[1], "machine" in b[1], b[1].folder], ["tab.new", false, false, "/Users/you/x"]);
+  eq("resume: space.new on this computer, named ~", [b[0], b[1].machine, b[1].name, b[1].folder], ["space.new", "", "~", "/Users/you/x"]);
 }
 {
   // wsl unreachable (home unknown): its rows are skipped with a notice, the Mac's open.
@@ -386,6 +386,67 @@ const LISTING = {
   let waited = 0;
   await w.ses.resumeSessions([{ sid: "w1", account: "HOME", machine: "wsl", cwd: "/home/you/n", title: "t" }], { wait: async (ms) => { waited += ms; } });
   eq("pile-up (one pick): named ~, no wait", [w.runs[0][1].name, waited], ["~", 0]);
+}
+// 13. s28 (Codex R1 P2): the folder is the exact path the log names (no whitespace folded, no cut); a cut-off one is unknown.
+{
+  const w = await world();
+  const list = w.acc.accountList(TWO);
+  const rows = w.ses.parseListing([
+    row(secs(1000), LOG(MAC, "x1"), "/work/client  archive", "Spaces", "p"),
+    line(String(secs(2000)), LOG(MAC, "x2"), String.raw`"/work/cut\u00`, JSON.stringify("Cut path"), JSON.stringify("p")),
+  ].join("\n"), { machine: null, list, homeDir: MAC });
+  eq("parse: cwd kept exactly (two spaces)", rows.find((r) => r.sid === "x1")?.cwd, "/work/client  archive");
+  eq("parse: a cut-off cwd → unknown folder, the row kept", [rows.find((r) => r.sid === "x2")?.cwd, rows.find((r) => r.sid === "x2")?.title], ["", "Cut path"]);
+  eq("script: the cwd cut is long enough for any path", /cwd=[^\n]*cut -c 1-4[0-9]{3}/.test(w.ses.LIST_SCRIPT), true);
+}
+// 14. s28 (Codex R1 P2): a local session with no project or "~" workspace never opens in another machine's workspace:
+// the shown workspace when it is this computer's, else a new one here.
+{
+  const w = await world();
+  const projs = w.move.projectList([], () => MAC);
+  const sp = [{ id: "wsl/sp7", name: "work", machine: "wsl", active: true }, { id: "sp4", name: "misc", machine: null }];
+  eq("place: shown workspace is on wsl → space.new on this computer", w.ses.placeOf({ cwd: "/Users/you/x", machine: "" }, projs, sp), { name: "space.new", args: { machine: "", folder: "/Users/you/x" } });
+  const sp2 = [{ id: "wsl/sp7", name: "work", machine: "wsl" }, { id: "sp4", name: "misc", machine: null, active: true }];
+  eq("place: shown workspace is this computer's → a tab in it, named", w.ses.placeOf({ cwd: "/Users/you/x", machine: "" }, projs, sp2), { name: "tab.new", args: { space: "sp4", folder: "/Users/you/x" } });
+}
+// 15. s28 (Codex R1 P2): a Claude tab not identified yet blocks a resume into its folder (whatever its title), or every
+// resume on its machine when its folder is unknown; the rest open.
+{
+  const agents = [AGENT("t5", "sp1", "Something else")];
+  const files = { [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: {} } };
+  const w = await world({ listing: LISTING, agents, files, spaces: [{ id: "sp1", name: "~", machine: null }] });
+  w.herdr.panesNow = () => [{ terminal: "t5", cwd: "/Users/you/code/webshop" }];
+  const r = await w.ses.resumeSessions([
+    { sid: "s1", account: "HOME", machine: "", cwd: "/Users/you/code/webshop", title: "Cart fix" },
+    { sid: "s3", account: "HOME", machine: "", cwd: "/Users/you/code/webshop", title: null },
+    { sid: "s2", account: "WORK", machine: "", cwd: "/Users/you/code/tools", title: "Tools" },
+  ]);
+  eq("unidentified tab in that folder: both webshop picks skipped, tools opened", [r.opened, r.skipped.map((s) => [s.row.sid, s.why]), w.runs.map(([, a]) => a.argv.at(-1))],
+    [1, [["s1", "may be open already"], ["s3", "may be open already"]], ["s2"]]);
+}
+{
+  const agents = [AGENT("t5", "sp1", "")];
+  const files = { [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: {} } };
+  const w = await world({ listing: LISTING, agents, files, spaces: [{ id: "sp1", name: "~", machine: null }] });
+  const r = await w.ses.resumeSessions([{ sid: "s2", account: "WORK", machine: "", cwd: "/Users/you/code/tools", title: "Tools" }]);
+  eq("unidentified tab, folder unknown: every pick on that machine skipped", [r.opened, r.skipped.map((s) => s.why)], [0, ["may be open already"]]);
+}
+// 16. s28 (Codex R1 P2): the dialog and the restart offer share "being opened" claims: one never opens what the other
+// is opening or just opened.
+{
+  const files = { [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: {} } };
+  const w = await world({ listing: LISTING, files, spaces: [{ id: "sp1", name: "~", machine: null }] });
+  const OFFER = "flockbook.resume.offer";
+  w.st.setShared(OFFER, { at: now, tabs: [{ sid: "s3", account: "HOME", cwd: "/Users/you/code/webshop", claimAt: Date.now() }, { sid: "s2", account: "WORK", cwd: "/Users/you/code/tools", space: "sp1" }] });
+  const r = await w.ses.resumeSessions([{ sid: "s3", account: "HOME", machine: "", cwd: "/Users/you/code/webshop", title: null }, { sid: "s2", account: "WORK", machine: "", cwd: "/Users/you/code/tools", title: "Tools" }]);
+  eq("claims: s3 claimed by the offer → skipped; s2 opened", [r.opened, r.skipped.map((s) => [s.row.sid, s.why])], [1, [["s3", "being opened already"]]]);
+  eq("claims: s2 left the offer", (w.res.offer()?.tabs ?? []).map((x) => x.sid), ["s3"]);
+  const again = await w.ses.resumeSessions([{ sid: "s2", account: "WORK", machine: "", cwd: "/Users/you/code/tools", title: "Tools" }]);
+  eq("claims: s2 again right after → skipped (its tab may not be identified yet)", [again.opened, again.skipped.map((s) => s.why)], [0, ["being opened already"]]);
+  w.st.setShared(OFFER, { at: now, tabs: [{ sid: "s2", account: "WORK", cwd: "/Users/you/code/tools", space: "sp1" }] });
+  const n = w.runs.length;
+  await w.res.resumeOne("s2");
+  eq("claims: the offer's Resume opens nothing the dialog just opened", [w.runs.length - n, w.res.offer()], [0, null]);
 }
 console.log(bad ? `${bad} FAILED` : "all passed");
 process.exit(bad ? 1 : 0);

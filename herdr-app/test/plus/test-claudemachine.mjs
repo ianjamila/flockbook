@@ -202,6 +202,29 @@ async function resumeWorld(opts) {
   eq("resume all (pile-up): waited for it", waits.length >= 1, true);
 }
 {
+  // s28 (Codex R1 P2): wsl away 10 minutes; back with one of its three sessions gone and a new Claude tab that stays
+  // unidentified for two polls. The downtime still counts once the tab is identified: the lost one is offered (not
+  // taken for a tab closed on purpose and forgotten).
+  const tab = (t, sid) => ({ path: WORKLOG(sid), cwd: WSL, pids: [Number(t.slice(1)) * 10] });
+  const cacheW = { entries: { t1: tab("t1", "s-a"), t2: tab("t2", "s-b"), t3: tab("t3", "s-c") } };
+  const files = { [`wsl:${WSL}/.cache/flockbook/cache.json`]: cacheW, [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: {} } };
+  const ag = (t) => ({ app: "claude-code", address: `wsl/${t}`, space: "wsl/sp1", space_name: "~", title: `Tab ${t}`, tab_name: "1", tab_index: 0, program: { name: "Claude Code" } });
+  const agents = [ag("t1"), ag("t2"), ag("t3")];
+  const spaces = [{ id: "wsl/sp1", name: "~", machine: "wsl", tabs: [] }];
+  const w = await resumeWorld({ settings: { claude_machine: "wsl" }, platform: "windows", files, agents, spaces, ready: ["wsl"] });
+  await w.r.resumeTick();
+  w.herdr.hooks.machines = [{ name: null, layout: "ready" }, { name: "wsl", layout: "unavailable" }];
+  for (let i = 0; i < 20; i++) { now += 30_000; await w.r.resumeTick(); }
+  w.herdr.hooks.machines = [{ name: null, layout: "ready" }, { name: "wsl", layout: "ready" }];
+  agents.splice(0, agents.length, ag("t1"), ag("t2"), ag("t5"));
+  files[`wsl:${WSL}/.cache/flockbook/cache.json`] = { entries: { t1: tab("t1", "s-a"), t2: tab("t2", "s-b") } };
+  now += 30_000; await w.r.resumeTick();
+  now += 30_000; await w.r.resumeTick();
+  files[`wsl:${WSL}/.cache/flockbook/cache.json`] = { entries: { t1: tab("t1", "s-a"), t2: tab("t2", "s-b"), t5: tab("t5", "s-new") } };
+  now += 30_000; await w.r.resumeTick();
+  eq("downtime kept across unidentified polls: the lost session is offered", (w.r.offer()?.tabs ?? []).map((x) => x.sid), ["s-c"]);
+}
+{
   // The Mac (no claude_machine): remote tabs are never remembered (the PC that names wsl resumes them, not both).
   const files = { [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: { t1: { path: `${MAC}/.${NAME}/projects/-Users-you/s-mac.jsonl`, cwd: MAC, pids: [1] } } } };
   const agents = [

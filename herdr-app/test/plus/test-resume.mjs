@@ -91,10 +91,10 @@ eq("restart: offer kept, no second notice", [r.offer().tabs.length, notes.length
 await r.resumeOne("s-1");
 eq("resume one: tab.new", runs[0], ["tab.new", { space: "sp1", folder: `${HOME}/code/webshop`, argv: r.resumeArgv({ sid: "s-1", account: "WORK" }, HOME), name: "Checkout" }]);
 eq("resume one: leaves the offer", r.offer().tabs.map((x) => x.sid).sort(), ["s-2", "s-3"]);
-// A workspace that is gone: the selected one (no space given); no manual name: none.
+// A workspace that is gone: this computer's "~", the shown one when it is this computer's, else a new "~" here (s28).
 spacesList = [{ id: "sp1", name: "webshop", tabs: [] }];
 await r.resumeAll();
-eq("resume all: the rest", runs.slice(1).map(([, a]) => [a.space ?? null, a.argv.at(-1), a.name ?? null]), [["sp1", "s-2", null], [null, "s-3", null]]);
+eq("resume all: the rest", runs.slice(1).map(([n, a]) => [n, a.space ?? null, a.machine ?? null, a.argv.at(-1), a.name ?? null]), [["tab.new", "sp1", null, "s-2", null], ["space.new", null, "", "s-3", "~"]]);
 eq("resume all: offer cleared", r.offer(), null);
 // Dismiss.
 st.setShared("flockbook.resume.offer", { at: now, tabs: [{ sid: "x", account: "WORK", cwd: HOME }] });

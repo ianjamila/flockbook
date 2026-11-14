@@ -598,6 +598,32 @@ test("Copy full prompt: a file that can't be read says so and copies nothing; th
   assert.equal(log.overlays.at(-1).props.items[0].args.text, FULL);
 });
 
+// s28 (Codex R1 P2): a hand-off file rewritten later (a newer reply updates the same file) is never copied stale: each
+// Copy full prompt press reads it again, and a change in the chat drops what the menu would copy, so the tick reads anew.
+test("Copy full prompt: a rewritten file is copied as it is now; a chat change refreshes the menu's copy", async () => {
+  fake.exec = () => jl(header, logLine("c1"), { type: "splice", at: 0, count: 3 }, user("u1", "go"), asst("a1", shortReply),
+    { type: "row", id: "f-a1", k: "footer", text: "10:04" }, end);
+  let file = "First version.";
+  fake.readText = (p) => (p.endsWith("/handoffs/w.md") ? file : null);
+  const cx = fakeCx(); const v = new ChatView(cx); await cx.settle(); v.width = 900;
+  const root = v.render(cx);
+  lastList._args.render({ start: 2, end: 3 });
+  let copied = null;
+  const press = async () => { const c = { ...fakeCx(), write_to_clipboard: (s) => { copied = s; } }; pressAt(root, 700); lastList._h.on_item_click("f-a1", c); await Promise.all(c.tasks); };
+  await press();
+  assert.equal(copied, "First version.");
+  file = "Second version.";
+  await press();
+  assert.equal(copied, "Second version.", "a press reads the file again");
+  // The menu copies what was read last; a new row in the chat drops it and the tick reads the file again.
+  file = "Third version.";
+  v.feed().rows.push({ id: "u2", k: "user", text: "more" });
+  const tcx = fakeCx();
+  v.tick(tcx); await Promise.all(tcx.tasks);
+  lastList._h.on_item_secondary_click("a1", { button: "right", position: { x: 0, y: 4 }, local_position: { x: 50, y: 4 } }, cx);
+  assert.equal(log.overlays.at(-1).props.items[0].args.text, "Third version.");
+});
+
 test("Copy full prompt on another machine's tab reads the file there, with that machine's home", async () => {
   fake.agents = [agent("wsl/t3", "idle")];
   fake.machines = [{ name: null, layout: "ready" }, { name: "wsl", layout: "ready" }];
