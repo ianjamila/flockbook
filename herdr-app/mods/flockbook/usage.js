@@ -107,6 +107,15 @@ const two = (n) => String(n).padStart(2, "0");
 // "Sun 11:53" in local time.
 export const clock = (sec) => { const d = new Date(sec * 1000); return `${DAYS[d.getDay()]} ${two(d.getHours())}:${two(d.getMinutes())}`; };
 export const fullClock = (sec) => { const d = new Date(sec * 1000); return `${DAYS[d.getDay()]} ${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`; };
+// How long until the reset (owner 11-15 s38), rounded down so it never says more is left than is: "in 6 d 21 h",
+// "in 5 h 7 min", "in 42 min"; under a minute "in 1 min".
+export function until(ms) {
+  const m = Math.max(1, Math.floor(ms / 60_000));
+  const d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60), min = m % 60;
+  if (d > 0) return h > 0 ? `in ${d} d ${h} h` : `in ${d} d`;
+  if (h > 0) return min > 0 ? `in ${h} h ${min} min` : `in ${h} h`;
+  return `in ${min} min`;
+}
 // "5 min ago", "2 h ago", "3 d ago".
 export function ago(ms) {
   const m = Math.max(0, Math.round(ms / 60_000));
@@ -128,7 +137,7 @@ export function figures(row, now = Date.now()) {
   const left = past ? 100 : Math.max(0, Math.min(100, Math.round(r.weekly.left)));
   const age = now - r.at;
   const stale = age > STALE_MS;
-  const base = past ? "reset since the last reading" : resets != null ? `resets ${clock(resets)}` : "reset time unknown";
+  const base = past ? "reset since the last reading" : resets != null ? `resets ${clock(resets)} · ${until(resets * 1000 - now)}` : "reset time unknown";
   const line = stale && !past ? `${base} · as of ${ago(age)}` : base;
   const from = r.machine ? r.machine : "this computer";
   const tip = [who, past ? "the weekly limit has reset since this reading" : `${r.weekly.used}% of the weekly limit used`,
@@ -141,13 +150,16 @@ export const levelOf = (left) => (left == null ? null : left < LOW ? "low" : lef
 // own colours from the owner's VS Code palette (statusline.js `palette`): bright shades in dark mode, the darker
 // ones in light mode, where the bright ones are too pale on white. Claude's clay and the palette's blue for the names.
 const LEVEL_INDEX = { dark: { ok: 10, warn: 11, low: 9 }, light: { ok: 2, warn: 3, low: 1 } };
-const NAME_COLOUR = { dark: { claude: "#d97757", codex: 12 }, light: { claude: "#c15f3c", codex: 4 } };
+// Each Claude account its own shade, in the rows' order (owner 11-15 s38): Claude's clay, then the palette's magenta and
+// cyan, repeating; none is a level colour.
+const NAME_COLOUR = { dark: { claude: ["#d97757", 13, 14], codex: 12 }, light: { claude: ["#c15f3c", 5, 6], codex: 4 } };
 export function usageColours() {
   const p = palette();
   const mode = settings()?.dark === false ? "light" : "dark";
   const pick = (v) => (typeof v === "number" ? p[v] : v);
   const level = Object.fromEntries(Object.entries(LEVEL_INDEX[mode]).map(([k, i]) => [k, p[i]]));
-  return { level, claude: pick(NAME_COLOUR[mode].claude), codex: pick(NAME_COLOUR[mode].codex) };
+  const shades = NAME_COLOUR[mode].claude.map(pick);
+  return { level, claude: (n) => shades[n % shades.length], codex: pick(NAME_COLOUR[mode].codex) };
 }
 // </usage-pure>
 
@@ -186,6 +198,7 @@ export function usageBlock(t, now = Date.now()) {
   const list = accounts();
   const all = rows(snapShared(KEY_USAGE), list, home());
   const c = usageColours();
+  let claudeN = 0;                                      // the Claude rows' order, for their shades
   return v_flex().id("usage").flex_none().gap(8).mt(8).pt(10).px(10).border_t(1).border_color(t.border)
     .child(div().text_size(11.5).font_semibold().text_color(t.muted).child("Weekly usage left"))
     .children(all.map((row, i) => {
@@ -193,7 +206,7 @@ export function usageBlock(t, now = Date.now()) {
       const who = row.kind === "codex" ? null : row.email ?? row.name ?? baseName(row.folder);
       return v_flex().id(`usage-${i}`).gap(3).tooltip(f.tip)
         .child(h_flex().gap(6).items_center().min_w(0)
-          .child(div().id(`usage-${i}-name`).flex_none().text_size(12).font_semibold().text_color(row.kind === "codex" ? c.codex : c.claude).child(row.kind === "codex" ? "Codex" : "Claude"))
+          .child(div().id(`usage-${i}-name`).flex_none().text_size(12).font_semibold().text_color(row.kind === "codex" ? c.codex : c.claude(claudeN++)).child(row.kind === "codex" ? "Codex" : "Claude"))
           .when(Boolean(who), (el) => el.child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(who))))
         .child(h_flex().items_center().text_size(12)
           .child(div().flex_1().text_color(t.muted).child("Weekly"))

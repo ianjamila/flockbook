@@ -10,7 +10,7 @@ import { space } from "./fixtures.mjs";
 import { SideView } from "../mods/flockbook/side.js";
 import { KEY_MACHINES } from "../mods/flockbook/machines.js";
 import { KEY_CONFIG } from "../mods/flockbook/config.js";
-import { KEY_USAGE, pollUsage, figures, rows, merge, readings, clock, USAGE_MS, USAGE_REMOTE_MS } from "../mods/flockbook/usage.js";
+import { KEY_USAGE, pollUsage, figures, rows, merge, readings, clock, until, USAGE_MS, USAGE_REMOTE_MS } from "../mods/flockbook/usage.js";
 
 const NOW = new Date(2026, 10, 15, 14, 0).getTime();   // Sunday 15 Nov 2026, 14:00 local
 const secs = (y, mo, d, h, mi) => new Date(y, mo, d, h, mi).getTime() / 1000;
@@ -86,7 +86,7 @@ test("percent left, and a bar filled to what is left", () => {
   const el = draw(data({ "": [claude("/home/test/.claude", "me@example.test", 36, NOW - 60_000)] }));
   assert.equal(textOf(byId(el, "usage-0-left")), "36% left");
   assert.equal(byId(el, "usage-0-fill")._a.w, "36%");
-  assert.equal(textOf(byId(el, "usage-0-line")), `resets ${clock(secs(2026, 10, 22, 11, 53))}`);
+  assert.match(textOf(byId(el, "usage-0-line")), new RegExp(`^resets ${clock(secs(2026, 10, 22, 11, 53))} · in \\d`));
   assert.equal(clock(secs(2026, 10, 15, 11, 53)), "Sun 11:53");
 });
 
@@ -112,17 +112,21 @@ test("level colours: green, amber, red by what is left, in dark and light", () =
   assert.equal(fill(at(2)), "#cd3131");
 });
 
-test("product names are coloured: Claude clay, Codex blue (dark and light)", () => {
+// Owner 11-15 s38: each Claude account its own shade (in the rows' order), so the two read apart at a glance.
+test("product names are coloured: each Claude account its own shade, Codex blue (dark and light)", () => {
   const d = data({ "": [claude("/home/test/.claude", "me@example.test", 50, NOW - 60_000), codex(70, NOW - 60_000)] });
   const name = (el, i) => byId(el, `usage-${i}-name`);
   let el = draw(d);
   assert.equal(textOf(name(el, 0)), "Claude");
   assert.equal(name(el, 0)._a.text_color, "#d97757");
+  assert.equal(textOf(name(el, 1)), "Claude");
+  assert.equal(name(el, 1)._a.text_color, "#d670d6", "the second account (no reading yet) has its own shade");
   assert.equal(textOf(name(el, 2)), "Codex");
   assert.equal(name(el, 2)._a.text_color, "#3b8eea");
   fake.settings = { zoom: 1, dark: false };
   el = draw(d);
   assert.equal(name(el, 0)._a.text_color, "#c15f3c");
+  assert.equal(name(el, 1)._a.text_color, "#bc05bc");
   assert.equal(name(el, 2)._a.text_color, "#0451a5");
 });
 
@@ -134,10 +138,25 @@ test("a reset time already past: 100% left and a line saying so", () => {
   assert.equal(textOf(byId(el, "usage-0-line")), "reset since the last reading");
 });
 
+// Owner 11-15 s38: how long until the reset, next to its day and time. Rounded down, so it never says more than is left.
+test("time until the reset: days and hours, hours and minutes, or minutes", () => {
+  const H = 3_600_000, D = 24 * H;
+  assert.equal(until(6 * D + 21 * H + 53 * 60_000), "in 6 d 21 h");
+  assert.equal(until(2 * D), "in 2 d");
+  assert.equal(until(D + 59 * 60_000), "in 1 d");
+  assert.equal(until(5 * H + 7 * 60_000), "in 5 h 7 min");
+  assert.equal(until(3 * H), "in 3 h");
+  assert.equal(until(42 * 60_000 + 59_000), "in 42 min");
+  assert.equal(until(20_000), "in 1 min", "under a minute still says 1 min");
+  // A reset already past says nothing of the kind (that line is "reset since the last reading").
+  const past = figures({ kind: "claude", email: "a@b.test", reading: { ...claude("/c", "a@b.test", 36, NOW - 60_000, NOW / 1000 - 60), machine: "" } }, NOW);
+  assert.equal(past.line, "reset since the last reading");
+});
+
 test("a reading older than 15 minutes says how old", () => {
   const f = (age) => figures({ kind: "claude", email: "a@b.test", reading: { ...claude("/c", "a@b.test", 36, NOW - age), machine: "" } }, NOW);
-  assert.equal(f(14 * 60_000).line, `resets ${clock(secs(2026, 10, 22, 11, 53))}`);
-  assert.equal(f(2 * 3_600_000).line, `resets ${clock(secs(2026, 10, 22, 11, 53))} · as of 2 h ago`);
+  assert.equal(f(14 * 60_000).line, `resets ${clock(secs(2026, 10, 22, 11, 53))} · in 6 d 21 h`);
+  assert.equal(f(2 * 3_600_000).line, `resets ${clock(secs(2026, 10, 22, 11, 53))} · in 6 d 21 h · as of 2 h ago`);
   assert.match(f(20 * 60_000).line, /as of 20 min ago$/);
   assert.match(f(3 * 86_400_000).line, /as of 3 d ago$/);
   const el = draw(data({ "": [claude("/home/test/.claude", "me@example.test", 36, Date.now() - 2 * 3_600_000)] }));
