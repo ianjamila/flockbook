@@ -9,6 +9,7 @@ import { spaceAgents, spaceTabs, activeTab, currentAgent, currentTerminal, tabLa
   SPIN_MS, FADE, sidebarShown, toggleSidebar, loadSidebar, showScreen, showOverview, showSettings, showSessions, watchEdge, noteWindowHeight, applyTermRect, termShown, agentName, tabStatus, tablistShown, toggleTablist, watchGrace, keepTerminal, readTermPlace, KEY_TERM, noteWidth, KEY_WORK_W } from "./state.js";
 import { loadConfig, pollUpdate, updateDot, stepTextSize } from "./config.js";
 import { checkHelperPatch } from "./patchcheck.js";
+import { startAwake } from "./awake.js";
 import { asksTick, TICK_MS as ASKS_MS } from "./asks.js";
 import { parkedTick, withSnapshot, TICK_MS as PARKED_MS } from "./parked.js";
 import { aboutTick, ABOUT_TICK_MS, requestRewrite, KEY_REDO, KEY_BUSY, lockFree } from "./ai.js";
@@ -138,6 +139,8 @@ export function startTop(cx, owner) {
   cx?.timer?.every(AUTO_MOVE_MS, (cx) => cx.spawn(async (cx) => { await suggestTick(); cx.notify(); }));
   // The tab menu's "Move to …" (one copy takes it), and a redraw when a "moved here" badge comes or goes.
   cx?.timer?.every(400, (cx) => { if (shared(MOVE_REQUEST)) cx.spawn((cx) => serveMoveRequest(cx)); });
+  // Keeps this computer awake while its agents work (awake.js, s36; one copy acts per tick).
+  startAwake(cx);
   cx?.timer?.every(15_000, (cx) => {
     const n = withSnapshot(() => spaceTabs().filter((x) => movedBadge(tabAgents(x.id)[0]?.address)).length);
     if (n || owner.badges) cx.notify();

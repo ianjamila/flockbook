@@ -15,6 +15,7 @@
 //!   flockbook-modfeed helper install --machine <m> --sha256 <hex>   (the helper on another machine; after the user's yes)
 //!   flockbook-modfeed helper remove --machine <m>
 //!   flockbook-modfeed usage [--machine <m>]   (the weekly limit left per account: `usage` lines; read only; --machine: the helper there)
+//!   flockbook-modfeed awake  --for <secs> | --release | --status   (keep this computer from idle sleep: one detached holder for <secs>, replaced on renewal; an `awake` line)
 //!   flockbook-modfeed update-check --home <herdr-app home> [--dismiss <version>]   (a newer release? once a day)
 //!
 //! Every command takes `--home <herdr-app home>` (the mod passes it): its flockbook/config.json has the
@@ -23,7 +24,7 @@
 //! A terminal `m/tN` on another machine: the command runs there, in the helper there (`remote`). Rust only.
 
 use crate::protocol::{JsonLines, ABILITIES, PROTOCOL_VERSION, SIDECAR_VERSION};
-use crate::{cards, config, feed, locate, paste, phone, queue, remote, status, update, usage};
+use crate::{awake, cards, config, feed, locate, paste, phone, queue, remote, status, update, usage};
 use herdr_core::hc::{HcClient, HcSession};
 use herdr_core::PaneScreen;
 use herdr_core::resolver::SessionResolver;
@@ -63,7 +64,7 @@ pub fn run(argv: &[String]) -> String {
     match cmd.as_str() {
         "version" => {
             // The commands, then what this build can do beyond them (review P3: from ABILITIES, so a new one is listed).
-            let mut commands: Vec<&str> = vec!["version", "feed", "status", "card", "approve", "answer", "send", "paste-image", "helper", "update-check", "queue", "phone", "commands", "parked", "usage"];
+            let mut commands: Vec<&str> = vec!["version", "feed", "status", "card", "approve", "answer", "send", "paste-image", "helper", "update-check", "queue", "phone", "commands", "parked", "usage", "awake"];
             commands.extend(ABILITIES);
             r.out.emit_value(json!({"type": "version", "commands": commands, "release": update::release()}));
             r.finish(true)
@@ -128,6 +129,45 @@ pub fn run(argv: &[String]) -> String {
                 r.out.emit_value(line);
             }
             r.finish(true)
+        }
+        "awake" => {
+            // Keeps this computer from idle sleep (awake.rs): the mod asks for 3 minutes every minute while agents work.
+            let for_secs = opt("--for");
+            let modes = [for_secs.is_some(), has("--release"), has("--status")].iter().filter(|m| **m).count();
+            let secs = match for_secs.as_deref().map(str::parse::<u64>) {
+                Some(Ok(n)) if (1..=awake::MAX_SECS).contains(&n) => Some(n),
+                Some(_) => return r.fail("usage", &format!("awake --for needs a number of seconds, 1 to {}", awake::MAX_SECS)),
+                None => None,
+            };
+            if modes != 1 {
+                return r.fail("usage", "awake needs one of --for <secs>, --release, --status");
+            }
+            if !awake::supported() {
+                r.out.emit_value(awake::unsupported());
+                return r.finish(true);
+            }
+            let Some(dir) = config::dir(home().as_deref()) else { return r.fail("no-home", "awake needs --home <herdr-app home>") };
+            if let Some(secs) = secs {
+                match awake::hold(&dir, secs) {
+                    Ok(line) => r.out.emit_value(line),
+                    Err(e) => return r.fail("awake", &e),
+                }
+            } else if has("--release") {
+                r.out.emit_value(awake::release(&dir));
+            } else {
+                r.out.emit_value(awake::status(&dir));
+            }
+            r.finish(true)
+        }
+        "awake-hold" => {
+            // The holder itself on Windows (awake.rs); started by `awake --for`, not by a person or the mod.
+            match (args.first().and_then(|s| s.parse::<u64>().ok()), args.get(1), args.get(2)) {
+                (Some(secs), Some(record), Some(token)) if awake::supported() => {
+                    awake::hold_here(secs.min(awake::MAX_SECS), Path::new(record), token);
+                    r.finish(true)
+                }
+                _ => r.fail("usage", "awake-hold <secs> <record file> <token> (Windows)"),
+            }
         }
         "update-check" => {
             let dir = config::dir(home().as_deref());

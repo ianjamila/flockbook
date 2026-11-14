@@ -13,6 +13,7 @@ import { usageLines, cooledAccounts, accountName, clockText, localOffset, autoPa
 import { ghCounts } from "./asks.js";
 import { accounts } from "./accounts.js";
 import { projects } from "./automove.js";
+import { setStayAwake } from "./awake.js";
 import { claudeMachine, localWindows, NEEDS_MACHINE } from "./where.js";
 // The accounts in use (the "accounts" setting) and the project workspaces (the "projects" setting), in words.
 export function accountsLine() {
@@ -80,11 +81,14 @@ export const SETTINGS = [
   // Owner 11-13: "can the claude icon be dancing when its working" (tabs.js dances).
   { key: "dance", title: "Dancing agent icons", choices: [["on", "On", "on"], ["off", "Off", "off"]],
     about: "In the tab list, a working agent's icon hops and sways until its work stops. Off: it stays still; the spinner beside it still turns." },
+  // s36 (owner 11-15: "Yes, but lid open only"): awake.js holds this computer from idle sleep while its agents work.
+  { key: "stay_awake", title: "Keep this computer awake while agents work", choices: [["on", "On", "on"], ["off", "Off", "off"]],
+    about: "While an agent on this computer works (or runs CI or a review behind a finished turn, or waits on you for under 3 hours), this computer is kept from going to sleep on its own, and it may sleep 15 minutes after the work ends. The screen can still turn off, and closing the lid still sleeps it." },
 ];
 
 // The sidebar's sections; `parts`: [heading, setting keys] in order.
 export const SECTIONS = [
-  { id: "general", label: "General", icon: "sliders", parts: [["CHAT", ["text_size", "status_row"]], ["TERMINAL", ["terminal_size"]], ["TAB LIST", ["dance"]], ["OVERVIEW", ["about_line", "about_pause", "about_cap", "accounts_info"]], ["OTHER MACHINES", ["remote_helper"]]] },
+  { id: "general", label: "General", icon: "sliders", parts: [["CHAT", ["text_size", "status_row"]], ["TERMINAL", ["terminal_size"]], ["TAB LIST", ["dance"]], ["OVERVIEW", ["about_line", "about_pause", "about_cap", "accounts_info"]], ["THIS COMPUTER", ["stay_awake"]], ["OTHER MACHINES", ["remote_helper"]]] },
   { id: "workflow", label: "Workflow", icon: "tool", parts: [["NEEDS YOU", ["pipeline_asks", "worth_considering"]], ["DONE", ["handoff_marks"]], ["WORKSPACES", ["auto_move"]]] },
   { id: "phone", label: "Phone page", icon: "phone" },
   { id: "updates", label: "Updates", icon: "refresh", parts: [["UPDATES", ["check_updates"]]] },
@@ -139,7 +143,8 @@ export class SettingsView {
 
   loginInput() { return Input.new(this.login).w_full(); }
 
-  choose(key, value, cx) { cx.spawn(async (cx) => { await setSetting(key, value); cx.notify(); }); }
+  // stay_awake also acts at once (off: the hold is released now; awake.js).
+  choose(key, value, cx) { cx.spawn(async (cx) => { await (key === "stay_awake" ? setStayAwake(value) : setSetting(key, value)); cx.notify(); }); }
 
   render(cx) {
     const t = theme();

@@ -52,6 +52,7 @@ does not download; `install-isolated.sh` copies the sidecar in.
 | `queue` | `--terminal <addr>` `[--cache <file>]` (Rust sidecar only; `serve` and other machines) | `queued` |
 | `commands` | `--terminal <addr>` `[--cache <file>]` (Rust sidecar only) | `commands` |
 | `usage` | `[--machine <m>]` `[--cache <file>]` (Rust sidecar only) | `usage` (none, one or several) |
+| `awake` | `--for <secs>` or `--release` or `--status` (Rust sidecar only; this computer only) | `awake` |
 | `helper install` | `--machine <m> --sha256 <hex> [--cache <file>]` | `installed` |
 | `helper remove` | `--machine <m> [--cache <file>]` | `removed` |
 | `update-check` | `--home <herdr-app home>` `[--dismiss <x.y.z>]` (Rust sidecar only) | `update` |
@@ -172,7 +173,7 @@ Targets: `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `universal-a
 ### `version`
 
 ```json
-{"commands":["version","feed","status","card","approve","answer","send","paste-image","helper","update-check","queue","phone","commands","parked","usage"],"release":"0.9.0","type":"version"}
+{"commands":["version","feed","status","card","approve","answer","send","paste-image","helper","update-check","queue","phone","commands","parked","usage","awake"],"release":"0.9.0","type":"version"}
 ```
 
 `commands`: the commands this sidecar has. The mod hides actions whose command is missing.
@@ -410,6 +411,40 @@ know `usage` answers with a `usage` error, which the mod skips quietly.
 ```json
 {"type":"usage","kind":"claude","config":"/Users/me/.claude","email":"me@example.com","weekly":{"left":36,"used":64,"resets_at":1795208400},"at":1763197000000}
 {"type":"usage","kind":"codex","plan":"prolite","weekly":{"left":80,"used":20,"resets_at":1795252974},"at":1763197000000}
+```
+
+### `awake` (`awake`)
+
+Keeps THIS computer from idle sleep while agents work (the mod's `awake.js` decides when; see below). It never runs on
+another machine, takes no `--machine`, and needs `--home` (the mod passes it): the holder is recorded in
+`<home>/flockbook/awake.json`. The screen may still turn off and lock; closing the lid still sleeps the computer (that
+needs admin rights, and `pmset` and `sudo` are never used).
+
+- `awake --for <secs>` (1 to 3600): starts ONE holder for `<secs>`. A holder already there is replaced: the new one
+  starts first, then the old one is stopped. A holder always ends by itself after its time, so a crashed Herdr never
+  keeps the computer awake for longer than that. `until` is in seconds; `replaced`: an earlier holder of ours was running.
+- `awake --release`: stops our holder at once (`was` false: none was running).
+- `awake --status`: `holding` (with `pid` and `until`) or `idle`.
+- A computer that cannot hold (Linux): `state` `unsupported` with `ok` true; nothing is started and the mod shows nothing.
+- Errors: `usage` (no mode, a bad number of seconds), `no-home`, `awake` (the holder could not be started; the message says why).
+
+The holder: on a Mac a detached `caffeinate -i -t <secs>` (idle sleep only; not `-d`, not `-s`). On Windows this helper
+again as `awake-hold <secs> <record file> <token>` (not for the mod to call): it asks for `ES_SYSTEM_REQUIRED` and ends
+when its time is up or the record file no longer has its token (a renewal or a release changes it). A recorded pid is
+stopped only when it is still OUR holder (on a Mac: the start time that was recorded, and caffeinate as its program), so a
+recycled pid, or another program's caffeinate (Claude Code runs one), is never touched.
+
+What the mod does with it (`awake.js`, the Flockbook setting `stay_awake`, default `on`): while this computer's agents
+work (a tab working; a finished turn with CI, a Codex round or build agents behind it, as the Overview counts them; a tab
+blocked on the owner for under 3 hours; agents on other machines never count, on Windows the WSL machine named by
+`claude_machine` is this computer) it renews `awake --for 180` every minute, keeps renewing for 15 minutes after the last
+work, then releases. A failed call is shown once ("Can't keep awake: …") and not retried for 5 minutes. A helper whose
+`version` does not list `awake` is not asked, and the side bar shows nothing.
+
+```json
+{"type":"awake","state":"holding","for":180,"pid":4242,"until":1795208400,"replaced":false}
+{"type":"awake","state":"released","was":true}
+{"type":"awake","state":"idle"}
 ```
 
 ### `parked` (`parked`)
