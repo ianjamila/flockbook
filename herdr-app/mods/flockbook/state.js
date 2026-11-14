@@ -259,7 +259,11 @@ export function overlays(a) {
       out.push({ glyph: ch, group: "merging", word: "merging", tip: "it is merging (you said merge; the merge queue or gate runs)", ...(b?.shells && !handoffOf(a?.address) ? { wait: true } : {}) });
       continue;
     }
-    out.push({ glyph: ch, group: o[0], word: o[1], tip: o[2] });
+    // ⏳ / 🔍 on a finished turn: the tab-title hook keeps them only while a CI / merge watch or a Codex run goes on
+    // (it re-checks them at every turn end), so they are live work, ahead of a leftover ✅ or answered 🔀 (owner 11-14
+    // 20:00: "⏳✅ … PR #2049" sat in Done while its browser tests ran; its footer and reply did not say CI).
+    const live = (ch === "⏳" || ch === "🔍") && a.status !== "working" && a.status !== "blocked";
+    out.push({ glyph: ch, group: o[0], word: o[1], tip: o[2], ...(live ? { wait: true } : {}) });
   }
   // Only a background AGENT keeps the tab working (it reports back and the turn goes on); leftover shells alone
   // (a dev server, a forgotten watch) leave it Done with this hint (owner 11-12 16:45; real CI waits carry ⏳).

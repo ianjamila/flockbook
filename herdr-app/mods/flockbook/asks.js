@@ -335,7 +335,11 @@ const MERGE_WAIT = /\b(?:in(?:to)?|through|joins?|joined|entered)\s+(?:GitHub's\
 // A GitHub build (Actions, a workflow run, "the build") counts as CI too (owner 11-14 02:54: a tab waiting on "the
 // helper build … on GitHub" sat under Done).
 const CI_THING = String.raw`(?:CI|GitHub(?:\s+Actions)?|Actions|(?:[\w.-]+\s+)?workflow(?:\s+run)?|(?:[\w.-]+\s+)?build)`;
-const CI_WAIT = new RegExp(String.raw`\bwait(?:ing)?\s+(?:for|on)\s+(?:the\s+)?${CI_THING}\b|\b${CI_THING}\b[^.\n]{0,80}?\b(?:still running|is running|in progress|pending|to finish)\b|\bwhile CI runs\b`, "i");
+// So do the PR's browser / E2E tests and its checks (owner 11-14 20:00: "The browser tests are now running on the new
+// version (run 4359…)" sat in Done).
+const CI_TESTS = String.raw`(?:(?:browser|e2e|end-to-end|playwright|integration)\s+tests?|E2E(?:\s+(?:run|suite))?|(?:PR\s+|required\s+)?checks)`;
+const CI_RUNNING = String.raw`(?:still running|(?:is|are)\s+(?:now\s+)?running|in progress|pending|to finish)`;
+const CI_WAIT = new RegExp(String.raw`\bwait(?:ing)?\s+(?:for|on)\s+(?:the\s+)?(?:${CI_THING}|${CI_TESTS})\b|\b(?:${CI_THING}|${CI_TESTS})\b[^.\n]{0,80}?\b${CI_RUNNING}\b|\bwhile CI runs\b`, "i");
 // The last reply of the turn above the input box (`top`: the box's top rule): its last "⏺ " text that is not a tool
 // call ("⏺ Bash(…)") or a background notice, with its wrapped lines AND its later paragraphs (indented text after
 // blank lines; s13 Codex R1 P2), up to the next unindented line or a tool's ⎿ output. "" when there is none.
