@@ -336,6 +336,7 @@ pub fn approve<S: PaneScreen + ?Sized>(pane: &Pane, screen: &S, log: Option<&Pat
         Claim::Got => {}
         Claim::Taken => return already_answered(),
         Claim::Busy => return busy(),
+        Claim::Wait => return Done::new("busy", Some("The last answer's key may still be arriving, so this one sent nothing. Wait a few seconds and press again.")),
     }
     // The screen is read again right before the key, and the key goes only while the box is still this id.
     match approval::respond_if_open(screen, &pane.id, &id, allow, &agent.kind, blocked, pending.as_ref(), Some(&gate(pane))) {
