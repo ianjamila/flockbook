@@ -11,7 +11,7 @@
 // showed as "Merging"): the PR's number comes from the merge hand-off, or from a "#N is merged" line on screen, and
 // GitHub says (gh pr view, at most every 2 minutes per tab, only while a 🔀 without a hand-off shows).
 import { hc, shared, setShared, exec, panes, home, appHome, readTextFile, writeTextFile } from "herdr";
-import { agents } from "./parked.js";
+import { agents, snapShared } from "./parked.js";
 import { setting } from "./config.js";
 import * as sidecar from "./sidecar.js";
 
@@ -175,7 +175,7 @@ async function logQuestions(fresh, list) {
   try { await writeTextFile(questionLog(), keepLog(was, lines), was); } catch { /* the next new one writes again */ }
 }
 
-export const askOf = (address) => (address ? shared(KEY_ASKS)?.[address] ?? null : null);
+export const askOf = (address) => (address ? snapShared(KEY_ASKS)?.[address] ?? null : null);
 
 // An answered ask leaves Needs you at once (owner 11-12: after "merge" it took ~10 s, the next tick): a send that went
 // out (the Needs you buttons, the chat's reply box) calls answered(address), which drops the ask from KEY_ASKS and
@@ -393,8 +393,8 @@ export function footerFolder(screen, homeDir) {
   if (!m) return null;
   return m[1].startsWith("~") ? (homeDir ? homeDir + m[1].slice(1) : null) : m[1];
 }
-export const handoffOf = (address) => Boolean(address && shared(KEY_HANDOFF)?.[address]);
-export const bgOf = (address) => (address ? shared(KEY_BG)?.[address] ?? null : null);
+export const handoffOf = (address) => Boolean(address && snapShared(KEY_HANDOFF)?.[address]);
+export const bgOf = (address) => (address ? snapShared(KEY_BG)?.[address] ?? null : null);
 // "1 shell running · 2 agents running"
 export const bgWords = (b) => [b?.shells ? `${b.shells} ${b.shells === 1 ? "shell" : "shells"} running` : null, b?.agents ? `${b.agents} ${b.agents === 1 ? "agent" : "agents"} running` : null].filter(Boolean).join(" · ");
 
@@ -512,11 +512,11 @@ export const KEY_NOW = "flockbook.now";   // { [address]: { now, steps, helpers 
 // What a WORKING tab's Now line says it waits on: "review" (a Codex / Fable job, e.g. the pipeline's own "Waiting for
 // the round 10 Codex job", which puts no 🔍 in the title), "ci", or null (s29, owner 11-14 "Live work wins").
 export function nowWait(address) {
-  const t = address ? shared(KEY_NOW)?.[address]?.now : null;
+  const t = address ? snapShared(KEY_NOW)?.[address]?.now : null;
   if (!t) return null;
   return CI_WAIT.test(t) ? "ci" : REVIEW_WAIT.test(t) ? "review" : null;
 }
-export const nowOf = (address) => (address ? shared(KEY_NOW)?.[address] ?? null : null);
+export const nowOf = (address) => (address ? snapShared(KEY_NOW)?.[address] ?? null : null);
 
 // The PR a tab's 🔀 is about, and what GitHub said of it: { pr, repo, state? } or null.
 export const prOf = (address) => (address ? shared(KEY_PRS)?.[address] ?? null : null);

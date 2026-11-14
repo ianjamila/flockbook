@@ -56,5 +56,22 @@ zero();
 eq("throw: passed on, and the snapshot ended (fresh read after)", [threw, p.agents().length, reads.agents], [true, 1, 1]);
 eq("throw: a later render reads again", p.withSnapshot(() => p.agents().length), 1);
 
+// snapShared: one of Flockbook's own maps, read once per snapshot (11-15); outside one, every call reads.
+{
+  let n = 0;
+  const st2 = fakeShared({ "flockbook.asks": { t1: { kind: "round" } } });
+  const h2 = { ...st2, shared: (k) => { n++; return st2.shared(k); }, agents: () => [], spaces: () => [], panes: () => [], focused: () => null };
+  const q = await loadMod("parked.js", { herdr: h2, "./sidecar.js": { call: async () => null, hasCommand: async () => false } });
+  n = 0; q.snapShared("flockbook.asks"); q.snapShared("flockbook.asks");
+  eq("snapShared outside: each call reads", n, 2);
+  n = 0;
+  const kinds = q.withSnapshot(() => [1, 2, 3, 4, 5].map(() => q.snapShared("flockbook.asks")?.t1?.kind));
+  eq("snapShared inside: read once, same value each call", [n, kinds], [1, ["round", "round", "round", "round", "round"]]);
+  n = 0; q.withSnapshot(() => { q.snapShared("flockbook.asks"); q.snapShared("flockbook.now"); q.snapShared("flockbook.now"); });
+  eq("snapShared inside: once per key (a missing map too)", n, 2);
+  st2.setShared("flockbook.asks", { t1: { kind: "merge" } });
+  eq("snapShared: the next snapshot reads the new value", q.withSnapshot(() => q.snapShared("flockbook.asks").t1.kind), "merge");
+}
+
 console.log(bad ? `${bad} FAILED` : "all passed");
 process.exit(bad ? 1 : 0);

@@ -16,7 +16,7 @@
 // - "Rewrite About line" (hover link, tab menu) → KEY_REDO → done by the same one-copy tick, never alongside it.
 // - Tabs idle or done for IDLE_MS are left alone once they have a line.
 import { exec, hc, home, appHome, terminals, shared, setShared } from "herdr";
-import { agents, spaces } from "./parked.js";
+import { agents, spaces, snapShared } from "./parked.js";
 import { setting } from "./config.js";
 import { sessionTopic } from "./state.js";
 import { accountOf, accountName, claudeRun } from "./accounts.js";
@@ -343,7 +343,7 @@ export async function screenOf(address, lines) {
   try { const r = await hc(["read", address, "--lines", String(lines)]); return r.code === 0 ? r.stdout : null; } catch { return null; }
 }
 
-export const aboutEntry = (address) => (address ? shared(KEY_ABOUT)?.[address] ?? null : null);
+export const aboutEntry = (address) => (address ? snapShared(KEY_ABOUT)?.[address] ?? null : null);
 export const aboutOf = (address) => aboutEntry(address)?.text ?? null;
 export const aboutMore = (address) => aboutEntry(address)?.more ?? null;
 export const rewriting = (address) => Boolean(address && shared(KEY_REDO)?.[address]);

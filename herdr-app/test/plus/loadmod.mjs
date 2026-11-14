@@ -8,7 +8,7 @@ let n = 0;
 const stub = () => new Proxy({}, { get: (_, k) => (typeof k === "symbol" ? undefined : () => undefined) });
 // parked.js with no parked tab: Herdr's own lists, as the mod reads them through it (owner 11-13). A test that
 // loads the real parked.js passes it as "./parked.js".
-const herdrLists = (h = {}) => ({ agents: () => h.agents?.(), spaces: () => h.spaces?.(), parkedOf: () => null, parkedTick: async () => {}, withSnapshot: (fn) => fn() });
+const herdrLists = (h = {}) => ({ agents: () => h.agents?.(), spaces: () => h.spaces?.(), parkedOf: () => null, parkedTick: async () => {}, withSnapshot: (fn) => fn(), snapShared: (k) => h.shared?.(k) });
 export async function loadMod(file, fakes = {}) {
   let src = fs.readFileSync(MOD + file, "utf8");
   src = src

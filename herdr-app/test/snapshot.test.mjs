@@ -96,3 +96,38 @@ test("main.js: any view's render runs inside one snapshot", () => {
   fb.render(cx);
   assert.ok(reads.agents <= 2 && reads.spaces <= 2, `main render read agents ${reads.agents}×, spaces ${reads.spaces}×`);
 });
+
+// Flockbook's own maps (asks, background work, hand-offs, Now lines, About lines) were read again for every card: 337
+// host reads per Overview redraw with 8 tabs (11-15). The read-only look-ups (askOf, bgOf, handoffOf, nowOf, nowWait,
+// aboutEntry) read each map once per snapshot too.
+const MAPS = ["flockbook.asks", "flockbook.background", "flockbook.handoff", "flockbook.now", "flockbook.about"];
+function mapReadsOf(View) {
+  const counts = {};
+  const real = fake.shared;
+  fake.shared = new Proxy(real, { get(t, k) { if (typeof k === "string") counts[k] = (counts[k] ?? 0) + 1; return t[k]; } });
+  try {
+    const cx = fakeCx();
+    const v = new View(cx);
+    for (const k of Object.keys(counts)) delete counts[k];
+    v.render(cx);
+  } finally { fake.shared = real; }
+  return Object.fromEntries(MAPS.map((k) => [k, counts[k] ?? 0]));
+}
+for (const [name, View] of [["Overview", OverviewView], ["side bar", SideView], ["top bar", TopView], ["Needs you", NeedsView], ["tab list", TabsView]]) {
+  test(`${name}: one render reads each of Flockbook's shared maps at most once`, () => {
+    const r = mapReadsOf(View);
+    assert.ok(Object.values(r).every((n) => n <= 1), `${name} read ${JSON.stringify(r)} in one render`);
+  });
+}
+
+test("Needs you: one tick reads each of Flockbook's shared maps at most once", () => {
+  const counts = {};
+  const real = fake.shared;
+  const cx = fakeCx();
+  const v = new NeedsView(cx);
+  fake.shared = new Proxy(real, { get(t, k) { if (typeof k === "string") counts[k] = (counts[k] ?? 0) + 1; return t[k]; } });
+  try { v.tick(cx); } finally { fake.shared = real; }
+  const r = Object.fromEntries(MAPS.map((k) => [k, counts[k] ?? 0]));
+  assert.ok(r["flockbook.asks"] >= 1, "the tick looked at the asks");
+  assert.ok(Object.values(r).every((n) => n <= 1), `tick read ${JSON.stringify(r)}`);
+});

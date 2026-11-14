@@ -107,6 +107,16 @@ export function withSnapshot(fn) {
   try { return fn(); } finally { snap = null; }
 }
 
+// One of Flockbook's own shared maps (asks, background work, hand-offs, Now and About lines), read once per snapshot
+// (11-15: the Overview read them 337 times per redraw for 8 tabs, again per card). Only for read-only look-ups: a
+// caller must not change the value, and anything that writes the map reads it with shared() itself.
+export function snapShared(key) {
+  if (!snap) return shared(key);
+  const m = (snap.shared ??= new Map());
+  if (!m.has(key)) m.set(key, shared(key));
+  return m.get(key);
+}
+
 // Herdr's agents with the parked ones, in space, tab, pane order.
 export function agents() {
   if (snap) return (snap.agents ??= readAgents()).slice();
