@@ -174,6 +174,14 @@ export class ChatView {
       const answer = await sidecar.feed(f.address, f.cursor);
       const t1 = now();
       const at = applyFeed(f, answer);
+      // s36: a good read proves the helper there is this version now, also when it was fixed without this card (by
+      // hand, from another computer): a plain send's ask and its note go. An ask for an ability it lacks stays.
+      const ask = this.composer?.helperAsk;
+      if (!answer.error && ask && ask.address === f.address && !(ask.err?.remote?.missing?.length)) {
+        this.composer.helperAsk = null;
+        if (this.composer.note?.helper) this.composer.note = null;
+        cx.notify();
+      }
       record("feed.exec", t1 - t0);
       record("feed.apply", now() - t1, at >= 0 ? 1 : 0);
       if (at >= 0 && f === this.feed()) {

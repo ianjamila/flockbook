@@ -513,6 +513,23 @@ test("Needs you: a card on another machine that can't be read for its helper sho
   assert.ok(byId(el, "needs-card-allow"), "and the card is read again");
 });
 
+// s36 (s34 recheck item 2): the helper fixed WITHOUT any card (by hand, or from another computer): the next good read
+// of the card proves it is this version, so the press's install card and its note go and the approval can be pressed.
+test("the helper fixed elsewhere: the next good read clears a press's install card and its note", async () => {
+  fake.agents = [agent("box/t7", "blocked")];
+  const state = {}; fake.exec = remoteHelper34(state);
+  const cx = fakeCx(); const c = new Cards();
+  await c.poll(cx, "box/t7", true);
+  byId(c.view("box/t7", T), "card-allow")._h.on_click({}, cx); await cx.settle();
+  assert.ok(byId(c.view("box/t7", T), "helper-install"), "the press's card");
+  state.installed = true;   // updated by hand: no card was used
+  await c.poll(cx, "box/t7", true, true);
+  const el = c.view("box/t7", T);
+  assert.equal(byId(el, "helper-install"), null, "a good read: the card goes");
+  assert.equal(byId(el, "card-note"), null, "and its note");
+  assert.ok(byId(el, "card-allow"), "the approval stays, to press again");
+});
+
 test("an install from another card (the chat's, Needs you's) clears a press's install card and its note", async () => {
   fake.agents = [agent("box/t7", "blocked")];
   const state = {}; fake.exec = remoteHelper34(state);

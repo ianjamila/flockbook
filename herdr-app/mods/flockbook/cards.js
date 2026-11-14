@@ -170,7 +170,8 @@ export class Cards {
   }
 
   // Reads the card when `want`, at most every CARD_MS unless `force`. Drops it when not wanted.
-  async poll(cx, address, want, force = false) {
+  // `afterPress`: the re-read right after a press, which keeps that press's install card (s36).
+  async poll(cx, address, want, force = false, afterPress = false) {
     if (!address) return;
     const e = this.entry(address);
     if (!want) { if (e.card) { e.card = null; e.note = null; cx.notify(); } return; }
@@ -181,7 +182,14 @@ export class Cards {
       // s34: a card read on another machine whose helper must be installed first: Needs you shows its install card.
       // A read that works clears only a read's ask: a press's stays until that press goes (or the install).
       const ask = r.error ? helperAskOf(r.error, "poll") : null, had = Boolean(e.helperAsk);
-      if (ask) e.helperAsk = ask; else if (!r.error && e.helperAsk?.from === "poll") e.helperAsk = null;
+      // s36: a good read also clears a press's ask whose helper only had to be this version (fixed by hand or from
+      // another computer, not from a card); its note goes with it. One lacking an ability stays (a read can't tell).
+      if (ask) e.helperAsk = ask;
+      else if (!r.error && e.helperAsk && (e.helperAsk.from === "poll" || (!afterPress && !(e.helperAsk.err?.remote?.missing?.length)))) {
+        const m = e.helperAsk.err?.install?.machine;
+        if (m && e.note === HELPER_NOT_SENT(m)) e.note = null;
+        e.helperAsk = null;
+      }
       if (had !== Boolean(e.helperAsk)) cx.notify();
       const line = r.error ? null : r.lines.find((l) => l.type === "card");
       let card = line && line.kind ? line : null;
@@ -312,7 +320,7 @@ export class Cards {
       else if (done?.result === "changed") note = "It changed on screen. Here is what it shows now.";
       else note = done?.message || "The keys did not go out.";
     } finally { e.sending = false; }
-    await this.poll(cx, address, true, true);
+    await this.poll(cx, address, true, true, true);
     e.note = note;  // after the read: a new card would clear it
     cx.notify();
   }
