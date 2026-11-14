@@ -1,15 +1,15 @@
 #!/bin/sh
-# Puts the Linux helpers for other machines (SSH machines in Herdr) into remote/ next to this file, with
+# Puts the helpers for other machines (SSH machines in Herdr: Linux, and Macs) into remote/ next to this file, with
 # SHA256SUMS, from a helpers.yml run's artifacts. A git checkout builds only this machine's helper; with remote/
 # here, ./install.sh installs these beside it (as the release zip's remote/ does), so the chat works on a
-# Linux machine you added in Herdr too. Needs the GitHub CLI (gh), signed in.
+# machine you added in Herdr too. Needs the GitHub CLI (gh), signed in.
 # Usage: ./fetch-remote-helpers.sh [--run <id>] [--repo <owner/name>] [--branch <name>] [--out <folder>]
 #   no --run: the newest successful helpers.yml run of this checkout's branch, on the repo that branch pushes to.
 #   Start one with: gh workflow run helpers.yml -R <owner/name> --ref <branch>
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
 die() { echo "STOP: $*" >&2; exit 1; }
-targets="x86_64-unknown-linux-musl aarch64-unknown-linux-musl"
+targets="x86_64-unknown-linux-musl aarch64-unknown-linux-musl universal-apple-darwin"
 
 run=""; repo=""; branch=""; out="$here/remote"
 while [ $# -gt 0 ]; do
@@ -57,6 +57,6 @@ done
 mkdir -p "$(dirname "$out")"
 rm -rf "$out"
 cp -R "$new" "$out"
-echo "Put the Linux helpers of run $run ($repo) in $out:"
+echo "Put the helpers of run $run ($repo) in $out:"
 cat "$out/SHA256SUMS"
 echo "Now ./install.sh installs them beside this machine's helper."

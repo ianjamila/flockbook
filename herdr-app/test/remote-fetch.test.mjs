@@ -13,7 +13,8 @@ import { fileURLToPath } from "node:url";
 const modDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const script = join(modDir, "fetch-remote-helpers.sh");
 const sha = (b) => createHash("sha256").update(b).digest("hex");
-const T = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"];
+// The Mac's too (owner 11-14: a Windows PC's Herdr reaches the Mac as another machine and has to send it a helper).
+const T = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl", "universal-apple-darwin"];
 
 // A fake gh: `run list` prints the newest run id (or nothing), `run download <id> -R r -n helper-<t> -D <dir>` lays the
 // artifact out as helpers.yml uploads it (<dir>/<t>/flockbook-modfeed + version.txt). Every call goes to calls.log.

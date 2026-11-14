@@ -101,10 +101,10 @@ copy_only() {
   echo "The helper was kept: the chat works, but the helper fixes newer than your release may not be in it (./install.sh --build-helper adds them)."
 }
 
-# A git checkout has no remote/ (the helpers for Linux machines you reach over SSH): say where they come from.
+# A git checkout has no remote/ (the helpers for machines you reach over SSH): say where they come from.
 remote_hint() {
   [ -f "$here/fetch-remote-helpers.sh" ] && [ ! -f "$here/remote/SHA256SUMS" ] || return 0
-  echo "No helpers for other machines here (remote/): the chat of a Linux machine you added in Herdr needs one."
+  echo "No helpers for other machines here (remote/): the chat of a machine you added in Herdr needs one."
   echo "Get them from a GitHub build first: ./fetch-remote-helpers.sh, then ./install.sh again."
 }
 
