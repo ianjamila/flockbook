@@ -10,6 +10,10 @@ import * as sidecar from "./sidecar.js";
 const REMOTE = new Set(["remote_helper_missing", "remote_helper_outdated", "remote_helper_unsupported", "remote_failed", "bad_terminal"]);
 export const isRemoteProblem = (err) => REMOTE.has(err?.code);
 export const mb = (bytes) => `${(bytes / 1e6).toFixed(1)} MB`;
+// s34 (review): when each machine's helper was last installed here ({ machine: ms }), from any card. An install card
+// asked for before it (a press, a send) is stale and goes with its note, whichever card did the install.
+export const KEY_INSTALLED = "flockbook.helper.installed";
+export const installedSince = (machine, at) => (shared(KEY_INSTALLED)?.[machine] ?? 0) > (at ?? 0);
 
 export class HelperUI {
   constructor() {
@@ -106,7 +110,7 @@ export class HelperUI {
       const r = await sidecar.installHelper(i.machine, i.sha256);
       const done = r.lines.find((l) => l.type === "installed");
       if (r.error || !done) this.state.set(i.machine, { step: "failed", message: r.error?.message ?? "The helper did not say it was installed." });
-      else { this.state.delete(i.machine); await refresh(cx); }
+      else { this.state.delete(i.machine); setShared(KEY_INSTALLED, { ...(shared(KEY_INSTALLED) ?? {}), [i.machine]: Date.now() }); await refresh(cx); }
       cx.notify();
     });
   }

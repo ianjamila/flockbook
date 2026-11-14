@@ -82,10 +82,13 @@ The helper there keeps its own cache (`"$HOME"/.cache/flockbook/cache.json` ther
 `--cache` is not passed on. `send --file`: the file is first put beside the terminal there (`terminal.put`) and the
 text names that copy. Only one level: `a/b/t7` is `bad_terminal`.
 
-The helper there must be this same version (`protocol` and `sidecar` both). Every build says 0.1.0, so a
-`send --over-suggestion` (Send anyway) there first asks the helper there for `version` (nothing else runs): one that
-lacks the `send-over-suggestion` ability (an older build) answers `remote_helper_outdated` with `remote.missing` and
-nothing is sent. Other commands run on any build of this version (an older one does less: without `bare-session`,
+The helper there must be this same version (`protocol` and `sidecar` both). `approve`, `answer`, every `send` and
+`card --all` (it walks the picker's tabs with keys) there first ask the helper there for `version` (nothing else
+runs): one of another version answers `remote_helper_outdated` with `remote` and `install` (null when this Flockbook
+has nothing to put there), and nothing is done there (a read, `card` `feed` `status` `queue`, runs and its own header
+says it). Every build says 0.1.0, so a `send --over-suggestion` (Send anyway) also
+needs the `send-over-suggestion` ability: one that lacks it (an older build) answers `remote_helper_outdated` with
+`remote.missing` and nothing is sent. Other commands run on any build of this version (an older one does less: without `bare-session`,
 Resume reads a new tab by its command line). It is never put on
 another machine without the user's yes:
 

@@ -8,8 +8,8 @@ use serde_json::Value;
 pub const PROTOCOL_VERSION: i64 = 1;
 pub const SIDECAR_VERSION: &str = "0.1.0";
 /// What this build can do beyond its commands, named in every header (s32: every build says 0.1.0, so an older
-/// one passes the version check). A Send anyway on another machine asks the helper there for SEND_OVER_SUGGESTION
-/// first (remote.rs `lacks`); BARE_SESSION (a new Claude tab named by its pid file before its first message: cache
+/// one passes the version check). Approve, answer and send on another machine ask the helper there for its version
+/// first, and a Send anyway also for SEND_OVER_SUGGESTION (remote.rs `checked_first`, `lacks`); BARE_SESSION (a new Claude tab named by its pid file before its first message: cache
 /// `sid`/`config`) is only listed: without it Resume falls back to the command-line rules.
 pub const SEND_OVER_SUGGESTION: &str = "send-over-suggestion";
 pub const BARE_SESSION: &str = "bare-session";

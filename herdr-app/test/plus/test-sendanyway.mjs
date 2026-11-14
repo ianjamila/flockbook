@@ -118,4 +118,25 @@ screen = `${RULE}\n❯ hello there\n${RULE}\n`;
 s = submitFake("box/t7", [first]);
 await composer.Composer.prototype.submit.call(s, cx);
 eq("submit: typed text in the box → no offer, the helper's note", [Boolean(s.note?.anyway), s.note?.text], [false, "The terminal's box has text in it."]);
+// s34 (owner, item 12): every send to another machine is checked there first. A helper there of another version (or an
+// older build) sent nothing: the install card goes over the reply box (helperAsk), as after a Send anyway, and the
+// note says to install, then send again; a send that goes clears it. No helper there: the chat's own card, none here.
+const OTHER = { code: "remote_helper_outdated", message: "The helper on box is another version (0.0.9); this Flockbook needs 0.1.0.",
+  remote: { protocol: 1, sidecar: "0.0.9" }, install: { machine: "box", sha256: "ab" } };
+s = submitFake("box/t7", [first]);
+sendReply = { lines: [], error: OTHER };
+await composer.Composer.prototype.submit.call(s, cx);
+eq("submit: another version there → the card's data for the chat", [s.helperAsk?.address, s.helperAsk?.err?.code], ["box/t7", "remote_helper_outdated"]);
+eq("submit: another version there → not sent, install, then send again", [s.note?.bad, /Not sent/.test(s.note?.text ?? ""), /Install it/.test(s.note?.text ?? ""), /send again/.test(s.note?.text ?? "")], [true, true, true, true]);
+sendReply = { lines: [{ type: "done", result: "sent" }], error: null };
+await composer.Composer.prototype.submit.call(s, cx);
+eq("submit: sent after the install → the card goes", s.helperAsk ?? null, null);
+s = submitFake("box/t7", [first]);
+sendReply = { lines: [], error: { code: "remote_helper_missing", message: "box has no Flockbook helper yet, so the chat cannot read its agents.", install: OTHER.install } };
+await composer.Composer.prototype.submit.call(s, cx);
+eq("submit: no helper there → the chat's own card (failed feed), none here", [s.helperAsk ?? null, /no Flockbook helper/.test(s.note?.text ?? "")], [null, true]);
+s = submitFake("box/t7", [first]);
+sendReply = { lines: [], error: { ...OTHER, install: null } };
+await composer.Composer.prototype.submit.call(s, cx);
+eq("submit: nothing this Flockbook can install → no card, the helper's words", [s.helperAsk ?? null, /another version/.test(s.note?.text ?? "")], [null, true]);
 process.exit(bad ? 1 : 0);

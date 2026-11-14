@@ -117,7 +117,7 @@ export class NeedsView {
         })
         .child(needReason(cur) !== "question"
           ? div().id("needs-ask").text_size(13.5).text_color(t.foreground).child(askDetail(askOf(cur.address)) ?? "Its turn ended handing you a merge decision. Say “merge” in its chat when you're happy with it.")
-          : this.cards.view(cur.address, t, "needs-card") ?? div().text_size(13).text_color(t.muted)
+          : this.cards.view(cur.address, t, "needs-card") ?? this.cards.helperCard(cur.address, t) ?? div().text_size(13).text_color(t.muted)
           .child(this.cards.byAgent.get(cur.address)?.read ? "It waits for you in its terminal. Open the chat to see why." : "Reading what it waits for…"))
         .child(h_flex().gap(8).items_center()
           // Each its own colour (owner 11-12): extra round = the working colour, merge = the done colour, Open chat plain.

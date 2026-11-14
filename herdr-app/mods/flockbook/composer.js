@@ -491,6 +491,12 @@ export class Composer {
         // A new conversation in the same terminal (a /clear): the chat reads it now, so Send again goes to it.
         const shown = fresh && await sidecar.recheckLog(a) && await this.onNewConversation?.(a, cx);
         this.note = { text: shown ? sidecar.NEW_CONVERSATION : fresh ? sidecar.CONVERSATION_PENDING : moved ? sidecar.AGENT_CHANGED : (r.error?.message ?? done?.message) || "The message was not sent.", bad: true };
+        // s34 (owner, item 12): every send to another machine is checked there first; a helper of another version (or
+        // an older build) sent nothing. Its install card goes over the reply box, as after a Send anyway (helperAsk).
+        if (r.error?.code === "remote_helper_outdated" && r.error.install && this.address === a) {
+          this.helperAsk = { address: a, err: r.error, at: Date.now() };
+          this.note = { text: `Not sent: the Flockbook helper on ${r.error.install.machine} is not this Flockbook's version. Install it (above), then send again.`, bad: true, helper: true };
+        }
         // Only a lone "/word" with no command list above the box: offer to type over it (sendAnyway). A terminal on
         // another machine ("box/t7") too: hc reads its screen, and the helper there does the send (report 11-14).
         if (done?.result === "box_not_empty" && this.address === a) {
@@ -502,6 +508,7 @@ export class Composer {
       } else {
         // The owner answered: its ask leaves Needs you now, not at the next tick.
         answered(a);
+        if (this.helperAsk?.address === a) this.helperAsk = null;   // s34: it went, so the helper there is fine now
         if (done.result === "unconfirmed") this.note = { text: "Sent. The agent did not confirm it yet.", bad: false };
       }
     } finally { this.sending = false; this.keepSoon(cx); cx.notify(); }
@@ -531,7 +538,7 @@ export class Composer {
         // the chat already shows its card). The chat draws its install
         // card over the reply box from `helperAsk` (it draws it for a failed feed only, and an older helper still
         // reads); Send anyway stays, to press again once it is installed.
-        this.helperAsk = { address: a, err: r.error };
+        this.helperAsk = { address: a, err: r.error, at: Date.now() };
         const m = r.error.install.machine;
         this.note = { text: `Not sent: the Flockbook helper on ${m} is older than this one. Install it (above), then press Send anyway again.`, bad: true, anyway: n };
       } else if (sidecar.conversationChanged(done)) {

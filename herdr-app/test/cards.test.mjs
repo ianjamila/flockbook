@@ -450,3 +450,79 @@ test("the request still on screen after the key: a note says to check its termin
   assert.deepEqual(w.keys, [["t1", "enter"]]);
   assert.match(textOf(byId(c.view("t1", T), "card-note")), /still shows/);
 });
+
+// s34 (owner, item 12): approve and answer for a terminal on another machine ask the helper there first; one of
+// another version runs nothing and answers outdated with the install card's data. The card says so and shows the
+// install card; Needs you shows it in place of a card it could not read; installed, it goes and the card is read again.
+const SHA34 = "ab".repeat(32);
+const outdated34 = { type: "error", code: "remote_helper_outdated", message: "The helper on box is another version (0.0.9); this Flockbook needs 0.1.0.",
+  remote: { protocol: 1, sidecar: "0.0.9" }, install: { machine: "box", target: "aarch64-apple-darwin", path: "~/.local/share/flockbook/helper/0.1.0/flockbook-modfeed", bytes: 4e6, sha256: SHA34, source: "release" } };
+const remoteHelper34 = (state) => (_c, args) => {
+  if (args[0] === "helper" && args[1] === "install") { state.installed = true; acts.push(args); return jl(header("helper"), { type: "installed", machine: "box", sha256: SHA34, parts: 1 }, end); }
+  if (args[0] === "card") return state.cardFails ? jl(header("card"), outdated34, { type: "end", ok: false }) : jl(header("card"), cardNow ?? { type: "card" }, end);
+  if (args[0] === "approve" || args[0] === "answer") { acts.push(args); return state.installed ? jl(header(args[0]), { type: "done", result: "sent" }, end) : jl(header(args[0]), outdated34, { type: "end", ok: false }); }
+  return jl(header(args[0]), end);
+};
+
+test("approve on another machine whose helper is another version: nothing sent, the card says install, the install card shows", async () => {
+  fake.agents = [agent("box/t7", "blocked")];
+  const state = {}; fake.exec = remoteHelper34(state);
+  const cx = fakeCx(); const c = new Cards();
+  await c.poll(cx, "box/t7", true);
+  assert.equal(c.helperCard("box/t7", T), null, "no install card while the card reads fine");
+  byId(c.view("box/t7", T), "card-allow")._h.on_click({}, cx); await cx.settle();
+  const el = c.view("box/t7", T);
+  assert.match(textOf(byId(el, "card-note")), /Not sent: the Flockbook helper on box has to be installed or updated first/);
+  assert.match(textOf(el), /Install the Flockbook helper on box\?.*another version \(0\.0\.9\)/);
+  byId(el, "helper-install")._h.on_click({}, cx); await cx.settle();
+  assert.deepEqual(acts.find((a) => a[0] === "helper")?.slice(0, 6), ["helper", "install", "--machine", "box", "--sha256", SHA34]);
+  assert.equal(c.helperCard("box/t7", T), null, "installed: the card goes");
+  byId(c.view("box/t7", T), "card-allow")._h.on_click({}, cx); await cx.settle();
+  assert.equal(acts.filter((a) => a[0] === "approve").length, 2, "pressed again after the install, it goes");
+  assert.equal(c.helperCard("box/t7", T), null);
+});
+
+test("answer on another machine whose helper is another version: the same install card", async () => {
+  fake.agents = [agent("box/t7", "blocked")];
+  cardNow = question;
+  const state = {}; fake.exec = remoteHelper34(state);
+  const cx = fakeCx(); const c = new Cards(); await c.poll(cx, "box/t7", true);
+  byId(c.view("box/t7", T), "card-q0-o1")._h.on_click({}, cx);
+  byId(c.view("box/t7", T), "card-q1-o0")._h.on_click({}, cx);
+  byId(c.view("box/t7", T), "card-answer")._h.on_click({}, cx); await cx.settle();
+  const el = c.view("box/t7", T);
+  assert.ok(acts.some((a) => a[0] === "answer"));
+  assert.match(textOf(byId(el, "card-note")), /has to be installed or updated first/);
+  assert.ok(byId(el, "helper-install"), "the install card under the note");
+});
+
+test("Needs you: a card on another machine that can't be read for its helper shows the install card, not 'Reading…'", async () => {
+  fake.agents = [agent("box/t7", "blocked")];
+  fake.spaces = [space("sp1", { machine: "box" })];
+  passBlockGrace();
+  const state = { cardFails: true }; fake.exec = remoteHelper34(state);
+  const cx = fakeCx(); const v = new NeedsView(cx);
+  v.tick(cx); await cx.settle();
+  let el = v.render(cx);
+  assert.match(textOf(byId(el, "needs-detail")), /Install the Flockbook helper on box\?/);
+  assert.doesNotMatch(textOf(byId(el, "needs-detail")), /Reading what it waits for/);
+  state.cardFails = false;
+  byId(el, "helper-install")._h.on_click({}, cx); await cx.settle();
+  el = v.render(cx);
+  assert.equal(byId(el, "helper-install"), null, "installed: the card goes");
+  assert.ok(byId(el, "needs-card-allow"), "and the card is read again");
+});
+
+test("an install from another card (the chat's, Needs you's) clears a press's install card and its note", async () => {
+  fake.agents = [agent("box/t7", "blocked")];
+  const state = {}; fake.exec = remoteHelper34(state);
+  const cx = fakeCx(); const c = new Cards();
+  await c.poll(cx, "box/t7", true);
+  byId(c.view("box/t7", T), "card-allow")._h.on_click({}, cx); await cx.settle();
+  assert.ok(byId(c.view("box/t7", T), "helper-install"), "the press's card");
+  fake.shared["flockbook.helper.installed"] = { box: Date.now() + 1000 };
+  const el = c.view("box/t7", T);
+  assert.equal(byId(el, "helper-install"), null, "installed elsewhere: the card goes");
+  assert.equal(byId(el, "card-note"), null, "and its note");
+  assert.ok(byId(el, "card-allow"), "the approval stays, to press again");
+});

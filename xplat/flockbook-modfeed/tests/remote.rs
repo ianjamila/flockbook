@@ -202,8 +202,11 @@ fn another_version_there_is_an_error_not_a_guess() {
 // a Send anyway there, the helper there is asked first (`version`): one without the ability is outdated, with what it
 // lacks, and nothing runs there; review P1. Every other command still runs on an older helper (review P2).
 fn older_there(w: &World, abilities: &str) {
+    there_as(w, remote::helper_version(), abilities);
+}
+/// A fake helper there of version `v` whose header lists `abilities` (a JSON tail); it notes each command it ran.
+fn there_as(w: &World, v: &str, abilities: &str) {
     std::fs::create_dir_all(w.installed().parent().unwrap()).unwrap();
-    let v = remote::helper_version();
     let fake = format!(
         "#!/bin/sh\necho \"$1\" >> \"$HOME/calls\"\necho '{{\"cmd\":\"x\",\"protocol\":1,\"sidecar\":\"{v}\",\"type\":\"header\"{abilities}}}'\necho '{{\"ms\":0,\"ok\":true,\"type\":\"end\"}}'\n"
     );
@@ -245,7 +248,51 @@ fn an_older_helper_there_still_reads_and_sends_plain_text() {
         let v = w.run(args);
         assert_eq!(v.last().unwrap()["ok"], true, "{args:?}: {v:?}");
     }
-    assert_eq!(calls_there(&w), vec!["card", "send", "send"], "no version check for these: nothing they need is missing");
+    // s34: a send is checked first (`version`), and goes: a plain send needs nothing an older build lacks.
+    assert_eq!(calls_there(&w), vec!["card", "version", "send", "version", "send"], "reads unchecked; each send checked, then sent");
+}
+
+// s34 (owner, item 12): approve, answer and every send change something there, so the helper there is asked first
+// (`version`), as a Send anyway is: one of another version gets the install card and nothing runs there (before, the
+// command ran and only its answer's header said it was another version). One of this version runs them after the check.
+#[test]
+fn approve_answer_and_send_to_another_version_there_run_nothing() {
+    let w = world();
+    let acts: [&[&str]; 5] = [
+        &["approve", "--terminal", "box/t3", "--request", "r1", "--allow"],
+        // s34 review: `card --all` sends keys there (it walks the picker's tabs), so it is checked too.
+        &["card", "--terminal", "box/t3", "--all"],
+        &["answer", "--terminal", "box/t3", "--request", "r1", "--answers", "[[\"Yes\"]]"],
+        &["send", "--terminal", "box/t3", "--text", "hi"],
+        &["send", "--terminal", "box/t3", "--over-suggestion", "/handoff", "--text", "/clear"],
+    ];
+    for args in acts {
+        there_as(&w, "0.0.9", ",\"abilities\":[\"send-over-suggestion\",\"bare-session\"]");
+        let e = w.error(args);
+        assert_eq!(e["code"], "remote_helper_outdated", "{args:?}: {e}");
+        assert_eq!(e["remote"]["sidecar"], "0.0.9", "{e}");
+        assert!(e["message"].as_str().unwrap().contains("another version"), "{e}");
+        assert_eq!(e["install"]["machine"], "box", "the card can offer this version");
+        assert_eq!(calls_there(&w), vec!["version"], "{args:?}: only asked its version, nothing ran there");
+    }
+    // This version there: each runs there after the check.
+    for args in acts {
+        older_there(&w, ",\"abilities\":[\"send-over-suggestion\",\"bare-session\"]");
+        let ok = w.run(args);
+        assert_eq!(ok.last().unwrap()["ok"], true, "{args:?}: {ok:?}");
+        assert_eq!(calls_there(&w), vec!["version".to_string(), args[0].to_string()], "{args:?}");
+    }
+    // An older build of this version (no abilities): approve, answer and a plain send need none, so they run.
+    for args in [&acts[0][..], &acts[2][..], &acts[3][..]] {
+        older_there(&w, "");
+        let ok = w.run(args);
+        assert_eq!(ok.last().unwrap()["ok"], true, "{args:?}: {ok:?}");
+        assert_eq!(calls_there(&w), vec!["version".to_string(), args[0].to_string()], "{args:?}");
+    }
+    // A read (card, feed, status, queue) is not checked first: its own answer says the version, and nothing changed.
+    there_as(&w, "0.0.9", "");
+    assert_eq!(w.error(&["card", "--terminal", "box/t3"])["code"], "remote_helper_outdated");
+    assert_eq!(calls_there(&w), vec!["card"]);
 }
 
 #[test]

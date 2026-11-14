@@ -2,7 +2,8 @@
 //! helper runs there (`machine.exec`) with the same command and `--terminal tN`, and its lines come back as they are,
 //! so the chat reads every log with one parser. Its core there is its own (hc gives it `HC_SESSION`).
 //!
-//! The helper there is this same version, never another (`remote_helper_outdated` otherwise). Putting it there is
+//! The helper there is this same version, never another (`remote_helper_outdated` otherwise); approve, answer and
+//! send ask it for its version (and abilities) first, so another one runs none of them (`checked_first`). Putting it there is
 //! the user's choice: `remote_helper_missing` carries what the mod shows (machine, path, size, sha256), and
 //! `helper install` runs only with that sha256. The file comes from the folder this Flockbook was installed with
 //! (`<home>/flockbook/remote/<target>/flockbook-modfeed`, `SHA256SUMS` beside it), checked here and again there.
@@ -358,10 +359,10 @@ pub fn forward(client: &HcClient, cmd: &str, args: &[String], machine: &str, ter
     if memo.missing_now(machine) {
         return with_install(client, cmd, machine, missing(machine), json!({}), &mut memo);
     }
-    // s32 (review P1/P2): only a Send anyway needs more than this version; it is checked there before anything runs.
-    // The option counts only before --text (a text that reads like it is text), as the helper there reads it.
-    if cmd == "send" && args.iter().take_while(|a| *a != "--text").any(|a| a == "--over-suggestion") {
-        if let Some(stop) = lacks(client, cmd, machine, SEND_OVER_SUGGESTION, &mut memo) {
+    // s34 (owner, item 12): what changes something there (approve, answer, send) is checked there first, so a helper
+    // of another version runs none of it. A Send anyway also needs its ability (s32 review P1/P2).
+    if let Some(needs) = checked_first(cmd, args) {
+        if let Some(stop) = lacks(client, cmd, machine, needs, &mut memo) {
             return stop;
         }
     }
@@ -443,12 +444,28 @@ fn outdated(client: &HcClient, cmd: &str, machine: &str, h: &Value, memo: &mut M
     Some(with_install(client, cmd, machine, f, remote, memo))
 }
 
-/// s32: `cmd` needs `ability` there (`ABILITIES`). Every build says 0.1.0, so an older one of the same version passes
+/// The commands checked there before they run (`lacks`), with the abilities each needs beyond this version; None for
+/// a read (card without --all, feed, status, queue: nothing changes, and its own answer's header says the version).
+/// s34 (owner, item 12): approve, answer and every send. Their options are the same in every build so far, so they
+/// need no ability: only the version is checked. A Send anyway needs SEND_OVER_SUGGESTION; the option counts only
+/// before --text (a text that reads like it is text), as the helper there reads it.
+fn checked_first(cmd: &str, args: &[String]) -> Option<&'static [&'static str]> {
+    match cmd {
+        "send" if args.iter().take_while(|a| *a != "--text").any(|a| a == "--over-suggestion") => Some(&[SEND_OVER_SUGGESTION]),
+        "approve" | "answer" | "send" => Some(&[]),
+        // s34 review: `card --all` walks the picker's tabs with keys, so it changes the screen there too.
+        "card" if args.iter().any(|a| a == "--all") => Some(&[]),
+        _ => None,
+    }
+}
+
+/// s32: `cmd` needs `needs` there (`ABILITIES`). Every build says 0.1.0, so an older one of the same version passes
 /// the version check, and given a flag it doesn't know it takes it for text (review P1: `send --over-suggestion` typed
 /// into the suggestion, then the answer came back as an error). So the helper there is asked first with `version`
-/// (nothing else runs there): one without `ability` (or another version) gets the install card and nothing is done.
-/// None: go on (it has it, or the ask failed: the real run then says why, as before).
-fn lacks(client: &HcClient, cmd: &str, machine: &str, ability: &str, memo: &mut Memo) -> Option<String> {
+/// (nothing else runs there): another version, or one without an ability in `needs`, gets the install card and
+/// nothing is done (s34: approve, answer and every send too, `checked_first`).
+/// None: go on (it has them, or the ask failed: the real run then says why, as before).
+fn lacks(client: &HcClient, cmd: &str, machine: &str, needs: &[&str], memo: &mut Memo) -> Option<String> {
     let argv: Vec<String> = ["sh", "-c", &forward_script(false), "sh", "version"].iter().map(|a| a.to_string()).collect();
     let ran = exec(client, machine, Run::Argv(&argv)).ok()?;
     if ran.no_program || matches!(ran.code, Some(126 | 127)) {
@@ -462,11 +479,13 @@ fn lacks(client: &HcClient, cmd: &str, machine: &str, ability: &str, memo: &mut 
     if let Some(stop) = outdated(client, cmd, machine, &h, memo) {
         return Some(stop);
     }
-    if h.get("abilities").and_then(Value::as_array).is_some_and(|a| a.iter().any(|x| x.as_str() == Some(ability))) {
+    let has: Vec<&str> = h.get("abilities").and_then(Value::as_array).map_or(vec![], |a| a.iter().filter_map(Value::as_str).collect());
+    let missing: Vec<&str> = needs.iter().copied().filter(|n| !has.contains(n)).collect();
+    if missing.is_empty() {
         return None;
     }
-    let f = fail("remote_helper_outdated", format!("The helper on {machine} is older than this Flockbook (it lacks {ability})."));
-    let remote = json!({"remote": {"protocol": h.get("protocol"), "sidecar": h.get("sidecar"), "missing": [ability]}});
+    let f = fail("remote_helper_outdated", format!("The helper on {machine} is older than this Flockbook (it lacks {}).", missing.join(", ")));
+    let remote = json!({"remote": {"protocol": h.get("protocol"), "sidecar": h.get("sidecar"), "missing": missing}});
     Some(with_install(client, cmd, machine, f, remote, memo))
 }
 

@@ -9,8 +9,15 @@ import { agents } from "./parked.js";
 import { icon, openTerminal, KEY_TERM } from "./state.js";
 import * as sidecar from "./sidecar.js";
 import { elicitation, elicitFocus, noteElicit, captureElicit } from "./asks.js";
+import { HelperUI, installedSince } from "./helpercard.js";
 
 export const CARD_MS = 1500;
+// s34 (owner, item 12): approve and answer for a terminal on another machine are checked there first: a helper there
+// of another version (or none, or an older build) runs nothing and answers with the install card's data. It is kept
+// (`helperAsk`) and drawn with the card, or in Needs you in place of a card that could not be read.
+const HELPER_ASK = new Set(["remote_helper_missing", "remote_helper_outdated"]);
+export const helperAskOf = (err, from = "press") => (HELPER_ASK.has(err?.code) && err.install ? { err, from, at: Date.now() } : null);
+export const HELPER_NOT_SENT = (m) => `Not sent: the Flockbook helper on ${m} has to be installed or updated first. Install it (below), then press again.`;
 // An answer's "another agent is in this pane": the sidecar's check before each key failed, and for a question that
 // check also wants the exact question on screen (herdr-core question::answer_question), so an agent still drawing
 // (a busy machine) fails it the same way. The check runs before each key, the first one too, and the sidecar does
@@ -122,6 +129,7 @@ export class Cards {
     // A pause between a key and the next screen read (tests make it instant).
     this.wait = (cx, ms) => new Promise((res) => (cx?.timer?.after ? cx.timer.after(ms, () => res()) : setTimeout(res, ms)));
     this.address = null;   // whose card the boxes belong to now
+    this.helper = null;   // s34: the install card after a press the helper there could not run (made when first needed)
     // Which own-answer box has the keyboard (its question), or null. While one has it, the card's own key
     // handler leaves 1-9 and Enter alone so they type into the box. (The row used to stop every key
     // instead, and a stopped key never reaches a text box as typed text: nothing could be typed, s12.)
@@ -170,6 +178,11 @@ export class Cards {
     e.busy = true; e.at = Date.now();
     try {
       const r = await sidecar.card(address, false, e.card?.kind === "question" ? draftFor(e.card.question, e.picks, e.others) : null);
+      // s34: a card read on another machine whose helper must be installed first: Needs you shows its install card.
+      // A read that works clears only a read's ask: a press's stays until that press goes (or the install).
+      const ask = r.error ? helperAskOf(r.error, "poll") : null, had = Boolean(e.helperAsk);
+      if (ask) e.helperAsk = ask; else if (!r.error && e.helperAsk?.from === "poll") e.helperAsk = null;
+      if (had !== Boolean(e.helperAsk)) cx.notify();
       const line = r.error ? null : r.lines.find((l) => l.type === "card");
       let card = line && line.kind ? line : null;
       // No card from the helper: an MCP server's input request on screen (elicitation) gets one of its own.
@@ -290,7 +303,10 @@ export class Cards {
     try {
       const r = await run(e.card);
       const done = r.lines.find((l) => l.type === "done");
-      if (r.error) note = r.error.message;
+      const ask = helperAskOf(r.error);
+      if (!r.error) e.helperAsk = null;
+      if (ask) { e.helperAsk = ask; note = HELPER_NOT_SENT(ask.err.install.machine); }
+      else if (r.error) note = r.error.message;
       else if (done?.result === "sent") e.card = null;
       else if (sidecar.agentChanged(done)) note = stopped;
       else if (done?.result === "changed") note = "It changed on screen. Here is what it shows now.";
@@ -302,6 +318,18 @@ export class Cards {
   }
 
   approve(cx, address, allow) { return this.act(cx, address, (c) => sidecar.approve(address, c.request, allow)); }
+
+  // s34: the install card for `address` (a press, or a card read, its machine's helper could not run), or null.
+  // Installed → it goes and the card is read again.
+  helperCard(address, t) {
+    const e = this.byAgent.get(address);
+    if (!e?.helperAsk) return null;
+    // Installed since (by this card or any other): the ask and its note go.
+    const m = e.helperAsk.err.install.machine;
+    if (installedSince(m, e.helperAsk.at)) { if (e.note === HELPER_NOT_SENT(m)) e.note = null; e.helperAsk = null; return null; }
+    this.helper ??= new HelperUI();
+    return this.helper.sendCard(t, e.helperAsk.err, async (cx) => { e.helperAsk = null; await this.poll(cx, address, true, true); });
+  }
 
   // s27 (owner 11-14 "one-click MCP Supabase migrations"): Accept / Decline on an MCP server's input request. Only on a
   // press, never by itself, and every key is checked first: the screen is read again and the key goes only while the
@@ -384,11 +412,16 @@ export class Cards {
       openTerminal(a);
     };
     // The note of the last press; the sidecar refusing a typed answer it can't type also gets the terminal button.
-    const tail = () => !e.note ? null : cannotType(e.note)
+    const said = () => !e.note ? null : cannotType(e.note)
       ? h_flex().id(`${id}-note`).gap(10).items_center()
         .child(div().flex_1().min_w(0).text_size(12).text_color(t.blocked).child(e.note))
         .child(button("note-terminal", "Answer in terminal", true, toTerminal))
       : div().id(`${id}-note`).text_size(12).text_color(t.blocked).child(e.note);
+    // s34: under the note, the install card when the helper there must be installed first.
+    const tail = () => {
+      const helper = this.helperCard(address, t), note = said();   // the card first: a stale one clears its note
+      return helper ? v_flex().w_full().gap(8).children([note, helper].filter(Boolean)) : note;
+    };
 
     if (c.kind === "elicitation") {
       // s27 (owner 11-14): Accept / Decline here, each checked against the screen first (elicitAnswer); the server and

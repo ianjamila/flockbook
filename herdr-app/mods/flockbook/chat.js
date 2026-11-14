@@ -23,7 +23,7 @@ const appZoom = () => { const z = Number(settings?.()?.zoom); return z > 0 ? z :
 import { openMenu } from "./menu.js";
 import { Cards, wanted } from "./cards.js";
 import { startTop, overBar, BAR_H, barOver, barRoom, noteScreenHeight } from "./top.js";
-import { HelperUI, isRemoteProblem } from "./helpercard.js";
+import { HelperUI, isRemoteProblem, installedSince } from "./helpercard.js";
 import { askOf, askMark, askWords, grantAsk } from "./asks.js";
 
 export const POLL_MS = 2000;
@@ -453,9 +453,17 @@ export class ChatView {
 
   // s32: the helper card a Send anyway asked for (composer.helperAsk: the helper there is older), for this tab only;
   // installed → the ask goes and the chat reloads.
+  // s34: not while the chat's own card shows (a feed that failed for the same reason: no second card).
   sendHelperCard(t) {
     const ask = this.composer?.helperAsk;
-    if (!ask || ask.address !== this.address) return null;
+    if (!ask || ask.address !== this.address || isRemoteProblem(this.feed()?.error)) return null;
+    // Installed since, from any card (the chat's own, Needs you's): the ask goes; a plain send's note with it (a Send
+    // anyway's note keeps its button, to press again).
+    if (installedSince(ask.err.install.machine, ask.at)) {
+      this.composer.helperAsk = null;
+      if (this.composer.note?.helper) this.composer.note = null;
+      return null;
+    }
     return this.helper.sendCard(t, ask.err, async (cx) => { this.composer.helperAsk = null; await this.refresh(cx); });
   }
 
