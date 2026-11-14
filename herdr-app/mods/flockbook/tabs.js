@@ -11,7 +11,7 @@ import { theme, run, openOverlay, props } from "herdr";
 import { spaces } from "./parked.js";
 import { spaceTitle } from "./machines.js";
 import { openMenu, tabItems, suggestBadge } from "./menu.js";
-import { watchGrace, spaceTabs, tabAgents, tabLabel, sessionTitle, subStatus, tabStatus, needReason, keepOrRename, showTab, closeTab, icon, toggleTablist, answerInTerminal, noteWidth, KEY_LIST_W } from "./state.js";
+import { watchGrace, spaceTabs, shownScreen, openTab, tabAgents, tabLabel, sessionTitle, subStatus, tabStatus, needReason, keepOrRename, showTab, closeTab, icon, toggleTablist, answerInTerminal, noteWidth, KEY_LIST_W } from "./state.js";
 import { elicitOf } from "./asks.js";
 import { withHover } from "./hover.js";
 import { statusMark, BAR_H } from "./top.js";
@@ -52,6 +52,28 @@ export function stripGlyphs(s) {
 export function headText(spaceName, n) {
   return spaceName ? `${spaceName} · ${n}` : `Tabs · ${n}`;
 }
+// What the list shows on `screen` (shownScreen): "all" on the Overview, every workspace's tabs (owner 11-14 s29: "when
+// im in overview, it should show all running sessions in all workspaces … instead of just the last workspace i
+// visited"), else "space", the shown workspace's.
+export function listMode(screen) {
+  return screen === "overview" ? "all" : "space";
+}
+// The rows of the "all" list: per workspace with tabs (in the sidebar's order), a heading { kind: "space", space,
+// text: "eaglewatch · 2" }, then its tabs { kind: "tab", space, tab }; put-away tabs (tab.settle) left out, as in the
+// Overview. `title(space)`: the workspace's name (machines.js spaceTitle, "api on pc-wsl").
+export function allRows(spaceList, title) {
+  const out = [];
+  for (const s of spaceList ?? []) {
+    const tabs = (s.tabs ?? []).filter((t) => !t.settled);
+    if (!tabs.length) continue;
+    out.push({ kind: "space", space: s, text: `${title(s)} · ${tabs.length}` });
+    for (const tab of tabs) out.push({ kind: "tab", space: s, tab });
+  }
+  return out;
+}
+export function allHeadText(n) {
+  return `All workspaces · ${n}`;
+}
 // Owner 11-13 ("can the claude icon be dancing when its working"): an agent's icon dances while its tab works
 // (tabStatus "working", background work included) and the `dance` setting is not off. A shell tab, a tab that waits
 // on you, and a finished one stay still.
@@ -76,30 +98,39 @@ function programMark(a, t, color, dance = null) {
 
 function head(t) {
   const space = spaces().find((s) => s.active);
-  const n = spaceTabs().length;
+  const all = listMode(shownScreen()) === "all";
+  const n = all ? allRows(spaces(), spaceTitle).filter((r) => r.kind === "tab").length : spaceTabs().length;
   const stop = (_e, cx) => cx.stop_propagation();
   const button = (id, child, action, tip) => div().id(id).tooltip(tip).size(26).flex_none().flex().items_center().justify_center().rounded(13)
     .text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
     .on_mouse_down("left", stop).on_click(action).child(child);
   return h_flex().id("tabs-head").size_full().h(BAR_H).pl(14).pr(8).gap(4).items_center().bg(t.chrome).border_l(1).border_color(t.border)
-    .child(div().flex_1().min_w(0).truncate().text_size(12).font_weight(600).text_color(t.muted).child(headText(spaceTitle(space), n)))
+    .child(div().flex_1().min_w(0).truncate().text_size(12).font_weight(600).text_color(t.muted).child(all ? allHeadText(n) : headText(spaceTitle(space), n)))
     .child(button("tabs-new", svg(icon("plus")).size(15), () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 }), "New tab (⌘T)"))
     .child(button("tabs-hide", svg(icon("tablist")).size(15), () => toggleTablist(), "Hide the tab list (⌥⌘B)"));
 }
 
 function list(t, view) {
-  const tabs = spaceTabs();
+  // On the Overview: every workspace's tabs, each workspace under its name (allRows). No tab is "shown" there, so no
+  // row is picked, none has ×, the ⌘1–⌘9 hints (they select the shown workspace's tabs) are left out, a click opens the
+  // tab in its workspace (as an Overview card does), and rows do not drag (reordering is per workspace).
+  const all = listMode(shownScreen()) === "all";
+  const rows = all ? allRows(spaces(), spaceTitle) : null;
+  const tabs = all ? rows.filter((r) => r.kind === "tab").map((r) => r.tab) : spaceTabs();
   // A newly shown tab scrolls into sight (rows already in sight stay put).
-  const at = tabs.findIndex((x) => x.active), shownId = at >= 0 ? tabs[at].id : null;
-  if (shownId !== view.seen) { view.seen = shownId; if (at >= 0) view.scroll?.scroll_to_item(at); }
-  const dragging = drag.shown;
+  const at = all ? -1 : tabs.findIndex((x) => x.active), shownId = at >= 0 ? tabs[at].id : null;
+  if (!all && shownId !== view.seen) { view.seen = shownId; if (at >= 0) view.scroll?.scroll_to_item(at); }
+  if (all) view.seen = undefined;   // back on a workspace, its shown tab scrolls into sight again
+  const dragging = all ? null : drag.shown;
   const lineOn = dragging && dropPlace(tabs, dragging) >= 0 ? dragging.target : null;
   const stop = (_e, cx) => cx.stop_propagation();
 
-  const row = (tab) => {
-    const on = tab.active;
+  const row = (tab, space = null) => {
+    const on = !space && tab.active;
+    const own = space ? (space.tabs ?? []).filter((x) => !x.settled) : tabs;   // the tab's own workspace, for the menu
+    const show = () => (space ? openTab(space.id, tab) : showTab(tab));
     const a = tabAgents(tab.id)[0] ?? null;
-    const parts = rowParts({ label: tabLabel(tab), ss: subStatus(tab), title: sessionTitle(a), need: needReason(a), index: tab.index });
+    const parts = rowParts({ label: tabLabel(tab), ss: subStatus(tab), title: sessionTitle(a), need: needReason(a), index: space ? null : tab.index });
     const moved = movedBadge(a?.address);
     // Blocked on an MCP server's input request (s10, as the sidebar's 🔌): one click opens its terminal to answer.
     const mcp = a?.status === "blocked" ? elicitOf(a.address) : null;
@@ -115,16 +146,16 @@ function list(t, view) {
       .when(on, (el) => el.bg(t.selected).font_weight(600))
       .when(!on, (el) => el.hover((s) => s.bg(t.hover).text_color(t.foreground)))
       .when(dragging?.id === tab.id, (el) => el.opacity(0.45))
-      .on_mouse_down("left", (e, cx) => { cx.stop_propagation?.(); drag.press(tab.id, e); })
-      .on_mouse_move((e, cx) => { if (drag.over(tab.id, e)) cx.notify?.(); })
+      .on_mouse_down("left", (e, cx) => { cx.stop_propagation?.(); if (!space) drag.press(tab.id, e); })
+      .on_mouse_move((e, cx) => { if (!space && drag.over(tab.id, e)) cx.notify?.(); })
       // The release after a drag is not a click.
-      .on_click((e) => { if (drag.shown) return; if (e?.click_count === 2) keepOrRename(tab); else showTab(tab); })
+      .on_click((e) => { if (!space && drag.shown) return; if (e?.click_count === 2) keepOrRename(tab); else show(); })
       .on_mouse_down("right", (_e, cx) => {
         cx.stop_propagation?.();
-        const shown = drag.shown;
-        drag.cancel(cx);
+        const shown = space ? null : drag.shown;
+        if (!space) drag.cancel(cx);
         if (shown) return;
-        openMenu(tabItems(tab, { agent: a, list: tabs }));
+        openMenu(tabItems(tab, { agent: a, ...(space ? { spaceId: space.id } : {}), list: own }));
       })
       .when(Boolean(line), (el) => el.child(div().id("vdrop-line").absolute().left(4).right(4).h(3).rounded(2).bg(t.accent)
         .when(line.after, (l) => l.bottom(-2)).when(!line.after, (l) => l.top(-2))))
@@ -148,9 +179,12 @@ function list(t, view) {
         .on_click((_e, cx) => { cx.stop_propagation(); closeTab(tab.id); }).child("×")));
     if (!a) return el;
     const ss = subStatus(tab);
-    return withHover("vt", el, tab, t, { title: sessionTitle(a) ?? tabLabel(tab), extra: [ss?.tip, parts.key ? `${parts.key} shows this tab` : null], always: true, anchor: "right_center", onOpen: () => showTab(tab) });   // opens to the LEFT of the row: never over the rows below (owner 11-12)
+    return withHover("vt", el, tab, t, { title: sessionTitle(a) ?? tabLabel(tab), extra: [ss?.tip, parts.key ? `${parts.key} shows this tab` : null], always: true, anchor: "right_center", onOpen: show });   // opens to the LEFT of the row: never over the rows below (owner 11-12)
   };
 
+  // A workspace's heading in the "all" list: its name and tab count, small and muted, like the sidebar's.
+  const spaceHead = (r, i) => div().id(`vspace-${r.space.id}`).w_full().flex_none().px(8).pt(i ? 10 : 4).pb(2).truncate()
+    .text_size(11.5).font_weight(600).text_color(t.dim).child(r.text);
   return v_flex().id("tabs-list").size_full().min_h(0).bg(t.chrome).border_l(1).border_color(t.border)
     // The tab list's width, for the terminal window's room (state.termApp).
     .on_size_change((size) => noteWidth(KEY_LIST_W, size))
@@ -158,6 +192,7 @@ function list(t, view) {
     .on_mouse_down_out((_e, cx) => drag.cancel(cx))
     // On the whole list, not the rows: a release between rows ends the press too.
     .on_mouse_up("left", (_e, cx) => {
+      if (all) return;
       const d = drag.release(cx);
       if (!d) return;
       const to = dropPlace(tabs, d);
@@ -166,8 +201,8 @@ function list(t, view) {
     .child(tabs.length
       ? v_flex().id("tabs-scroll").when(Boolean(view.scroll), (el) => el.track_scroll(view.scroll)).flex_1().min_h(0).px(6).pb(8).gap(2).overflow_y_scroll()
         .when(Boolean(dragging), (el) => el.cursor_grabbing())
-        .children(tabs.map(row))
-      : div().px(14).py(6).text_size(12.5).text_color(t.muted).child("No tabs in this space"));
+        .children(all ? rows.map((r, i) => (r.kind === "space" ? spaceHead(r, i) : row(r.tab, r.space))) : tabs.map((x) => row(x)))
+      : div().px(14).py(6).text_size(12.5).text_color(t.muted).child(all ? "No tabs open" : "No tabs in this space"));
 }
 
 export class TabsView {
