@@ -103,7 +103,8 @@ Enter sends); the vertical tab list on the right shows each tab's program, statu
 
 **Chat**
 - **Send anyway** when Claude Code shows a dim "/" suggestion in its box, so a message isn't swallowed by it
-  (only into the same conversation: after a `/clear` or `/resume` meanwhile it types nothing).
+  (only into the same conversation: after a `/clear` or `/resume` meanwhile it types nothing). It works for a tab on
+  another machine too: the helper there clears the line and sends.
 - After `/clear`, a send goes to the new conversation (the chat follows it).
 - Answers Claude Code can't take typed (some symbols) say so and offer the terminal (a Codex question answered
   by a message takes any text); drafts are kept per agent.

@@ -48,7 +48,7 @@ does not download; `install-isolated.sh` copies the sidecar in.
 | `card` | `--terminal <addr>` `[--answers <json>]` `[--cache <file>]` | `card` |
 | `approve` | `--terminal <addr> --request <id> --allow\|--deny` `[--cache <file>]` | `done` |
 | `answer` | `--terminal <addr> --request <id> --answers <json>` `[--cache <file>]` | `done` |
-| `send` | `--terminal <addr> --text <s>` `[--file <path>]…` `[--expect-kind <agent>]` `[--expect-path <log>]` `[--cache <file>]` | `done` (`changed` when the terminal now runs another agent or conversation than the expected one; nothing is sent. Its message says "new conversation" when the same agent process wrote the expected log, e.g. after `/clear`. With `--cache` the log is looked up again and written to the cache, so the next `feed` reads it) |
+| `send` | `--terminal <addr>` `[--over-suggestion </word>]` `--text <s>` `[--file <path>]…` `[--expect-kind <agent>]` `[--expect-path <log>]` `[--cache <file>]` | `done` (`changed` when the terminal now runs another agent or conversation than the expected one; nothing is sent. `--over-suggestion` (Send anyway; before `--text`, and only read there): after those checks, when Claude Code's box shows exactly that lone "/word" with no command list above it, Ctrl-E Ctrl-U clears its line, the screen is read again, and the text goes only into a box down to one row (else `box_not_empty`, "still has text"); a box showing anything else gets the usual check. A terminal `m/tN` runs it in the helper there. Its message says "new conversation" when the same agent process wrote the expected log, e.g. after `/clear`. With `--cache` the log is looked up again and written to the cache, so the next `feed` reads it) |
 | `queue` | `--terminal <addr>` `[--cache <file>]` (Rust sidecar only; `serve` and other machines) | `queued` |
 | `commands` | `--terminal <addr>` `[--cache <file>]` (Rust sidecar only) | `commands` |
 | `helper install` | `--machine <m> --sha256 <hex> [--cache <file>]` | `installed` |
@@ -460,7 +460,7 @@ files only; no key goes to the agent. Another agent: `commands` is empty (the mo
 
 `send` reads the screen right before it types. Where it finds the agent's input box and the box has text, it sends
 nothing (`box_not_empty`). The box per agent (queue.rs `box_has_text`): Claude Code, the rows after "❯" between the
-last two rules (its placeholder `Try "…"` or "Press up to edit queued messages" counts as empty; with prompt
+last rule and the one above it (a named session draws its name in that top edge, "──── name ─"; its placeholder `Try "…"` or "Press up to edit queued messages" counts as empty; with prompt
 suggestions on, its default, a suggested prompt stands dim in the empty box and the screen's text has no dim, so only
 a box that starts with "/" counts as text: `"promptSuggestionEnabled": false` in `~/.claude/settings.json` reads
 any text); Codex, the last
