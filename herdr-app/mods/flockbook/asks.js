@@ -226,6 +226,23 @@ export function elicitation(screen) {
   const text = lines.slice(top + 1, btn).map((x) => x.replace(BOX, "").trim()).filter(Boolean).join(" ").replace(/\s+/g, " ");
   return { server, text: text.slice(0, 1200) };
 }
+// s27: which button of that box the terminal has selected, "accept" | "decline", or null when it can't be told. Only a
+// line made of nothing but the buttons counts (a "❯ Accept …" in the server's message does not), and only the ❯ marker
+// on one of them: the card's Accept / Decline press Enter only on the button they name.
+const BUTTONS = /^(?:(?:[❯>]\s*)?(?:\d+[.)]\s*)?\[?(?:Accept|Decline|Cancel)\]?\s*)+$/;
+export function elicitFocus(screen) {
+  if (!elicitation(screen)) return null;
+  const lines = String(screen ?? "").split(/\r?\n/);
+  let top = -1;
+  for (let i = lines.length - 1; i >= 0; i--) if (ELICIT.test(lines[i])) { top = i; break; }
+  for (let i = top + 1; i < Math.min(lines.length, top + 60); i++) {
+    const s = lines[i].replace(BOX, "").trim();
+    if (!s || !BUTTONS.test(s)) continue;
+    const m = /[❯>]\s*(?:\d+[.)]\s*)?\[?(Accept|Decline|Cancel)\b/.exec(s);
+    if (m) return m[1] === "Accept" ? "accept" : m[1] === "Decline" ? "decline" : null;
+  }
+  return null;
+}
 // </elicitation>
 // Blocked agents whose screen shows an MCP server's input request (owner 11-12: one click from the sidebar to its
 // terminal): read by the tick (blocked agents only) and by a chat or Needs you card read, which sees it sooner.

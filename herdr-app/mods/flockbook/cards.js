@@ -8,7 +8,7 @@ import { shared, setShared, hc } from "herdr";
 import { agents } from "./parked.js";
 import { icon, openTerminal, KEY_TERM } from "./state.js";
 import * as sidecar from "./sidecar.js";
-import { elicitation, noteElicit } from "./asks.js";
+import { elicitation, elicitFocus, noteElicit } from "./asks.js";
 
 export const CARD_MS = 1500;
 // An answer's "another agent is in this pane": the sidecar's check before each key failed, and for a question that
@@ -119,6 +119,8 @@ export class Cards {
     this.focus = cx?.focus_handle?.() ?? null;
     this.canFocus = () => true;   // the chat says no while you type a reply
     this.byAgent = new Map();
+    // A pause between a key and the next screen read (tests make it instant).
+    this.wait = (cx, ms) => new Promise((res) => (cx?.timer?.after ? cx.timer.after(ms, () => res()) : setTimeout(res, ms)));
     this.address = null;   // whose card the boxes belong to now
     // Which own-answer box has the keyboard (its question), or null. While one has it, the card's own key
     // handler leaves 1-9 and Enter alone so they type into the box. (The row used to stop every key
@@ -298,6 +300,54 @@ export class Cards {
 
   approve(cx, address, allow) { return this.act(cx, address, (c) => sidecar.approve(address, c.request, allow)); }
 
+  // s27 (owner 11-14 "one-click MCP Supabase migrations"): Accept / Decline on an MCP server's input request. Only on a
+  // press, never by itself, and every key is checked first: the screen is read again and the key goes only while the
+  // SAME request (server and text) is still there with the terminal's selection on the button pressed. Decline moves
+  // the selection down and checks it reached Decline before Enter; when it didn't, Esc (cancel: nothing runs).
+  async elicitAnswer(cx, address, accept) {
+    const e = this.entry(address), c = e.card;
+    if (e.sending || c?.kind !== "elicitation") return;
+    e.sending = true; e.note = null; cx.notify?.();
+    let note = null;
+    const read = async () => { const r = await hc(["read", address]).catch(() => null); return r?.code === 0 ? String(r.stdout ?? "") : null; };
+    const same = (scr) => { const el = scr == null ? null : elicitation(scr); return Boolean(el && el.server === c.server && el.text === c.text); };
+    const key = async (...k) => (await hc(["keys", address, ...k]).catch(() => null))?.code === 0;
+    try {
+      let scr = await read();
+      if (scr == null) note = "Not sent: its screen could not be read. Answer in the terminal.";
+      else if (!same(scr)) note = elicitation(scr) ? "Not sent: the request on screen changed. Here is what it shows now." : null;
+      else if (accept) {
+        if (elicitFocus(scr) !== "accept") note = "Not sent: the terminal's selection is not on Accept. Answer in the terminal.";
+        else if (!(await key("enter"))) note = "The key did not go out. Answer in the terminal.";
+        else note = await this.elicitAfter(cx, read, same);
+      } else {
+        if (elicitFocus(scr) !== "decline") {
+          if (!(await key("down"))) { note = "The key did not go out. Answer in the terminal."; return; }
+          await this.wait(cx, 300);
+          scr = await read();
+          if (!same(scr)) { note = "Not sent: the request on screen changed. Here is what it shows now."; return; }
+          if (elicitFocus(scr) !== "decline") {
+            // Never Enter here: cancel instead, which runs nothing either.
+            note = (await key("esc")) ? await this.elicitAfter(cx, read, same, "Cancelled (Esc): the selection did not reach Decline.") : "The key did not go out. Answer in the terminal.";
+            return;
+          }
+        }
+        if (!(await key("enter"))) note = "The key did not go out. Answer in the terminal.";
+        else note = await this.elicitAfter(cx, read, same);
+      }
+    } finally {
+      e.sending = false;
+      await this.poll(cx, address, true, true);
+      e.note = note;   // after the read: a new card would clear it
+      cx.notify?.();
+    }
+  }
+  // After a key: null when the request left the screen, else a note (or `gone`'s text when it went but says more).
+  async elicitAfter(cx, read, same, gone = null) {
+    await this.wait(cx, 800);
+    return same(await read()) ? "Sent, but the request still shows. Check its terminal." : gone;
+  }
+
   answer(cx, address) {
     const e = this.entry(address);
     const answers = answersFor(e.card?.question, e.picks, e.others);
@@ -338,13 +388,17 @@ export class Cards {
       : div().id(`${id}-note`).text_size(12).text_color(t.blocked).child(e.note);
 
     if (c.kind === "elicitation") {
-      // Answered in the terminal only: Accept may run something destructive (owner decides whether buttons come here).
+      // s27 (owner 11-14): Accept / Decline here, each checked against the screen first (elicitAnswer); the server and
+      // its whole request are shown so you know what Accept runs.
       box.child(head(`MCP server “${c.server}” asks for your input`));
       if (c.text) box.child(div().id(`${id}-elicit`).max_h(220).overflow_y_scrollbar().px(10).py(8).rounded(8).bg(t.background)
         .text_size(13).text_color(t.foreground).child(c.text));
-      box.child(h_flex().gap(10).items_center()
-        .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child("Accept or Decline in its terminal: Flockbook doesn't answer these for you."))
-        .child(button("elicit-terminal", "Answer in terminal", true, toTerminal)));
+      box.child(h_flex().gap(8).items_center()
+        .child(button("elicit-accept", e.sending ? "Sending…" : "Accept", true, (cx) => this.elicitAnswer(cx, address, true), e.sending))
+        .child(button("elicit-decline", "Decline", false, (cx) => this.elicitAnswer(cx, address, false), e.sending))
+        .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child("Checked against its screen before any key goes."))
+        .child(button("elicit-terminal", "Answer in terminal", false, toTerminal)));
+      const n = tail(); if (n) box.child(n);
       return box;
     }
     if (c.kind === "approval") {

@@ -106,6 +106,13 @@ Enter sends); the vertical tab list on the right shows each tab's program, statu
 - A reply that ends with a **re-entry prompt** (a quote or code block named "Re-entry prompt:" above it, called "ready to paste" under it, starting "Continue …", or answering a message that asked for one) gets
   **Copy all** on its footer line: one click puts the whole prompt on the clipboard, a small notice says it was
   copied, and the button says "Copied" for 2 seconds. Right-click the reply → **Copy re-entry prompt** does the same.
+- A short re-entry prompt that names its full version's file (`~/claude-notes/handoffs/<topic>.md`, any `…/handoffs/<name>.md`)
+  also gets **Copy full prompt** at the right end of that line: it copies the file, read on the tab's own machine.
+  Right-click the reply → **Copy full re-entry prompt**, and **Copy full** on a hand-off tab's Overview card, do the same.
+- An MCP server's input request (for example Supabase's "destructive operations … Run it on project …?" before a
+  migration) gets **Accept** and **Decline** on its card, with the server's name and its whole request. A press reads the
+  terminal again first and sends the key only while that same request is still there with the terminal's selection on
+  that button (Decline moves it there and checks; if it can't, Esc cancels). Nothing is ever pressed by itself.
 - Optional: each session's own **status line** in the chat header (see "Status line" below).
 
 **Terminal window**
