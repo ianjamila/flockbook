@@ -225,6 +225,21 @@ async function resumeWorld(opts) {
   eq("downtime kept across unidentified polls: the lost session is offered", (w.r.offer()?.tabs ?? []).map((x) => x.sid), ["s-c"]);
 }
 {
+  // s28 (Fable 5): an unidentified tab on wsl does not hold back resuming a session of this computer; its status call
+  // (to get it identified) goes once a minute at most, not on every poll.
+  const files = { [`wsl:${WSL}/.cache/flockbook/cache.json`]: { entries: {} }, [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: {} } };
+  const agents = [{ app: "claude-code", address: "wsl/t5", space: "wsl/sp1", space_name: "~", title: "New", tab_name: "1", tab_index: 0, program: { name: "Claude Code" } }];
+  const spaces = [{ id: "sp1", name: "~", machine: null, tabs: [] }];
+  const w = await resumeWorld({ settings: { claude_machine: "wsl" }, files, agents, spaces, ready: ["wsl"] });
+  w.st.setShared("flockbook.resume.offer", { at: now, tabs: [{ sid: "s-mac", account: "HOME", cwd: MAC, pids: [5], space: "sp1" }] });
+  const n0 = w.runs.length;
+  const ok = await w.r.resumeOne("s-mac");
+  eq("unidentified wsl tab: a Mac session still resumes", [ok, w.runs.length - n0], [true, 1]);
+  const s0 = w.statuses.length;
+  await w.r.resumeTick(); now += 30_000; await w.r.resumeTick();
+  eq("status call for an unidentified remote tab: once a minute at most", w.statuses.length - s0, 1);
+}
+{
   // The Mac (no claude_machine): remote tabs are never remembered (the PC that names wsl resumes them, not both).
   const files = { [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: { t1: { path: `${MAC}/.${NAME}/projects/-Users-you/s-mac.jsonl`, cwd: MAC, pids: [1] } } } };
   const agents = [

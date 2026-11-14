@@ -534,7 +534,7 @@ test("a prompt naming its hand-off file: Copy full prompt on the right of the fo
   let copied = null;
   const ccx = { ...fakeCx(), write_to_clipboard: (s) => { copied = s; } };
   // Right half: the file, read on this computer with ~ as its home.
-  pressAt(root, 700);
+  pressAt(root, 850);
   lastList._h.on_item_click("f-a1", ccx); await Promise.all(ccx.tasks);
   assert.equal(copied, FULL.trimEnd());
   assert.deepEqual(log.reads.at(-1), ["/home/test/claude-notes/handoffs/w.md", undefined]);
@@ -546,6 +546,11 @@ test("a prompt naming its hand-off file: Copy full prompt on the right of the fo
   const t = ccx.timers.find((x) => x.once && x.ms === 2000);
   t.f(ccx); v.render(cx);
   assert.match(footer(), /Copy full prompt/);
+  // Right of the middle but left of the button (Copy all's end on a narrow pane): the short prompt (s28 Fable 6).
+  pressAt(root, 600); copied = null;
+  const ccx1 = { ...fakeCx(), write_to_clipboard: (s) => { copied = s; } };
+  lastList._h.on_item_click("f-a1", ccx1); await Promise.all(ccx1.tasks);
+  assert.match(copied, /^Continue the work\.\nFull prompt/);
   // Left half: the short prompt, as before.
   pressAt(root, 200); copied = null;
   const ccx2 = { ...fakeCx(), write_to_clipboard: (s) => { copied = s; } };
@@ -609,7 +614,7 @@ test("Copy full prompt: a rewritten file is copied as it is now; a chat change r
   const root = v.render(cx);
   lastList._args.render({ start: 2, end: 3 });
   let copied = null;
-  const press = async () => { const c = { ...fakeCx(), write_to_clipboard: (s) => { copied = s; } }; pressAt(root, 700); lastList._h.on_item_click("f-a1", c); await Promise.all(c.tasks); };
+  const press = async () => { const c = { ...fakeCx(), write_to_clipboard: (s) => { copied = s; } }; pressAt(root, 850); lastList._h.on_item_click("f-a1", c); await Promise.all(c.tasks); };
   await press();
   assert.equal(copied, "First version.");
   file = "Second version.";
@@ -638,7 +643,7 @@ test("Copy full prompt: a slow read of the old file loses to the press's own rea
   file = "new";
   let copied = null;
   const c = { ...fakeCx(), write_to_clipboard: (s) => { copied = s; } };
-  pressAt(root, 700); lastList._h.on_item_click("f-a1", c); await Promise.all(c.tasks);
+  pressAt(root, 850); lastList._h.on_item_click("f-a1", c); await Promise.all(c.tasks);
   assert.equal(copied, "new", "the press read the file itself");
   slow(); await Promise.all(tcx.tasks);
   lastList._h.on_item_secondary_click("a1", { button: "right", position: { x: 0, y: 4 }, local_position: { x: 50, y: 4 } }, cx);
@@ -656,7 +661,7 @@ test("Copy full prompt on another machine's tab reads the file there, with that 
   const root = v.render(cx);
   let copied = null;
   const ccx = { ...fakeCx(), write_to_clipboard: (s) => { copied = s; } };
-  pressAt(root, 700);
+  pressAt(root, 850);
   lastList._h.on_item_click("f-a1", ccx); await Promise.all(ccx.tasks);
   assert.equal(copied, "On WSL.");
 });

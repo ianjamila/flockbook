@@ -128,6 +128,26 @@ test("handoffFile: the hand-off file a re-entry prompt names, or null", async ()
   assert.equal(expandHome("~/x.md", null), null, "no home known");
 });
 
+// s28 Fable 2: a web or file link is no hand-off file (a Windows tab would read "//host/…" as a network share).
+test("handoffFile: a URL is not a hand-off file", async () => {
+  const { handoffFile } = await import("../mods/flockbook/blocks.js");
+  assert.equal(handoffFile("see https://github.com/a/handoffs/x.md"), null);
+  assert.equal(handoffFile("see file:///home/you/handoffs/x.md"), null);
+  assert.equal(handoffFile("see //host/share/handoffs/x.md"), null);
+  assert.equal(handoffFile("see /a//handoffs/x.md"), null, "an empty segment");
+  assert.equal(handoffFile("Full prompt: /home/you/claude-notes/handoffs/x.md"), "/home/you/claude-notes/handoffs/x.md");
+});
+// s28 Fable 7: a prompt naming no file, in a reply naming two different ones: which one is meant can't be told.
+test("replyHandoff: two different files in the reply and none in the prompt → no file", async () => {
+  const { replyHandoff } = await import("../mods/flockbook/blocks.js");
+  const text = "I read ~/claude-notes/handoffs/old.md and wrote ~/claude-notes/handoffs/new.md.\n\nRe-entry prompt:\n\n> Continue the work.";
+  const h = replyHandoff([{ id: "u", k: "user", text: "go" }, { id: "a", k: "assistant", text }, { id: "f", k: "footer", text: "1" }]);
+  assert.equal(h?.prompt?.startsWith("Continue the work."), true);
+  assert.equal(h.file, null);
+  const one = "Wrote ~/claude-notes/handoffs/new.md (twice: ~/claude-notes/handoffs/new.md).\n\nRe-entry prompt:\n\n> Continue the work.";
+  assert.equal(replyHandoff([{ id: "u", k: "user", text: "go" }, { id: "a", k: "assistant", text: one }])?.file, "~/claude-notes/handoffs/new.md");
+});
+
 test("replyHandoff: the newest reply's prompt and the file it (or its reply) names", async () => {
   const { replyHandoff } = await import("../mods/flockbook/blocks.js");
   const r = (id, k, text) => ({ id, k, text });

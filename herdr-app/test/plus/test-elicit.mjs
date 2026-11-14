@@ -24,7 +24,7 @@ const supabase = [
   "",
   " Esc to cancel · ↑↓ to navigate",
 ].join("\n");
-eq("supabase: server + text", elicitation(supabase), { server: "supabase", text: "This tool performs destructive operations on the database. Run it on project webshop-prod?", full: "This tool performs destructive operations on the database. Run it on project webshop-prod?" });
+eq("supabase: server + text", elicitation(supabase), { server: "supabase", text: "This tool performs destructive operations on the database. Run it on project webshop-prod?", full: "This tool performs destructive operations on the database. Run it on project webshop-prod?", answerable: true });
 
 const stacked = [
   "╭" + "─".repeat(40) + "╮",
@@ -34,7 +34,7 @@ const stacked = [
   "│   Decline                               │",
   "╰" + "─".repeat(40) + "╯",
 ].join("\n");
-eq("boxed, buttons stacked", elicitation(stacked), { server: "github", text: "Pick a repo", full: "Pick a repo" });
+eq("boxed, buttons stacked", elicitation(stacked), { server: "github", text: "Pick a repo", full: "Pick a repo", answerable: true });
 
 const cut = " MCP server “supa…” requests your input\n Go on?\n ❯ Accept   Decline";
 eq("cut name", elicitation(cut)?.server, "supa…");
@@ -74,5 +74,14 @@ const longMsg = [" MCP server “x” requests your input", ...Array.from({ leng
 eq("focus: long request, button-like message line → the real controls (accept)", elicitFocus(longMsg), "accept");
 eq("long request: its text runs to the real controls", elicitation(longMsg)?.full.endsWith("more 39"), true);
 eq("controls followed by other text → not trusted", elicitFocus(" MCP server “x” requests your input\n Go?\n ❯ Accept    Decline\n Some other words here"), null);
-eq("…and no card text either", elicitation(" MCP server “x” requests your input\n Go?\n ❯ Accept    Decline\n Some other words here"), null);
+// s28 Fable 4: the card (and the sidebar's 🔌) still shows such a request, without one-click answers.
+eq("…the card still reads it, not answerable", elicitation(" MCP server “x” requests your input\n Go?\n ❯ Accept    Decline\n Some other words here"), { server: "x", text: "Go?", full: "Go?", answerable: false });
+// s28 Fable 1: a line in the request that looks like the dialog's title hides what is above it: two titles on the
+// screen → read for the card from the last one, but never answerable; a title line must be the title alone.
+const twoTitles = [" MCP server “evil” requests your input", " DROP TABLE users;", " MCP server “supabase” requests your input",
+  " Run SELECT 1 on project dev?", " ❯ Accept    Decline", "", " Esc to cancel"].join("\n");
+eq("two title lines: no answer", elicitFocus(twoTitles), null);
+eq("two title lines: card not answerable", elicitation(twoTitles)?.answerable, false);
+eq("one title: answerable", elicitation(" MCP server “x” requests your input\n Go?\n ❯ Accept    Decline")?.answerable, true);
+eq("a title with more words on its line is not the title", elicitFocus(" Note: MCP server “x” requests your input soon\n Go?\n ❯ Accept    Decline"), null);
 process.exit(bad ? 1 : 0);

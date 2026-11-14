@@ -33,7 +33,7 @@ async function world({ settings = {}, platform = "macos", ready = ["wsl"], homeO
   const herdr = {
     ...st, hooks, home: () => MAC, appHome: () => `${MAC}/.config/herdr-app`,
     window: () => ({ platform }), machines: () => hooks.machines,
-    agents: () => agents, spaces: () => spaces, terminals: () => [], panes: () => herdr.panesNow(), panesNow: () => [],
+    agents: () => agents, spaces: () => spaces, terminals: () => herdr.termsNow(), termsNow: () => [], panes: () => herdr.panesNow(), panesNow: () => [],
     theme: () => new Proxy({}, { get: (_t, k) => (typeof k === "string" ? `#${k}` : undefined) }),
     props: () => ({ view: "sessions", overlay: "ov1" }), closeOverlay: (id) => { closed.push(id); return null; },
     run: (name, args) => { runs.push([name, args]); onRun?.(name, args); return null; }, notify: (n) => { notes.push(n); return null; },
@@ -469,6 +469,26 @@ const LISTING = {
   await w2.ses.resumeSessions([{ sid: "s2", account: "GONE", machine: "", cwd: "/Users/you/code/tools", title: "Tools" }]);
   const r2 = await w2.ses.resumeSessions(pick());
   eq("overlap: a failed pick's claim is released", r2.opened, 1);
+}
+// 17. s28 (Fable 3): a session whose log changed in the last minutes may run in a terminal outside Herdr (VS Code, …):
+// marked, left out of Select all shown; ticked by hand it still opens. A session in a sub-agent tab counts as open.
+{
+  const listing = { "": [row(secs(60_000), LOG(MAC, "r1"), "/Users/you/code/webshop", "Busy one", "x"), row(secs(3600_000), LOG(MAC, "s2"), "/Users/you/code/tools", "Tools", "x")].join("\n") };
+  const w = await world({ listing });
+  const cx = fakeCx(); const view = new w.ses.SessionsView(cx); await cx.settle();
+  eq("recent: marked as maybe open elsewhere", /may be open in another terminal/.test(ui.textOf(ui.byId(view.render(cx), "ses-row-here-r1"))), true);
+  ui.byId(view.render(cx), "ses-all")._h.on_click({}, cx);
+  eq("recent: left out of Select all shown", [...view.picked].map((k) => k.split("\t")[2]), ["s2"]);
+  ui.byId(view.render(cx), "ses-row-here-r1")._h.on_click({}, cx);
+  eq("recent: ticked by hand", view.picked.size, 2);
+}
+{
+  const agents = [{ ...AGENT("t9", "sp1", "Helper"), address: "t9" }];
+  const files = { [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: { t9: { path: LOG(MAC, "s1"), cwd: "/Users/you/code/webshop", pids: [91] } } } };
+  const w = await world({ listing: LISTING, agents, files, spaces: [{ id: "sp1", name: "~", machine: null }] });
+  w.herdr.termsNow = () => [{ address: "t9", parent: "t1" }];
+  const cx = fakeCx(); const view = new w.ses.SessionsView(cx); await cx.settle();
+  eq("sub-agent tab: its session is not listed", view.shown().some((r) => r.sid === "s1"), false);
 }
 console.log(bad ? `${bad} FAILED` : "all passed");
 process.exit(bad ? 1 : 0);

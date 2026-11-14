@@ -385,6 +385,19 @@ test("Accept: a changed request that shares its first 1200 characters → no key
   assert.match(textOf(byId(c.view("t1", T), "card-note")), /Not sent: the request on screen changed/);
 });
 
+test("a request whose screen can't be checked well enough: the card shows it, but only Answer in terminal", async () => {
+  const odd = elicitScreen() + "\n Some other words under the dialog";
+  const w = elicitWorld([odd]);
+  const cx = fakeCx(); const c = quick(new Cards());
+  await c.poll(cx, "t1", true);
+  const el = c.view("t1", T);
+  assert.match(textOf(byId(el, "card-elicit")), /webshop-prod/);
+  assert.equal(byId(el, "card-elicit-accept"), null); assert.equal(byId(el, "card-elicit-decline"), null);
+  assert.ok(byId(el, "card-elicit-terminal"));
+  assert.match(textOf(el), /Answer it in its terminal/);
+  assert.deepEqual(w.keys, []);
+});
+
 test("Accept: the request gone from the screen → no key", async () => {
   const w = elicitWorld([elicitScreen(), after]);
   const cx = fakeCx(); const c = quick(new Cards());

@@ -28,6 +28,7 @@ const r = await loadResume({
 
 // Pure.
 eq("session from a work-account log", r.sessionOf(log(WORK_CFG, "aaa-1")), { sid: "aaa-1", account: "WORK" });
+eq("a log named like an option is no session (s28 Fable 8)", r.sessionOf(log(WORK_CFG, "--dangerously-x")), null);
 eq("session from a personal-account log", r.sessionOf(log(HOME_CFG, "bbb-2")), { sid: "bbb-2", account: "HOME" });
 eq("no log", r.sessionOf(null), null);
 // The config-folder variable's name, and the program, built from parts too.
