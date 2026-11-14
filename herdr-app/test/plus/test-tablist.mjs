@@ -45,4 +45,23 @@ eq("dance: a shell tab (no agent) → still", R.dances({ agent: null, status: "w
 for (const st of ["idle", "done", "blocked", "unknown"]) eq(`dance: ${st} → still`, R.dances({ agent: AG, status: st, setting: "on" }), false);
 eq("dance: hop is up and back, sway either side", [R.DANCE.hop.from === 0 && R.DANCE.hop.to < 0, R.DANCE.sway.from < 0 && R.DANCE.sway.to > 0], [true, true]);
 eq("dance: loop periods at least 100 ms (the API floor)", [R.DANCE.hop.period, R.DANCE.sway.period].every((n) => n >= 100), true);
+
+// Owner 11-14 s29 ("when im in overview, it should show all running sessions in all workspaces … instead of just the
+// last workspace i visited"): on the Overview the list shows every workspace's tabs, each workspace under its name.
+const R2 = new Function(pure + "; return { listMode, allRows, allHeadText };")();
+eq("mode: Overview → all", R2.listMode("overview"), "all");
+eq("mode: chat / tab / Needs you / none → space", ["chat", "tab", "needs", null, undefined].map(R2.listMode), ["space", "space", "space", "space", "space"]);
+const SPACES = [
+  { id: "s1", name: "eaglewatch", active: false, tabs: [{ id: "a", index: 1 }, { id: "b", index: 2, settled: true }, { id: "c", index: 3 }] },
+  { id: "s2", name: "~", active: true, tabs: [] },
+  { id: "s3", name: "api", machine: "pc-wsl", active: false, tabs: [{ id: "d", index: 1 }] },
+];
+const title = (s) => (s.machine ? `${s.name} on ${s.machine}` : s.name);
+const rows = R2.allRows(SPACES, title);
+eq("all rows: a heading per workspace with tabs, then its tabs (put-away tabs and empty workspaces left out)",
+  rows.map((r) => (r.kind === "space" ? `# ${r.text}` : r.tab.id)), ["# eaglewatch · 2", "a", "c", "# api on pc-wsl · 1", "d"]);
+eq("all rows: a tab row carries its workspace", rows.filter((r) => r.kind === "tab").map((r) => r.space.id), ["s1", "s1", "s3"]);
+eq("all rows: no spaces → none", R2.allRows([], title), []);
+eq("all rows: a workspace without a tabs list → skipped", R2.allRows([{ id: "x", name: "x" }], title), []);
+eq("all head: count of every tab", R2.allHeadText(3), "All workspaces · 3");
 process.exit(bad ? 1 : 0);
