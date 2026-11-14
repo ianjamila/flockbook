@@ -197,6 +197,56 @@ fn another_version_there_is_an_error_not_a_guess() {
     }
 }
 
+// s32: every build says 0.1.0, so an older helper there (before Send anyway over a suggestion) passed the version
+// check and, given --over-suggestion, typed into the suggestion. Its header lists what it can do (`abilities`). Before
+// a Send anyway there, the helper there is asked first (`version`): one without the ability is outdated, with what it
+// lacks, and nothing runs there; review P1. Every other command still runs on an older helper (review P2).
+fn older_there(w: &World, abilities: &str) {
+    std::fs::create_dir_all(w.installed().parent().unwrap()).unwrap();
+    let v = remote::helper_version();
+    let fake = format!(
+        "#!/bin/sh\necho \"$1\" >> \"$HOME/calls\"\necho '{{\"cmd\":\"x\",\"protocol\":1,\"sidecar\":\"{v}\",\"type\":\"header\"{abilities}}}'\necho '{{\"ms\":0,\"ok\":true,\"type\":\"end\"}}'\n"
+    );
+    std::fs::write(w.installed(), fake).unwrap();
+    std::fs::set_permissions(w.installed(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _ = std::fs::remove_file(w.home.join("calls"));
+}
+fn calls_there(w: &World) -> Vec<String> {
+    std::fs::read_to_string(w.home.join("calls")).unwrap_or_default().lines().map(String::from).collect()
+}
+
+#[test]
+fn send_anyway_to_an_older_helper_there_sends_nothing_and_offers_this_builds() {
+    let w = world();
+    let send = ["send", "--terminal", "box/t3", "--over-suggestion", "/handoff", "--text", "/clear"];
+    for abilities in ["".to_string(), ",\"abilities\":[\"bare-session\"]".to_string()] {
+        older_there(&w, &abilities);
+        let e = w.error(&send);
+        assert_eq!(e["code"], "remote_helper_outdated", "{abilities}: {e}");
+        assert_eq!(e["remote"]["sidecar"], remote::helper_version());
+        assert_eq!(e["remote"]["missing"], serde_json::json!(["send-over-suggestion"]), "{e}");
+        assert!(e["message"].as_str().unwrap().contains("older"), "{e}");
+        assert_eq!(e["install"]["machine"], "box", "the card can offer this build's helper");
+        assert_eq!(calls_there(&w), vec!["version"], "only asked what it can do: no send ran there");
+    }
+    // With the ability, the Send anyway goes there after the check.
+    older_there(&w, ",\"abilities\":[\"send-over-suggestion\"]");
+    let ok = w.run(&send);
+    assert_eq!(ok.last().unwrap()["ok"], true, "{ok:?}");
+    assert_eq!(calls_there(&w), vec!["version", "send"]);
+}
+
+#[test]
+fn an_older_helper_there_still_reads_and_sends_plain_text() {
+    let w = world();
+    older_there(&w, "");
+    for args in [&["card", "--terminal", "box/t3"][..], &["send", "--terminal", "box/t3", "--text", "hi"][..]] {
+        let v = w.run(args);
+        assert_eq!(v.last().unwrap()["ok"], true, "{args:?}: {v:?}");
+    }
+    assert_eq!(calls_there(&w), vec!["card", "send"], "no version check for these: nothing they need is missing");
+}
+
 #[test]
 fn a_platform_without_a_helper_is_unsupported() {
     let w = world();

@@ -21,7 +21,7 @@
 //!
 //! A terminal `m/tN` on another machine: the command runs there, in the helper there (`remote`). Rust only.
 
-use crate::protocol::{JsonLines, PROTOCOL_VERSION, SIDECAR_VERSION};
+use crate::protocol::{JsonLines, ABILITIES, PROTOCOL_VERSION, SIDECAR_VERSION};
 use crate::{cards, config, feed, locate, paste, phone, queue, remote, status, update};
 use herdr_core::hc::{HcClient, HcSession};
 use herdr_core::PaneScreen;
@@ -58,10 +58,13 @@ pub fn run(argv: &[String]) -> String {
     // The mod puts --home last; the last one counts, so a text that says "--home" is not taken for it.
     let home = || args.iter().rposition(|a| a == "--home").and_then(|i| args.get(i + 1).cloned());
     let mut r = Run { t0: Instant::now(), out: JsonLines::new() };
-    r.out.emit_value(json!({"type": "header", "protocol": PROTOCOL_VERSION, "sidecar": SIDECAR_VERSION, "cmd": cmd}));
+    r.out.emit_value(json!({"type": "header", "protocol": PROTOCOL_VERSION, "sidecar": SIDECAR_VERSION, "cmd": cmd, "abilities": ABILITIES}));
     match cmd.as_str() {
         "version" => {
-            r.out.emit_value(json!({"type": "version", "commands": ["version", "feed", "status", "card", "approve", "answer", "send", "paste-image", "helper", "update-check", "queue", "phone", "commands", "parked"], "release": update::release()}));
+            // The commands, then what this build can do beyond them (review P3: from ABILITIES, so a new one is listed).
+            let mut commands: Vec<&str> = vec!["version", "feed", "status", "card", "approve", "answer", "send", "paste-image", "helper", "update-check", "queue", "phone", "commands", "parked"];
+            commands.extend(ABILITIES);
+            r.out.emit_value(json!({"type": "version", "commands": commands, "release": update::release()}));
             r.finish(true)
         }
         "parked" => {

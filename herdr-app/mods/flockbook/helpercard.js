@@ -50,7 +50,10 @@ export class HelperUI {
       case "bad_terminal": return wrap(say("This is not a terminal address Flockbook can read."), small(err.message));
     }
     const other = err.code === "remote_helper_outdated" ? err.remote?.sidecar : null;
-    const why = other ? `The helper on ${machine} is another version (${other}).` : `${machine} has no Flockbook helper yet, so the chat cannot read its agents.`;
+    // s32: the same version number but an older build (it lacks what this one can do: `remote.missing`).
+    const older = other && err.remote?.missing?.length > 0;
+    const why = older ? `The helper on ${machine} is older than this Flockbook.`
+      : other ? `The helper on ${machine} is another version (${other}).` : `${machine} has no Flockbook helper yet, so the chat cannot read its agents.`;
     if (!err.install) return wrap(say(why), say("This Flockbook has no helper for that machine. Install the Flockbook release that includes it."), small(err.message));
     const i = err.install, s = this.state.get(i.machine);
     if (s?.step === "cancelled") return wrap(say(why), small("Not installed. The chat for this machine stays off."),

@@ -82,7 +82,11 @@ The helper there keeps its own cache (`"$HOME"/.cache/flockbook/cache.json` ther
 `--cache` is not passed on. `send --file`: the file is first put beside the terminal there (`terminal.put`) and the
 text names that copy. Only one level: `a/b/t7` is `bad_terminal`.
 
-The helper there must be this same version (`protocol` and `sidecar` both). It is never put on
+The helper there must be this same version (`protocol` and `sidecar` both). Every build says 0.1.0, so a
+`send --over-suggestion` (Send anyway) there first asks the helper there for `version` (nothing else runs): one that
+lacks the `send-over-suggestion` ability (an older build) answers `remote_helper_outdated` with `remote.missing` and
+nothing is sent. Other commands run on any build of this version (an older one does less: without `bare-session`,
+Resume reads a new tab by its command line). It is never put on
 another machine without the user's yes:
 
 1. A command for `m/t7` answers `remote_helper_missing` (or `remote_helper_outdated`) with
@@ -113,7 +117,7 @@ Targets: `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `universal-a
 ### `header` (every answer, line 1)
 
 ```json
-{"cmd":"feed","protocol":1,"sidecar":"0.1.0","type":"header"}
+{"abilities":["send-over-suggestion","bare-session"],"cmd":"feed","protocol":1,"sidecar":"0.1.0","type":"header"}
 ```
 
 | Field | Meaning |
@@ -121,6 +125,7 @@ Targets: `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `universal-a
 | `protocol` | This document's version. Changes the mod must know about raise it. |
 | `sidecar` | The sidecar's own version. |
 | `cmd` | The command it ran. |
+| `abilities` | What this build can do beyond its commands (also at the end of `version`'s `commands`): `send-over-suggestion` (`send --over-suggestion`), `bare-session` (a new Claude tab named by its pid file: cache `sid`/`config`). Missing in older builds. |
 
 ### `end` (every answer, last line)
 

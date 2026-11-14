@@ -11,7 +11,7 @@
 //! Windows, where POSIX quotes mean nothing). The platform is known before anything with a value runs there, and a
 //! Windows machine gets nothing but `uname`. The fixed lines of install and remove run only on Unix.
 
-use crate::protocol::{JsonLines, PROTOCOL_VERSION, SIDECAR_VERSION};
+use crate::protocol::{JsonLines, ABILITIES, PROTOCOL_VERSION, SEND_OVER_SUGGESTION, SIDECAR_VERSION};
 use herdr_core::hc::HcClient;
 use herdr_core::HerdrError;
 use serde::{Deserialize, Serialize};
@@ -316,7 +316,7 @@ fn prepare(client: &HcClient, machine: &str, memo: &mut Memo) -> Result<Option<(
 }
 
 fn header(out: &mut JsonLines, cmd: &str) {
-    out.emit_value(json!({"type": "header", "protocol": PROTOCOL_VERSION, "sidecar": SIDECAR_VERSION, "cmd": cmd}));
+    out.emit_value(json!({"type": "header", "protocol": PROTOCOL_VERSION, "sidecar": SIDECAR_VERSION, "cmd": cmd, "abilities": ABILITIES}));
 }
 
 fn error_lines(cmd: &str, f: Fail, extra: Value) -> String {
@@ -357,6 +357,12 @@ pub fn forward(client: &HcClient, cmd: &str, args: &[String], machine: &str, ter
     }
     if memo.missing_now(machine) {
         return with_install(client, cmd, machine, missing(machine), json!({}), &mut memo);
+    }
+    // s32 (review P1/P2): only a Send anyway needs more than this version; it is checked there before anything runs.
+    if cmd == "send" && args.iter().any(|a| a == "--over-suggestion") {
+        if let Some(stop) = lacks(client, cmd, machine, SEND_OVER_SUGGESTION, &mut memo) {
+            return stop;
+        }
     }
     // The platform is Unix now. `sh -c` with a fixed script finds the helper under $HOME (exec's cwd is not
     // promised); every value goes in "$@" as one argument and the shell never reads it.
@@ -416,16 +422,51 @@ pub fn forward(client: &HcClient, cmd: &str, args: &[String], machine: &str, ter
         let why = if ran.stderr.is_empty() { format!("exit {}", ran.code.map_or("?".into(), |c| c.to_string())) } else { ran.stderr };
         return error_lines(cmd, fail("remote_failed", format!("The helper on {machine} did not answer: {why}")), json!({}));
     };
-    let (p, s) = (h.get("protocol").and_then(Value::as_i64), h.get("sidecar").and_then(Value::as_str));
-    if p != Some(PROTOCOL_VERSION) || s != Some(SIDECAR_VERSION) {
-        let f = fail(
-            "remote_helper_outdated",
-            format!("The helper on {machine} is another version ({}); this Flockbook needs {SIDECAR_VERSION}.", s.unwrap_or("?")),
-        );
-        let remote = json!({"remote": {"protocol": h.get("protocol"), "sidecar": h.get("sidecar")}});
-        return with_install(client, cmd, machine, f, remote, &mut memo);
+    if let Some(stop) = outdated(client, cmd, machine, &h, &mut memo) {
+        return stop;
     }
     text
+}
+
+/// The helper there (its `header` `h`) is another version: the error lines with the install card's data.
+fn outdated(client: &HcClient, cmd: &str, machine: &str, h: &Value, memo: &mut Memo) -> Option<String> {
+    let (p, s) = (h.get("protocol").and_then(Value::as_i64), h.get("sidecar").and_then(Value::as_str));
+    if p == Some(PROTOCOL_VERSION) && s == Some(SIDECAR_VERSION) {
+        return None;
+    }
+    let f = fail(
+        "remote_helper_outdated",
+        format!("The helper on {machine} is another version ({}); this Flockbook needs {SIDECAR_VERSION}.", s.unwrap_or("?")),
+    );
+    let remote = json!({"remote": {"protocol": h.get("protocol"), "sidecar": h.get("sidecar")}});
+    Some(with_install(client, cmd, machine, f, remote, memo))
+}
+
+/// s32: `cmd` needs `ability` there (`ABILITIES`). Every build says 0.1.0, so an older one of the same version passes
+/// the version check, and given a flag it doesn't know it takes it for text (review P1: `send --over-suggestion` typed
+/// into the suggestion, then the answer came back as an error). So the helper there is asked first with `version`
+/// (nothing else runs there): one without `ability` (or another version) gets the install card and nothing is done.
+/// None: go on (it has it, or the ask failed: the real run then says why, as before).
+fn lacks(client: &HcClient, cmd: &str, machine: &str, ability: &str, memo: &mut Memo) -> Option<String> {
+    let argv: Vec<String> = ["sh", "-c", &forward_script(false), "sh", "version"].iter().map(|a| a.to_string()).collect();
+    let ran = exec(client, machine, Run::Argv(&argv)).ok()?;
+    if ran.no_program || matches!(ran.code, Some(126 | 127)) {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&ran.stdout).to_string();
+    let h: Value = text.lines().next().and_then(|l| serde_json::from_str(l).ok())?;
+    if h.get("type").and_then(Value::as_str) != Some("header") {
+        return None;
+    }
+    if let Some(stop) = outdated(client, cmd, machine, &h, memo) {
+        return Some(stop);
+    }
+    if h.get("abilities").and_then(Value::as_array).is_some_and(|a| a.iter().any(|x| x.as_str() == Some(ability))) {
+        return None;
+    }
+    let f = fail("remote_helper_outdated", format!("The helper on {machine} is older than this Flockbook (it lacks {ability})."));
+    let remote = json!({"remote": {"protocol": h.get("protocol"), "sidecar": h.get("sidecar"), "missing": [ability]}});
+    Some(with_install(client, cmd, machine, f, remote, memo))
 }
 
 /// `helper install --machine m --sha256 h`: puts the helper there, only when `h` is the sha256 of the file read

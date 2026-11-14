@@ -7,6 +7,13 @@ use serde_json::Value;
 /// Bumped on any change a mod must know about. The mod refuses a sidecar with another number.
 pub const PROTOCOL_VERSION: i64 = 1;
 pub const SIDECAR_VERSION: &str = "0.1.0";
+/// What this build can do beyond its commands, named in every header (s32: every build says 0.1.0, so an older
+/// one passes the version check). A Send anyway on another machine asks the helper there for SEND_OVER_SUGGESTION
+/// first (remote.rs `lacks`); BARE_SESSION (a new Claude tab named by its pid file before its first message: cache
+/// `sid`/`config`) is only listed: without it Resume falls back to the command-line rules.
+pub const SEND_OVER_SUGGESTION: &str = "send-over-suggestion";
+pub const BARE_SESSION: &str = "bare-session";
+pub const ABILITIES: [&str; 2] = [SEND_OVER_SUGGESTION, BARE_SESSION];
 
 /// Collects output lines; `text` prints them. Keys are sorted (serde_json's map is ordered by key) and slashes are
 /// not escaped, as Swift's `.sortedKeys, .withoutEscapingSlashes`.

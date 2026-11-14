@@ -108,6 +108,16 @@ test("another version there: the card says it replaces it", async () => {
   assert.match(text, /Install the Flockbook helper on box\?/);
 });
 
+test("an older helper of the same version there: the card says it is older, offers this build's", async () => {
+  fake.why = { type: "error", code: "remote_helper_outdated", message: "The helper on box is older than this Flockbook (it lacks send-over-suggestion).",
+    remote: { protocol: 1, sidecar: "0.1.0", missing: ["send-over-suggestion"] }, install: install() };
+  const { cx, v } = await open();
+  const text = textOf(v.render(cx));
+  assert.match(text, /The helper on box is older than this Flockbook\./);
+  assert.doesNotMatch(text, /another version/);
+  assert.match(text, /Install the Flockbook helper on box\?/);
+});
+
 test("no helper for that platform, Windows, a bad address, a failed call: clear words, no card", async () => {
   const show = async (why) => { fake.why = why; const { cx, v } = await open(); const el = v.render(cx); return { text: textOf(el), card: byId(el, "helper-install") }; };
   let r = await show(missing(null));
