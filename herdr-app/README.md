@@ -115,7 +115,8 @@ Enter sends); the vertical tab list on the right shows each tab's program, statu
 - An MCP server's input request (for example Supabase's "destructive operations … Run it on project …?" before a
   migration) gets **Accept** and **Decline** on its card, with the server's name and its whole request. A press reads the
   terminal again first and sends the key only while that same request is still there with the terminal's selection on
-  that button (Decline moves it there and checks; if it can't, Esc cancels). Nothing is ever pressed by itself.
+  that button (Decline moves it there and checks; if it can't, Esc cancels). Nothing is ever pressed by itself. The first
+  real request seen is saved once to `flockbook/elicit-capture.txt` (screen text only), to check the buttons are read right.
 - Optional: each session's own **status line** in the chat header (see "Status line" below).
 
 **Terminal window**
