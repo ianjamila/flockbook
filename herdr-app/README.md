@@ -82,8 +82,10 @@ Enter sends); the vertical tab list on the right shows each tab's program, statu
   active. Type in the search box to filter (every word must match the title, first prompt, folder, account or machine), tick
   several rows or use **Select all shown** / **Clear**, then **Resume selected (N)**: each opens as its own account with
   `claude --resume`, in the workspace of the project that holds its folder (the `projects` setting), else that machine's "~"
-  workspace, else a new one there; never on the other machine. A session that is open in a tab is not listed (and is skipped if it
-  opened since); the list is cached, so reopening is instant, and **Refresh** reads the logs again. On Windows it needs
+  workspace, else (this computer) the workspace shown when it is this computer's, else a new "~" one there; never on the other
+  machine. A session that is open in a tab is not listed (and is skipped if it opened since, while the restart offer is opening
+  it, or while a Claude tab in its folder or with its title isn't identified yet); the list is cached, so reopening is instant,
+  and **Refresh** reads the logs again. On Windows it needs
   `claude_machine`, and says so.
 - An account that ran out of usage shows when it comes back, and its tabs say they are likely paused.
 - Fix: the cards no longer spill off both sides after the window shrinks.
