@@ -225,6 +225,26 @@ fn values_reach_the_helper_there_unchanged() {
     assert_eq!(w.there.calls("terminal.send")[0]["text"], text, "the agent there gets exactly the text");
 }
 
+/// Send anyway for a terminal on another machine (report 11-14): --over-suggestion goes there as it is, and the
+/// helper there clears its box's lone "/word" line, then sends.
+#[test]
+fn send_anyway_runs_on_the_machine_of_the_terminal() {
+    let w = world();
+    w.install_by_hand();
+    w.there.set_terminals(vec![claude("t3", "idle", "")]);
+    let rule = "─".repeat(40);
+    w.there.set_screen("t3", &format!("● Done.\n\n{rule}\n❯\u{a0}/handoff\n{rule}\n  ~/proj\n"));
+    let d = w.run(&["send", "--terminal", "box/t3", "--over-suggestion", "/handoff", "--text", "/clear"]);
+    assert_eq!(d[1]["result"], "sent", "{d:?}");
+    let exec = w.here.calls("machine.exec");
+    let argv: Vec<&str> = exec.last().unwrap()["argv"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    let at = argv.iter().position(|a| *a == "--over-suggestion").unwrap();
+    assert_eq!(argv[at + 1], "/handoff", "the word goes there unchanged");
+    assert_eq!(w.there.keys(), vec![vec!["ctrl+e".to_string(), "ctrl+u".to_string()]], "cleared there");
+    assert_eq!(w.there.calls("terminal.send")[0]["text"], "/clear");
+    assert!(w.here.keys().is_empty(), "no keys here");
+}
+
 #[test]
 fn the_helper_there_is_found_from_any_cwd() {
     let w = world();

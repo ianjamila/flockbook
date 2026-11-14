@@ -43,7 +43,7 @@ fn send_after_clear_is_a_new_conversation() {
     // Same agent process, another log: a new conversation. Nothing is sent; the message says so.
     let sends = || fake.calls("terminal.send").len();
     let s0 = sends();
-    let d = cards::send(&pane, &hc, "hi", &[], Some(&new_log), Some("claude"), Some(&old_s), was.as_ref());
+    let d = cards::send(&pane, &hc, "hi", &[], Some(&new_log), Some("claude"), Some(&old_s), was.as_ref(), None);
     let m = d.message.clone().unwrap_or_default();
     assert!(d.result == "changed" && m.contains("new conversation") && !m.contains("another agent"), "same process: new conversation ({d:?})");
     assert_eq!(sends(), s0, "nothing sent");
@@ -51,23 +51,23 @@ fn send_after_clear_is_a_new_conversation() {
     // Another process in the pane: another agent, as before.
     let mut other = was.clone().unwrap();
     other.pids = vec![9999];
-    let d = cards::send(&pane, &hc, "hi", &[], Some(&new_log), Some("claude"), Some(&old_s), Some(&other));
+    let d = cards::send(&pane, &hc, "hi", &[], Some(&new_log), Some("claude"), Some(&old_s), Some(&other), None);
     assert!(d.result == "changed" && d.message.as_deref().unwrap_or("").contains("another agent"), "another process ({d:?})");
 
     // The cached entry was for another log than the one the chat showed: no proof, refused as before.
     let mut elsewhere = was.clone().unwrap();
     elsewhere.path = Some(dir.join("third.jsonl").to_string_lossy().into());
-    let d = cards::send(&pane, &hc, "hi", &[], Some(&new_log), Some("claude"), Some(&old_s), Some(&elsewhere));
+    let d = cards::send(&pane, &hc, "hi", &[], Some(&new_log), Some("claude"), Some(&old_s), Some(&elsewhere), None);
     assert!(d.result == "changed" && d.message.as_deref().unwrap_or("").contains("another agent"), "no proof ({d:?})");
 
     // No log found now (the lookup failed): the chat could not show a new one, so refused as before.
-    let d = cards::send(&pane, &hc, "hi", &[], None, Some("claude"), Some(&old_s), was.as_ref());
+    let d = cards::send(&pane, &hc, "hi", &[], None, Some("claude"), Some(&old_s), was.as_ref(), None);
     assert!(d.message.as_deref().unwrap_or("").contains("another agent"), "no log now ({d:?})");
 
     // No entry, or another agent kind: refused as before.
-    let d = cards::send(&pane, &hc, "hi", &[], Some(&new_log), Some("claude"), Some(&old_s), None);
+    let d = cards::send(&pane, &hc, "hi", &[], Some(&new_log), Some("claude"), Some(&old_s), None, None);
     assert!(d.message.as_deref().unwrap_or("").contains("another agent"), "no entry ({d:?})");
-    let d = cards::send(&pane, &hc, "hi", &[], Some(&new_log), Some("codex"), Some(&old_s), was.as_ref());
+    let d = cards::send(&pane, &hc, "hi", &[], Some(&new_log), Some("codex"), Some(&old_s), was.as_ref(), None);
     assert!(d.message.as_deref().unwrap_or("").contains("another agent"), "another kind ({d:?})");
     assert_eq!(sends(), s0, "nothing sent in any case");
 }

@@ -78,7 +78,10 @@ export const commands = (terminal) => call("commands", ["--terminal", terminal, 
 export const pasteImage = () => call("paste-image", ["--dir", `${appHome()}/flockbook/paste`]);
 // `seen`: the agent kind and the log the chat last showed; the sidecar refuses another agent or conversation.
 // `--cache`: the sidecar looks the log up again and writes it there, so the next `feed` reads a new conversation at once.
-export const send = (terminal, text, files = [], seen = null) => call("send", ["--terminal", terminal, "--text", text,
+// `over`: Send anyway over Claude's lone "/word" suggestion (composer.js): the helper where the terminal runs clears
+// the box's line only when it shows exactly that word, then sends. Before --text: only that part is read for it.
+export const send = (terminal, text, files = [], seen = null, over = null) => call("send", ["--terminal", terminal,
+  ...(over ? ["--over-suggestion", over] : []), "--text", text,
   ...files.flatMap((f) => ["--file", f]),
   ...(seen?.agent ? ["--expect-kind", seen.agent] : []), ...(seen?.path ? ["--expect-path", seen.path] : []),
   "--cache", cachePath()]);
@@ -93,27 +96,6 @@ export const agentChanged = (done) => done?.result === "changed" && /another age
 export const conversationChanged = (done) => done?.result === "changed" && /conversation/i.test(done?.message ?? "");
 export const NEW_CONVERSATION = "This terminal is in a new conversation now (after a /clear?). The chat shows it now: press Send again.";
 export const CONVERSATION_PENDING = "This terminal's conversation changed (a /clear?) and the chat has not caught up yet. Wait a few seconds, then press Send again.";
-// The agent and log a terminal has NOW ({ kind, path }), or null when it can't be told: its cached log is marked
-// stale, `status` looks it up again and writes the cache, and the entry is read back. For sends that skip the
-// sidecar's own agent / conversation check (composer.js sendAnyway). Fails closed (Codex recheck 11-12 P1): a
-// `status` that failed, or an entry not looked up during THIS call (its `checked`, in seconds, is older than the
-// call: the mark did not stick or nothing re-located it), is null, never the stale cached log.
-export async function currentLog(terminal) {
-  try {
-    const start = Date.now();
-    await recheckLog(terminal);
-    const r = await status(terminal);
-    if (r?.error || !r?.end) return null;
-    const text = await readTextFile(cachePath());
-    const e = text ? JSON.parse(text)?.entries?.[terminal] : null;
-    // 1 ms of slack: the helper writes seconds as a float.
-    if (!e || typeof e.kind !== "string" || typeof e.checked !== "number" || e.checked * 1000 < start - 1) return null;
-    return { kind: e.kind, path: typeof e.path === "string" ? e.path : null };
-  } catch { return null; }
-}
-// Whether `now` (currentLog) is still what the chat showed (`seen`: { agent, path }); nothing seen = nothing to compare.
-export const sameConversation = (seen, now) =>
-  !seen || (!seen.agent && !seen.path) || Boolean(now && (!seen.agent || now.kind === seen.agent) && (!seen.path || now.path === seen.path));
 // Marks the terminal's cached log as checked long ago, so the next `feed` looks for its log again. Only when the
 // file did not change meanwhile (the sidecar may be writing it); false when nothing was marked.
 export async function recheckLog(terminal) {

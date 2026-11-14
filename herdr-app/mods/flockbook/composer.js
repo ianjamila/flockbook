@@ -102,7 +102,8 @@ export function quoted(path) {
 // so a lone "/word" in the box with no list above it is most likely the suggestion. Returns that word, else null
 // (anything else in the box, a list above it, or no box found). `screen`: the terminal's screen text (hc read).
 // Tested 2026-11-11 on a throwaway: typed "/clear" closed with Esc looks the same (no list), and hc send then
-// appends ("/clearReply…": an unknown command), so sendAnyway clears the line first (ctrl+e ctrl+u).
+// appends ("/clearReply…": an unknown command), so Send anyway clears the line first (ctrl+e ctrl+u): the helper
+// does it (send --over-suggestion, queue.rs claude_lone_slash: this same rule), on the terminal's own machine.
 // A box edge: a run of ─ (the top one may carry the session's title before its last ─).
 const BOX_EDGE = (l) => { const s = l.trim(); return /^─{8,}/.test(s) && s.endsWith("─"); };
 const LIST_ROW = /^\s*(❯\s+)?\/[\w:.-]+\s{2,}\S/;
@@ -116,12 +117,6 @@ function boxOf(screen) {
   }
   return top < 0 ? null : { rows: lines.slice(top + 1, bottom), above: lines.slice(Math.max(0, top - 2), top) };
 }
-// The box has one line only. Right after ctrl+e ctrl+u cleared that line, whatever still shows on it is not typed
-// (Claude's placeholder or a suggestion); a typed second line would remain.
-export function boxOneLine(screen) {
-  const b = boxOf(screen);
-  return Boolean(b) && /^\s*❯/.test(b.rows[0] ?? "") && !b.rows.slice(1).some((r) => r.trim());
-}
 export function suggestedSlash(screen) {
   const b = boxOf(screen);
   if (!b) return null;
@@ -133,8 +128,6 @@ export function suggestedSlash(screen) {
   return word;
 }
 export const SUGGESTION_NOTE = (w) => `Not sent: the terminal's box shows “${w}” (most likely Claude's dim suggestion). Send anyway clears that line, typed or not, and sends your message.`;
-// A terminal on another machine ("box/t7"; local ones are "t7").
-export const isRemote = (address) => String(address ?? "").includes("/");
 
 export function withFiles(text, files) {
   if (!files.length) return text;
@@ -498,14 +491,13 @@ export class Composer {
         // A new conversation in the same terminal (a /clear): the chat reads it now, so Send again goes to it.
         const shown = fresh && await sidecar.recheckLog(a) && await this.onNewConversation?.(a, cx);
         this.note = { text: shown ? sidecar.NEW_CONVERSATION : fresh ? sidecar.CONVERSATION_PENDING : moved ? sidecar.AGENT_CHANGED : (r.error?.message ?? done?.message) || "The message was not sent.", bad: true };
-        // Only a lone "/word" with no command list above the box: offer to type over it (sendAnyway). Not for a
-        // terminal on another machine ("box/t7"): its log is looked up there, so sendAnyway could never confirm the
-        // conversation here; the sidecar's own note (clear the box in the terminal) stays.
-        if (done?.result === "box_not_empty" && this.address === a && !isRemote(a)) {
+        // Only a lone "/word" with no command list above the box: offer to type over it (sendAnyway). A terminal on
+        // another machine ("box/t7") too: hc reads its screen, and the helper there does the send (report 11-14).
+        if (done?.result === "box_not_empty" && this.address === a) {
           const r2 = await hc(["read", a, "--json"]).catch(() => null);
           let screen = null; try { screen = JSON.parse(r2?.stdout ?? "")?.text; } catch { screen = null; }
           const w = r2?.code === 0 ? suggestedSlash(screen) : null;
-          if (w && this.address === a) this.note = { text: SUGGESTION_NOTE(w), bad: true, anyway: { address: a, text, files, seen } };
+          if (w && this.address === a) this.note = { text: SUGGESTION_NOTE(w), bad: true, anyway: { address: a, text, files, seen, word: w } };
         }
       } else {
         // The owner answered: its ask leaves Needs you now, not at the next tick.
@@ -515,41 +507,28 @@ export class Composer {
     } finally { this.sending = false; this.keepSoon(cx); cx.notify(); }
   }
 
-  // "Send anyway" after a box_not_empty that looked like a suggestion: ctrl+e ctrl+u clears the box's line (a typed
-  // "/word" goes; a dim suggestion is untouched), the screen is read again, and only a box down to one line gets the
-  // message (hc send pastes it over any dim text and presses Enter). Only for the same agent AND conversation: hc
-  // send has no such check, so the terminal's log is looked up again before the box is cleared and before the send
-  // (a /clear, /resume or another agent in the same terminal since the refusal → nothing is typed).
+  // "Send anyway" after a box_not_empty that looked like a suggestion. The helper where the terminal runs (this
+  // computer, or the other machine for "box/t7") does it all (send --over-suggestion): the agent and conversation
+  // check the chat showed at Send (--expect-kind / --expect-path: a /clear, /resume or another agent since the
+  // refusal → nothing is typed), then, only when the box still shows exactly that lone "/word", ctrl+e ctrl+u clears
+  // its line (a typed "/word" goes; a dim suggestion is untouched), the screen is read again, and only a box down to
+  // one line gets the message (pasted over any dim text, Enter).
   async sendAnyway(cx) {
     const n = this.note?.anyway, a = this.address;
-    if (!n || this.sending || n.address !== a || isRemote(a)) return;
+    if (!n || this.sending || n.address !== a) return;
     this.sending = true; this.note = null;
     cx.notify();
-    const moved = async () => {
-      if (sidecar.sameConversation(n.seen, await sidecar.currentLog(a))) return false;
-      this.note = { text: "Not sent: this terminal is in another conversation now (a /clear or /resume?). Check the chat, then send again.", bad: true };
-      return true;
-    };
     try {
-      const fail = (e) => ({ code: -1, stdout: "", stderr: String(e) });
-      if (await moved()) return;
-      const k = await hc(["keys", a, "ctrl+e", "ctrl+u"]).catch(fail);
-      await new Promise((res) => cx.timer.after(300, () => res()));
-      const s = await hc(["read", a, "--json"]).catch(fail);
-      let screen = null; try { screen = JSON.parse(s.stdout)?.text; } catch { screen = null; }
-      if (k.code !== 0 || s.code !== 0 || !boxOneLine(screen) || this.address !== a) {
-        this.note = { text: "Not sent: the terminal's box still has text in it. Clear it in the terminal (ctrl-`), then send again.", bad: true };
-        return;
-      }
-      if (await moved()) return;
-      const r = await hc(["send", a, withFiles(n.text, n.files), "--json"]).catch(fail);
-      let o = null; try { o = JSON.parse(r.stdout); } catch { o = null; }
-      if (r.code === 0 && o && o.started !== false) {
+      const r = await sidecar.send(a, withFiles(n.text, n.files), n.files, n.seen, n.word);
+      const done = r.lines.find((l) => l.type === "done");
+      if (!r.error && (done?.result === "sent" || done?.result === "unconfirmed")) {
         if (this.address === a && this.input.value().replace(/\s+$/, "") === n.text) { this.setText(""); this.files = []; this.keepSoon(cx); }
         answered(a);
-        this.note = { text: "Sent over the suggestion.", bad: false };
+        this.note = { text: done.result === "sent" ? "Sent over the suggestion." : "Sent. The agent did not confirm it yet.", bad: false };
+      } else if (sidecar.conversationChanged(done)) {
+        this.note = { text: "Not sent: this terminal is in another conversation now (a /clear or /resume?). Check the chat, then send again.", bad: true };
       } else {
-        this.note = { text: `Not sent: ${(o?.message ?? o?.error ?? r.stderr ?? "").toString().trim().slice(0, 200) || "hc send failed."}`, bad: true };
+        this.note = { text: `Not sent: ${((r.error?.message ?? done?.message) || "the helper gave no answer.").toString().trim().slice(0, 200)}`, bad: true };
       }
     } finally { this.sending = false; this.keepSoon(cx); cx.notify(); }
   }

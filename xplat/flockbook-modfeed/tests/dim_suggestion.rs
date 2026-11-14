@@ -91,3 +91,56 @@ fn an_agent_change_during_the_look_is_refused() {
     assert_eq!(d["result"], "changed", "refused: another agent ({d})");
     assert!(fake.calls("terminal.send").is_empty() && fake.calls("terminal.keys").is_empty(), "nothing typed");
 }
+
+fn send_args(sock: &str, args: &[&str]) -> Value {
+    let out = Command::new(env!("CARGO_BIN_EXE_flockbook-modfeed")).args(args).env_clear().env("HC_SOCKET", sock).env("HOME", "/nonexistent-home").output().unwrap();
+    let lines: Vec<Value> = String::from_utf8(out.stdout).unwrap().lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).collect();
+    lines.iter().find(|l| l["type"] == "done" || l["type"] == "error").cloned().unwrap()
+}
+
+/// Send anyway (report 11-14): the look at the first paint gave no proof (no paint here), so a plain send was refused.
+/// `--over-suggestion /clear` clears the box's line with Ctrl-E Ctrl-U only when the box shows exactly that lone word,
+/// reads it again, and sends only into a box down to one row.
+#[test]
+fn send_anyway_clears_the_lone_word_then_sends() {
+    let fake = FakeHc::start();
+    fake.set_terminals(vec![claude("t1", "idle", "idle")]);
+    let rule = "─".repeat(40);
+    let shows = |row: &str| format!("● Done.\n\n{rule}\n{row}\n{rule}\n  ~/proj\n");
+    let anyway = ["send", "--terminal", "t1", "--over-suggestion", "/clear", "--text", "hello"];
+    fake.set_screen("t1", &shows("❯\u{a0}/clear"));
+    assert_eq!(send(&fake.path)["result"], "box_not_empty", "a plain send: no proof it is dim");
+
+    // The dim suggestion stays after the clear: one row, the text goes.
+    let d = send_args(&fake.path, &anyway);
+    assert_eq!(d["result"], "sent", "{d}");
+    assert_eq!(fake.keys(), vec![vec!["ctrl+e".to_string(), "ctrl+u".to_string()]], "the line cleared once");
+    assert_eq!(fake.calls("terminal.send").last().unwrap()["text"], "hello");
+
+    // Another word in the box: no keys; the usual check refuses.
+    fake.set_screen("t1", &shows("❯\u{a0}/compact"));
+    let (k0, s0) = (fake.keys().len(), fake.calls("terminal.send").len());
+    assert_eq!(send_args(&fake.path, &anyway)["result"], "box_not_empty");
+    assert_eq!((fake.keys().len(), fake.calls("terminal.send").len()), (k0, s0), "nothing pressed or sent");
+
+    // A second row left after the clear: nothing sent, the note says so.
+    fake.set_screen("t1", &shows("❯\u{a0}/clear"));
+    let two = shows("❯\u{a0}\n  second line");
+    fake.on_keys(Some(std::sync::Arc::new(move |_a, _k, st| {
+        st.screens.insert("t1".into(), two.clone());
+    })));
+    let d = send_args(&fake.path, &anyway);
+    assert!(d["result"] == "box_not_empty" && d["message"].as_str().unwrap().contains("still has text"), "{d}");
+    assert_eq!(fake.calls("terminal.send").len(), s0, "nothing sent");
+    fake.on_keys(None);
+
+    // Not a lone /word: refused before anything.
+    fake.set_screen("t1", &shows("❯\u{a0}/clear"));
+    let k1 = fake.keys().len();
+    let e = send_args(&fake.path, &["send", "--terminal", "t1", "--over-suggestion", "clear now", "--text", "hello"]);
+    assert_eq!(e["code"], "usage", "{e}");
+    // A text that reads "--over-suggestion" is the text, never the option.
+    let d = send_args(&fake.path, &["send", "--terminal", "t1", "--text", "--over-suggestion", "--expect-kind", "claude"]);
+    assert_eq!(d["result"], "box_not_empty", "a plain send of that text ({d})");
+    assert_eq!(fake.keys().len(), k1, "no keys");
+}

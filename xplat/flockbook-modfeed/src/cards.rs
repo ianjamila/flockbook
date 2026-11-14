@@ -132,8 +132,23 @@ pub enum Over {
 /// its dim prompt suggestion), Ctrl-E Ctrl-U clears the box's line (a typed "/word" goes; a dim suggestion is not
 /// text and stays), the screen is read again after a pause, and only a box down to one row lets the text go.
 /// `passes`: the key gate, asked right before the keys.
-pub fn clear_suggestion<S: PaneScreen + ?Sized>(_s: &S, _pane_id: &str, _word: &str, _passes: &dyn Fn() -> bool) -> Over {
-    Over::NotShown
+pub fn clear_suggestion<S: PaneScreen + ?Sized>(s: &S, pane_id: &str, word: &str, passes: &dyn Fn() -> bool) -> Over {
+    let Ok(screen) = s.visible_text(pane_id) else { return Over::NotShown };
+    if crate::queue::claude_lone_slash(&screen).as_deref() != Some(word) {
+        return Over::NotShown;
+    }
+    if !passes() {
+        return Over::Refused;
+    }
+    if s.send_named_keys(&["ctrl+e".into(), "ctrl+u".into()], pane_id).is_err() {
+        return Over::Stuck;
+    }
+    // Tested 11-11: the box redraws within a few frames.
+    s.pause(300);
+    match s.visible_text(pane_id) {
+        Ok(after) if crate::queue::claude_box_one_row(&after) => Over::Cleared,
+        _ => Over::Stuck,
+    }
 }
 /// Why the gate said no: the agent changed, or it has no identity to check, which no retry fixes.
 pub fn refused(pane: &Pane) -> Done {
@@ -399,9 +414,10 @@ pub fn answer<S: PaneScreen + ?Sized>(pane: &Pane, screen: &S, log: Option<&Path
 }
 
 /// The composer: the text, with each file in `files` named in it. `was`: the locate cache entry this terminal had
-/// before the send looked its log up again.
+/// before the send looked its log up again. `over`: Send anyway over Claude Code's lone "/word" suggestion
+/// (`clear_suggestion`); after every check above it, so another agent or conversation still gets nothing.
 #[allow(clippy::too_many_arguments)]
-pub fn send(pane: &Pane, client: &HcClient, text: &str, files: &[String], log: Option<&Path>, expect_kind: Option<&str>, expect_path: Option<&str>, was: Option<&crate::locate::Entry>) -> Done {
+pub fn send(pane: &Pane, client: &HcClient, text: &str, files: &[String], log: Option<&Path>, expect_kind: Option<&str>, expect_path: Option<&str>, was: Option<&crate::locate::Entry>, over: Option<&str>) -> Done {
     // The agent the owner was reading: another agent, or a new conversation, in this terminal now gets nothing.
     if let Some(k) = expect_kind {
         if Some(k) != pane.agent.as_ref().map(|a| a.kind.as_str()) {
@@ -432,6 +448,16 @@ pub fn send(pane: &Pane, client: &HcClient, text: &str, files: &[String], log: O
     // The text would go after what is in the agent's box ("/" + "/status" = "//status"). A box not found, an agent
     // not read, or no screen: it goes as before.
     let kind = pane.agent.as_ref().map(|a| a.kind.as_str()).unwrap_or("");
+    if let Some(word) = over.filter(|_| kind == "claude") {
+        let passes = || keygate::passes(client, Some(&gate(pane)), &pane.id, None, None);
+        match clear_suggestion(client, &pane.id, word, &passes) {
+            Over::NotShown => {}
+            Over::Refused => return refused(pane),
+            Over::Stuck => return Done::new("box_not_empty", Some(BOX_STILL_FULL)),
+            // The box still shows the dim word: the text is pasted over it (as with a dim suggestion below).
+            Over::Cleared => return if passes() { deliver(client, pane, text, files) } else { refused(pane) },
+        }
+    }
     let suggests = kind == "claude" && claude_suggests(std::env::var_os("HOME").map(std::path::PathBuf::from).as_deref());
     if let Ok(screen) = client.visible_text(&pane.id) {
         if crate::queue::box_has_text(kind, &screen, suggests) == Some(true) {
@@ -444,6 +470,11 @@ pub fn send(pane: &Pane, client: &HcClient, text: &str, files: &[String], log: O
             }
         }
     }
+    deliver(client, pane, text, files)
+}
+
+/// Types the text (with its files) into the pane and presses Enter.
+fn deliver(client: &HcClient, pane: &Pane, text: &str, files: &[String]) -> Done {
     let r = if files.is_empty() { client.deliver(text, &pane.id) } else { client.deliver_files(text, &pane.id, files) };
     match r {
         DeliveryOutcome::Sent => Done::new("sent", None),

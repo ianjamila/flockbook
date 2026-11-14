@@ -10,7 +10,8 @@
 //!   flockbook-modfeed answer --terminal <addr> --request <id> --answers <json> [--cache <file>]
 //!   flockbook-modfeed queue  --terminal <addr> [--cache <file>]   (the agent's own queue: one `queued` line; read only)
 //!   flockbook-modfeed paste-image --dir <folder>   (copied files, else the clipboard's image as a PNG there; path null when none)
-//!   flockbook-modfeed send   --terminal <addr> --text <s> [--file <path>]... [--expect-kind <k>] [--expect-path <log>]
+//!   flockbook-modfeed send   --terminal <addr> [--over-suggestion </word>] --text <s> [--file <path>]... [--expect-kind <k>] [--expect-path <log>]
+//!                            (--over-suggestion: Send anyway; the box's line is cleared first when it shows only that /word)
 //!   flockbook-modfeed helper install --machine <m> --sha256 <hex>   (the helper on another machine; after the user's yes)
 //!   flockbook-modfeed helper remove --machine <m>
 //!   flockbook-modfeed update-check --home <herdr-app home> [--dismiss <version>]   (a newer release? once a day)
@@ -228,7 +229,16 @@ pub fn run(argv: &[String]) -> String {
                     let Some(text) = opt("--text").filter(|t| !t.is_empty()) else { return r.fail("usage", "send needs --text <s>") };
                     let files: Vec<String> =
                         args.iter().enumerate().filter(|(i, a)| *a == "--file" && *i + 1 < args.len()).map(|(i, _)| args[i + 1].clone()).collect();
-                    let d = cards::send(&found.pane, &client, &text, &files, log, opt("--expect-kind").as_deref(), opt("--expect-path").as_deref(), was.as_ref());
+                    // Send anyway: the mod puts --over-suggestion before --text, and only that part is read, so a text that
+                    // says "--over-suggestion" is never taken for it.
+                    let before_text = &args[..args.iter().position(|a| a == "--text").unwrap_or(args.len())];
+                    let over = before_text.iter().position(|a| a == "--over-suggestion").map(|i| before_text.get(i + 1).cloned());
+                    let over = match over {
+                        None => None,
+                        Some(Some(w)) if crate::queue::slash_word(&w) => Some(w),
+                        Some(_) => return r.fail("usage", "send --over-suggestion needs a lone \"/word\" before --text"),
+                    };
+                    let d = cards::send(&found.pane, &client, &text, &files, log, opt("--expect-kind").as_deref(), opt("--expect-path").as_deref(), was.as_ref(), over.as_deref());
                     r.out.emit(&d);
                     return r.finish(true);
                 }
@@ -317,7 +327,7 @@ pub fn keys(terminal: &str, cache: Option<&Path>, home: Option<&str>, keys: Keys
     let d = match keys {
         Keys::Approve { request, allow } => cards::approve(&found.pane, &client, log, &request, allow, cache),
         Keys::Answer { request, answers } => cards::answer(&found.pane, &client, log, &request, &answers),
-        Keys::Send { text, expect_kind, expect_path } => cards::send(&found.pane, &client, &text, &[], log, expect_kind.as_deref(), expect_path.as_deref(), was.as_ref()),
+        Keys::Send { text, expect_kind, expect_path } => cards::send(&found.pane, &client, &text, &[], log, expect_kind.as_deref(), expect_path.as_deref(), was.as_ref(), None),
     };
     serde_json::to_value(&d).unwrap_or_else(|_| json!({"type": "done", "result": "failed"}))
 }
