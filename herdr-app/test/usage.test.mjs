@@ -10,7 +10,7 @@ import { space } from "./fixtures.mjs";
 import { SideView } from "../mods/flockbook/side.js";
 import { KEY_MACHINES } from "../mods/flockbook/machines.js";
 import { KEY_CONFIG } from "../mods/flockbook/config.js";
-import { KEY_USAGE, pollUsage, figures, rows, merge, readings, clock, until, USAGE_URL, USAGE_MS, USAGE_REMOTE_MS } from "../mods/flockbook/usage.js";
+import { KEY_USAGE, pollUsage, figures, rows, merge, readings, clock, until, USAGE_URL, USAGE_MS, USAGE_REMOTE_MS, profileFor, chromeLocalState, refreshChromeProfiles, KEY_CHROME } from "../mods/flockbook/usage.js";
 
 const NOW = new Date(2026, 10, 15, 14, 0).getTime();   // Sunday 15 Nov 2026, 14:00 local
 const secs = (y, mo, d, h, mi) => new Date(y, mo, d, h, mi).getTime() / 1000;
@@ -27,6 +27,7 @@ beforeEach(() => {
   reset();
   fake.props = undefined;
   fake.settings = { zoom: 1 };                           // dark (some tests switch to light)
+  fake.window = { ...fake.window, platform: "macos" };   // some tests switch to Windows
   fake.home = "/home/test";
   fake.machines = [{ name: null, layout: "ready" }];
   fake.spaces = [space("sp1", { index: 1, name: "app" })];
@@ -142,6 +143,67 @@ test("a click on an account opens its usage page", () => {
   assert.equal(USAGE_URL.codex, "https://chatgpt.com/codex/settings/usage");
   assert.match(byId(el, "usage-0")._a.tooltip, /click to open claude\.ai usage/);
   assert.match(byId(el, "usage-2")._a.tooltip, /click to open Codex usage/);
+});
+
+// Owner 11-15 s38: the Work row opened the personal account's page (claude.ai shows the account the Chrome window is
+// signed in to; Chrome's last-used profile was the personal one). Each Claude account opens in the Chrome profile
+// signed in with the same email (Chrome's Local State), read by the poll, never during render or a click.
+const LOCAL_STATE = JSON.stringify({ profile: { info_cache: {
+  "Profile 3": { name: "Ian", user_name: "jamilaian21@gmail.com" },
+  "Profile 4": { name: "eaglewatch.ph", user_name: "EagleWatch9002@eaglewatch.ph" },
+  "Profile 7": { name: "eaglewatch.ph", user_name: "" },
+} } });
+
+test("Chrome profiles: matched by the account's email, any case; none or unreadable is no match", () => {
+  assert.equal(profileFor(LOCAL_STATE, "eaglewatch9002@eaglewatch.ph"), "Profile 4");
+  assert.equal(profileFor(LOCAL_STATE, "jamilaian21@gmail.com"), "Profile 3");
+  assert.equal(profileFor(LOCAL_STATE, "other@x.test"), null);
+  assert.equal(profileFor(LOCAL_STATE, null), null);
+  assert.equal(profileFor("{ not json", "a@b.test"), null);
+  assert.equal(profileFor(null, "a@b.test"), null);
+  assert.equal(chromeLocalState("/Users/x", false), "/Users/x/Library/Application Support/Google/Chrome/Local State");
+  assert.equal(chromeLocalState("C:\\Users\\x", true), "C:\\Users\\x\\AppData\\Local\\Google\\Chrome\\User Data\\Local State");
+});
+
+test("a click opens a Claude account's page in its own Chrome profile; no match, or Codex, opens the default browser", async () => {
+  fake.home = "/Users/x";
+  fake.readText = (p) => (p === "/Users/x/Library/Application Support/Google/Chrome/Local State" ? LOCAL_STATE : null);
+  await refreshChromeProfiles(NOW);
+  assert.deepEqual(fake.shared[KEY_CHROME].emails, { "jamilaian21@gmail.com": "Profile 3", "eaglewatch9002@eaglewatch.ph": "Profile 4" });
+  fake.shared[KEY_CONFIG] = { file: { accounts: [WORK, PERSONAL] } };
+  fake.home = "/home/test";
+  const el = draw(data({ "": [
+    claude("/home/test/.claude-eaglewatch", "eaglewatch9002@eaglewatch.ph", 16, NOW - 60_000),
+    claude("/home/test/.claude", "jamilaian21@gmail.com", 2, NOW - 60_000), codex(70, NOW - 60_000),
+    claude("/home/test/.claude-other", "other@x.test", 50, NOW - 60_000)] }));
+  const opened = [];
+  const cx = { ...fakeCx(), open_url: (u) => opened.push(u) };
+  log.exec = [];
+  fake.exec = () => ({ code: 0, stdout: "", stderr: "" });
+  for (const i of [0, 1, 2, 3]) byId(el, `usage-${i}`)._h.on_click({}, cx);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(log.exec.map(([c, a]) => [c, ...a]), [
+    ["/usr/bin/open", "-na", "Google Chrome", "--args", "--profile-directory=Profile 4", USAGE_URL.claude],
+    ["/usr/bin/open", "-na", "Google Chrome", "--args", "--profile-directory=Profile 3", USAGE_URL.claude],
+  ]);
+  assert.deepEqual(opened, [USAGE_URL.claude, USAGE_URL.codex], "an account with no profile (row 2), and Codex (row 3): the default browser");
+  // Windows runs Chrome itself with the profile.
+  fake.window = { ...fake.window, platform: "windows" };
+  log.exec = [];
+  byId(el, "usage-0")._h.on_click({}, cx);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(log.exec[0][0], "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe");
+  assert.deepEqual(log.exec[0][1], ["--profile-directory=Profile 4", USAGE_URL.claude]);
+});
+
+test("Chrome profiles are read at most every 10 minutes", async () => {
+  fake.home = "/Users/x";
+  fake.readText = () => LOCAL_STATE;
+  await refreshChromeProfiles(NOW);
+  await refreshChromeProfiles(NOW + 60_000);
+  assert.equal(log.reads.filter(([p]) => /Local State$/.test(p)).length, 1);
+  await refreshChromeProfiles(NOW + 10 * 60_000 + 1);
+  assert.equal(log.reads.filter(([p]) => /Local State$/.test(p)).length, 2);
 });
 
 test("a reset time already past: 100% left and a line saying so", () => {

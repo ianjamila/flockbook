@@ -4,7 +4,7 @@
 // only: no network, no credentials, nothing spent) is asked here every 60 s and on each connected machine every
 // 120 s, and per account the latest week's lowest "left" wins (`newer`). Everything is kept in ONE shared key; render reads it with
 // snapShared and calls no helper or host function (s33: Herdr cuts off a slow render).
-import { shared, setShared, home, settings } from "herdr";
+import { shared, setShared, home, settings, readTextFile, exec, window as hostWindow } from "herdr";
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import * as sidecar from "./sidecar.js";
@@ -189,7 +189,53 @@ async function ask(source, now, every) {
 }
 // This computer, then each connected machine (a machine not connected is not asked, and its old readings stay: they
 // are the freshest known until a newer one arrives). Once per USAGE_MS across every copy of the sidebar. `now`: tests.
+// ---- which Chrome profile each account is signed in to (owner 11-15 s38) ----
+// claude.ai shows the account the Chrome window is signed in to, and Chrome opens a link in its last-used profile, so
+// the Work row opened the personal page. Each Claude account opens in the Chrome profile whose Google account has the
+// same email (Chrome's Local State `profile.info_cache.<dir>.user_name`). Read by the poll at most every CHROME_MS
+// into one shared key, so render and a click read no file.
+export const KEY_CHROME = "flockbook.chrome.profiles";  // { at, emails: { [email lower-case]: profile dir } }
+const CHROME_MS = 10 * 60_000;
+const CHROME_WIN = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+const isWindows = () => { try { return hostWindow()?.platform === "windows"; } catch { return false; } };
+export const chromeLocalState = (homeDir, windows) => (windows
+  ? `${homeDir}\\AppData\\Local\\Google\\Chrome\\User Data\\Local State`
+  : `${homeDir}/Library/Application Support/Google/Chrome/Local State`);
+// Every profile's signed-in email → its directory, from Local State's text; {} when unreadable.
+function profileEmails(text) {
+  let cache;
+  try { cache = JSON.parse(text ?? "")?.profile?.info_cache; } catch { return {}; }
+  const out = {};
+  for (const [dir, p] of Object.entries(cache ?? {})) {
+    const e = String(p?.user_name ?? "").trim().toLowerCase();
+    if (e && !(e in out)) out[e] = dir;
+  }
+  return out;
+}
+export const profileFor = (text, email) => (email ? profileEmails(text)[String(email).toLowerCase()] ?? null : null);
+export async function refreshChromeProfiles(now = Date.now()) {
+  const was = shared(KEY_CHROME);
+  if (was && now - (was.at ?? 0) < CHROME_MS) return;
+  let text = null;
+  try { text = await readTextFile(chromeLocalState(home(), isWindows())); } catch { text = null; }
+  setShared(KEY_CHROME, { at: now, emails: profileEmails(text) });
+}
+// Opens `url` for a row: in the Chrome profile signed in with the row's email when one is known, else with the system
+// browser (`cx.open_url`, synchronously, as a click must). A failed Chrome start falls back to the system opener.
+function openUsage(row, url, cx) {
+  const dir = row.kind === "claude" && row.email ? snapShared(KEY_CHROME)?.emails?.[String(row.email).toLowerCase()] : null;
+  if (!dir) { cx.open_url?.(url); return; }
+  const flag = `--profile-directory=${dir}`;
+  const win = isWindows();
+  const run = win ? exec(CHROME_WIN, [flag, url], { timeout: 15_000 }) : exec("/usr/bin/open", ["-na", "Google Chrome", "--args", flag, url], { timeout: 15_000 });
+  Promise.resolve(run).then((r) => {
+    if (r?.code !== 0) return win ? exec("cmd.exe", ["/c", "start", "", url]) : exec("/usr/bin/open", [url]);
+    return null;
+  }).catch(() => {});
+}
+
 export async function pollUsage(now = Date.now()) {
+  refreshChromeProfiles(now).catch(() => {});
   const machines = knownMachines().filter((m) => m?.state === "connected" && m.name).map((m) => m.name);
   await Promise.all([ask(LOCAL, now, USAGE_MS), ...machines.map((n) => ask(n, now, USAGE_REMOTE_MS))]);
 }
@@ -209,7 +255,7 @@ export function usageBlock(t, now = Date.now()) {
       const who = row.kind === "codex" ? null : row.email ?? row.name ?? baseName(row.folder);
       const url = row.kind === "codex" ? USAGE_URL.codex : USAGE_URL.claude;
       const tip = `${f.tip} · click to open ${row.kind === "codex" ? "Codex" : "claude.ai"} usage`;
-      return v_flex().id(`usage-${i}`).gap(3).tooltip(tip).cursor_pointer().on_click((_e, cx) => cx.open_url?.(url))
+      return v_flex().id(`usage-${i}`).gap(3).tooltip(tip).cursor_pointer().on_click((_e, cx) => openUsage(row, url, cx))
         .child(h_flex().gap(6).items_center().min_w(0)
           .child(div().id(`usage-${i}-name`).flex_none().text_size(12).font_semibold().text_color(row.kind === "codex" ? c.codex : c.claude(claudeN++)).child(row.kind === "codex" ? "Codex" : "Claude"))
           .when(Boolean(who), (el) => el.child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(who))))
