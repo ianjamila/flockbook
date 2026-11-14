@@ -5,7 +5,7 @@ import { MOD } from "./paths.mjs";
 import fs from "node:fs";
 const src = fs.readFileSync(MOD + "asks.js", "utf8");   // moved from cards.js in s10
 const i = src.indexOf("// <elicitation>"), j = src.indexOf("// </elicitation>");
-const { elicitation } = new Function(src.slice(i, j).replaceAll("export ", "") + "; return { elicitation };")();
+const { elicitation, elicitFocus } = new Function(src.slice(i, j).replaceAll("export ", "") + "; return { elicitation, elicitFocus: typeof elicitFocus === \"function\" ? elicitFocus : () => \"missing\" };")();
 
 let bad = 0;
 const eq = (name, got, want) => { const ok = JSON.stringify(got) === JSON.stringify(want); if (!ok) bad++; console.log(ok ? "PASS" : "FAIL", name, ok ? "" : `→ ${JSON.stringify(got)} want ${JSON.stringify(want)}`); };
@@ -44,4 +44,13 @@ eq("title but no buttons yet (still drawing)", elicitation(" MCP server “x” 
 eq("moved on: prompt box after it", elicitation(supabase + "\n" + RULE + "\n❯ next prompt\n" + RULE), null);
 eq("empty", elicitation(""), null);
 eq("words 'Accept' in the message don't count without Decline", elicitation(" MCP server “x” requests your input\n Accept the terms\n more"), null);
+
+// s27: which button the terminal has selected (Accept / Decline buttons on the card press only when it is right).
+eq("focus: Accept selected, side by side", elicitFocus(supabase), "accept");
+eq("focus: Decline selected, side by side", elicitFocus(supabase.replace(" ❯ Accept    Decline", "   Accept  ❯ Decline")), "decline");
+eq("focus: stacked, Accept", elicitFocus(stacked), "accept");
+eq("focus: stacked, Decline", elicitFocus(stacked.replace("│ ❯ Accept ", "│   Accept ").replace("│   Decline ", "│ ❯ Decline ")), "decline");
+eq("focus: no marker", elicitFocus(" MCP server “x” requests your input\n Go on?\n Accept   Decline"), null);
+eq("focus: no dialog", elicitFocus("⏺ Done."), null);
+eq("focus: a ❯ in the message is not the selection", elicitFocus(" MCP server “x” requests your input\n ❯ Accept the risk?\n   Accept  ❯ Decline"), "decline");
 process.exit(bad ? 1 : 0);

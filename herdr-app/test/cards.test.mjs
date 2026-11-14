@@ -316,3 +316,113 @@ test("an own answer the review cannot show: checked again as it changes, Send of
   assert.notEqual(byId(el, "card-answer")._h.on_click, undefined, "Send is on");
   assert.equal(c.others[1].value(), "olive", "the typed text stays");
 });
+
+// s27 (owner 11-14 "one-click MCP Supabase migrations"): an MCP server's input request (an "elicitation", e.g. Supabase
+// apply_migration's "destructive operations … Run it on project …?") gets Accept / Decline on its card. Each press
+// reads the screen again and sends keys only while the SAME request is still there, with the terminal's selection
+// where the press needs it; nothing is ever pressed by itself.
+const RULE = "─".repeat(60);
+const elicitScreen = (focus = "accept", text = "Run it on project webshop-prod?") => [
+  "⏺ Applying the migration", "", RULE, " MCP server “supabase” requests your input", "",
+  " This tool performs destructive operations on the database.", ` ${text}`, "",
+  focus === "accept" ? " ❯ Accept    Decline" : "   Accept  ❯ Decline", "", " Esc to cancel · ↑↓ to navigate"].join("\n");
+const after = "⏺ Migration applied.\n\n" + RULE + "\n❯ \n" + RULE;
+// The fake terminal: `screens` are what `hc read` shows, one per read (the last one stays); every `hc keys` recorded.
+function elicitWorld(screens) {
+  const keys = [];
+  let i = 0;
+  cardNow = null;
+  const exec0 = fake.exec;
+  fake.exec = (cmd, args) => {
+    if (cmd === "hc" && args[0] === "read") { const s = screens[Math.min(i, screens.length - 1)]; i++; return { code: 0, stdout: s, stderr: "" }; }
+    if (cmd === "hc" && args[0] === "keys") { keys.push(args.slice(1)); return { code: 0, stdout: "", stderr: "" }; }
+    return exec0(cmd, args);
+  };
+  return { keys, reads: () => i };
+}
+const quick = (c) => { c.wait = async () => {}; return c; };
+
+test("MCP request card: server and request text, Accept / Decline / Answer in terminal; reading it presses nothing", async () => {
+  const w = elicitWorld([elicitScreen()]);
+  const cx = fakeCx(); const c = quick(new Cards());
+  await c.poll(cx, "t1", true);
+  await c.poll(cx, "t1", true, true);
+  const el = c.view("t1", T);
+  assert.match(textOf(el), /MCP server “supabase” asks for your input/);
+  assert.match(textOf(byId(el, "card-elicit")), /destructive operations on the database\. Run it on project webshop-prod\?/);
+  assert.ok(byId(el, "card-elicit-accept")); assert.ok(byId(el, "card-elicit-decline")); assert.ok(byId(el, "card-elicit-terminal"));
+  assert.deepEqual(w.keys, [], "a card that is read sends no key");
+});
+
+test("Accept: the same request still on screen with Accept selected → one Enter, then the card goes", async () => {
+  const w = elicitWorld([elicitScreen(), elicitScreen(), after]);
+  const cx = fakeCx(); const c = quick(new Cards());
+  await c.poll(cx, "t1", true);
+  byId(c.view("t1", T), "card-elicit-accept")._h.on_click({}, cx); await cx.settle();
+  assert.deepEqual(w.keys, [["t1", "enter"]]);
+  assert.equal(c.view("t1", T), null, "answered: the request is gone");
+});
+
+test("Accept: a different request on screen now → no key, the new one shown with a note", async () => {
+  const w = elicitWorld([elicitScreen(), elicitScreen("accept", "Run it on project OTHER-prod?")]);
+  const cx = fakeCx(); const c = quick(new Cards());
+  await c.poll(cx, "t1", true);
+  byId(c.view("t1", T), "card-elicit-accept")._h.on_click({}, cx); await cx.settle();
+  assert.deepEqual(w.keys, []);
+  const el = c.view("t1", T);
+  assert.match(textOf(el), /OTHER-prod/);
+  assert.match(textOf(byId(el, "card-note")), /Not sent: the request on screen changed/);
+});
+
+test("Accept: the request gone from the screen → no key", async () => {
+  const w = elicitWorld([elicitScreen(), after]);
+  const cx = fakeCx(); const c = quick(new Cards());
+  await c.poll(cx, "t1", true);
+  byId(c.view("t1", T), "card-elicit-accept")._h.on_click({}, cx); await cx.settle();
+  assert.deepEqual(w.keys, []);
+  assert.equal(c.view("t1", T), null);
+});
+
+test("Accept: the terminal's selection on Decline → no key, a note to answer in the terminal", async () => {
+  const w = elicitWorld([elicitScreen("decline")]);
+  const cx = fakeCx(); const c = quick(new Cards());
+  await c.poll(cx, "t1", true);
+  byId(c.view("t1", T), "card-elicit-accept")._h.on_click({}, cx); await cx.settle();
+  assert.deepEqual(w.keys, []);
+  assert.match(textOf(byId(c.view("t1", T), "card-note")), /selection is not on Accept/);
+});
+
+test("Decline: down, checked on Decline, then Enter; never Enter while Accept is selected (Esc instead)", async () => {
+  let w = elicitWorld([elicitScreen(), elicitScreen(), elicitScreen("decline"), after]);
+  let cx = fakeCx(); let c = quick(new Cards());
+  await c.poll(cx, "t1", true);
+  byId(c.view("t1", T), "card-elicit-decline")._h.on_click({}, cx); await cx.settle();
+  assert.deepEqual(w.keys, [["t1", "down"], ["t1", "enter"]]);
+  assert.equal(c.view("t1", T), null);
+  // The selection did not move: Esc (cancel: nothing runs), never Enter.
+  reset(); fake.agents = [agent("t1", "blocked")]; passBlockGrace();
+  fake.exec = (_c, args) => (args[0] === "card" ? jl(header("card"), { type: "card" }, end) : jl(header(args[0]), end));
+  w = elicitWorld([elicitScreen(), elicitScreen(), elicitScreen(), after]);
+  cx = fakeCx(); c = quick(new Cards());
+  await c.poll(cx, "t1", true);
+  byId(c.view("t1", T), "card-elicit-decline")._h.on_click({}, cx); await cx.settle();
+  assert.deepEqual(w.keys, [["t1", "down"], ["t1", "esc"]]);
+});
+
+test("Decline already selected: Enter straight away; a request on another machine is answered there", async () => {
+  fake.agents = [agent("wsl/t3", "blocked")];
+  const w = elicitWorld([elicitScreen("decline"), elicitScreen("decline"), after]);
+  const cx = fakeCx(); const c = quick(new Cards());
+  await c.poll(cx, "wsl/t3", true);
+  byId(c.view("wsl/t3", T), "card-elicit-decline")._h.on_click({}, cx); await cx.settle();
+  assert.deepEqual(w.keys, [["wsl/t3", "enter"]]);
+});
+
+test("the request still on screen after the key: a note says to check its terminal", async () => {
+  const w = elicitWorld([elicitScreen()]);
+  const cx = fakeCx(); const c = quick(new Cards());
+  await c.poll(cx, "t1", true);
+  byId(c.view("t1", T), "card-elicit-accept")._h.on_click({}, cx); await cx.settle();
+  assert.deepEqual(w.keys, [["t1", "enter"]]);
+  assert.match(textOf(byId(c.view("t1", T), "card-note")), /still shows/);
+});
