@@ -59,7 +59,9 @@ Enter sends); the vertical tab list on the right shows each tab's program, statu
 **Overview**
 - Status groups **Working → CI / Final Review / Merging → Done → Resting**, each split into sub-groups (Ready to
   merge, Asks you to reply, Hand-off given, Merging, Review results waiting, Waiting on CI, Waiting on a review,
-  In review, Agents at work, Running in the background), with "N waiting on you" counts.
+  In review, Agents at work, Running in the background), with "N waiting on you" counts. Live work wins: a working
+  tab sits under what it does now (a ✅ on it is only a hint word), and Review results waiting lists only idle tabs
+  whose ✅ results are unread; a Now line waiting on a Codex job or CI counts as that wait.
 - A **Now:** line on each card (what the agent does right now, read off its screen, free) and an **About:**
   line (one plain-English sentence on what the work is for, written by Haiku from the tab's screen: once per
   tab, again when its title changes; a daily cap per account; "Pause until tomorrow"; off in Settings).
