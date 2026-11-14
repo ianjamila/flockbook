@@ -359,7 +359,8 @@ pub fn forward(client: &HcClient, cmd: &str, args: &[String], machine: &str, ter
         return with_install(client, cmd, machine, missing(machine), json!({}), &mut memo);
     }
     // s32 (review P1/P2): only a Send anyway needs more than this version; it is checked there before anything runs.
-    if cmd == "send" && args.iter().any(|a| a == "--over-suggestion") {
+    // The option counts only before --text (a text that reads like it is text), as the helper there reads it.
+    if cmd == "send" && args.iter().take_while(|a| *a != "--text").any(|a| a == "--over-suggestion") {
         if let Some(stop) = lacks(client, cmd, machine, SEND_OVER_SUGGESTION, &mut memo) {
             return stop;
         }

@@ -118,6 +118,33 @@ test("an older helper of the same version there: the card says it is older, offe
   assert.match(text, /Install the Flockbook helper on box\?/);
 });
 
+// s32 (review): an older helper still reads, so no failed feed draws the card; a Send anyway it can't do
+// (composer.helperAsk) puts the same card over the reply box, Install there clears it, Cancel hides it.
+test("Send anyway to an older helper: its install card over the reply box", async () => {
+  there = true;
+  const { cx, v } = await open();
+  await v.tick(cx); await cx.settle();
+  const older = { type: "error", code: "remote_helper_outdated", message: "The helper on box is older than this Flockbook (it lacks send-over-suggestion).",
+    remote: { protocol: 1, sidecar: "0.1.0", missing: ["send-over-suggestion"] }, install: install() };
+  assert.equal(byId(v.render(cx), "helper-install"), null, "no card while it reads fine");
+  v.composer.helperAsk = { address: "box/t7", err: older };
+  let el = v.render(cx);
+  assert.match(textOf(el), /The helper on box is older than this Flockbook\./);
+  assert.equal(v.feed().rows[0]?.text, "hello from box", "the chat stays");
+  assert.ok(byId(el, "helper-card"), "the card is drawn");
+  byId(el, "helper-install")._h.on_click({}, cx);
+  await cx.settle();
+  assert.deepEqual(calls.find((a) => a[0] === "helper")?.slice(0, 6), ["helper", "install", "--machine", "box", "--sha256", SHA]);
+  assert.equal(v.composer.helperAsk, null, "installed: the card goes");
+  assert.equal(byId(v.render(cx), "helper-install"), null);
+  v.composer.helperAsk = { address: "box/t7", err: older };
+  byId(v.render(cx), "helper-cancel")._h.on_click({}, cx);
+  assert.equal(byId(v.render(cx), "helper-install"), null, "cancelled: hidden (the note under the box says why)");
+  v.helper.state.delete("box");
+  v.composer.helperAsk = { address: "box/t9", err: older };
+  assert.equal(byId(v.render(cx), "helper-install"), null, "another tab's ask: not here");
+});
+
 test("no helper for that platform, Windows, a bad address, a failed call: clear words, no card", async () => {
   const show = async (why) => { fake.why = why; const { cx, v } = await open(); const el = v.render(cx); return { text: textOf(el), card: byId(el, "helper-install") }; };
   let r = await show(missing(null));

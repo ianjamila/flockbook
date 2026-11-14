@@ -69,6 +69,28 @@ c = fake("t1"); c.address = "t2";
 sent.length = 0; await composer.Composer.prototype.sendAnyway.call(c, cx);
 eq("anyway: the box moved to another agent → nothing", sent, []);
 
+// s32 (review): an older helper there (same 0.1.0, no send-over-suggestion) sends nothing and answers outdated with
+// the install data. The chat only drew that card for a failed feed (an older helper still reads), so the composer
+// keeps it (`helperAsk`) for the chat to draw over the reply box, and keeps Send anyway to press again after.
+const OLDER = { code: "remote_helper_outdated", message: "The helper on box is older than this Flockbook (it lacks send-over-suggestion).",
+  remote: { protocol: 1, sidecar: "0.1.0", missing: ["send-over-suggestion"] }, install: { machine: "box", sha256: "ab" } };
+c = fake("box/t7");
+sendReply = { lines: [], error: OLDER };
+await composer.Composer.prototype.sendAnyway.call(c, cx);
+eq("anyway: an older helper there → the card's data for the chat", [c.helperAsk?.address, c.helperAsk?.err?.code], ["box/t7", "remote_helper_outdated"]);
+eq("anyway: an older helper there → says install, Send anyway kept for after", [c.note?.bad, /older/.test(c.note?.text ?? ""), /install/i.test(c.note?.text ?? ""), c.note?.anyway?.word], [true, true, true, "/handoff"]);
+sendReply = { lines: [{ type: "done", result: "sent" }], error: null };
+await composer.Composer.prototype.sendAnyway.call(c, cx);
+eq("anyway: sent after the install → the card goes", [c.helperAsk ?? null, c.note?.bad], [null, false]);
+c = fake("box/t7");
+sendReply = { lines: [], error: { ...OLDER, install: null } };
+await composer.Composer.prototype.sendAnyway.call(c, cx);
+eq("anyway: nothing this Flockbook can install → no card, the helper's words", [c.helperAsk ?? null, /older/.test(c.note?.text ?? "")], [null, true]);
+c = fake("box/t7");
+sendReply = { lines: [], error: { code: "remote_helper_missing", message: "box has no Flockbook helper yet, so the chat cannot read its agents.", install: OLDER.install } };
+await composer.Composer.prototype.sendAnyway.call(c, cx);
+eq("anyway: no helper there → the chat's own card (failed feed), none here", [c.helperAsk ?? null, /no Flockbook helper/.test(c.note?.text ?? "")], [null, true]);
+
 // submit on a stand-in: the box shows a lone "/handoff" (box_not_empty). `seenLog` changes between the first and a
 // later read, as when the chat catches up with a /clear while the send is out.
 const submitFake = (address, seenLog) => {

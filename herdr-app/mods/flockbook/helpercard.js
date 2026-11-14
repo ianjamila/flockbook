@@ -49,15 +49,34 @@ export class HelperUI {
       case "remote_failed": return wrap(say("The other machine did not answer. Trying again."), small(err.message));
       case "bad_terminal": return wrap(say("This is not a terminal address Flockbook can read."), small(err.message));
     }
-    const other = err.code === "remote_helper_outdated" ? err.remote?.sidecar : null;
-    // s32: the same version number but an older build (it lacks what this one can do: `remote.missing`).
-    const older = other && err.remote?.missing?.length > 0;
-    const why = older ? `The helper on ${machine} is older than this Flockbook.`
-      : other ? `The helper on ${machine} is another version (${other}).` : `${machine} has no Flockbook helper yet, so the chat cannot read its agents.`;
+    const why = this.why(err, machine);
     if (!err.install) return wrap(say(why), say("This Flockbook has no helper for that machine. Install the Flockbook release that includes it."), small(err.message));
     const i = err.install, s = this.state.get(i.machine);
     if (s?.step === "cancelled") return wrap(say(why), small("Not installed. The chat for this machine stays off."),
       this.button(t, "helper-again", "Install…", "plain", (cx) => { this.state.delete(i.machine); cx.notify(); }));
+    return wrap(this.card(t, err, why, refresh));
+  }
+
+  // Why a helper card shows: none there, another version, or (s32) the same version but an older build (it lacks
+  // what this one can do: `remote.missing`).
+  why(err, machine) {
+    const other = err.code === "remote_helper_outdated" ? err.remote?.sidecar : null;
+    if (other && err.remote?.missing?.length > 0) return `The helper on ${machine} is older than this Flockbook.`;
+    return other ? `The helper on ${machine} is another version (${other}).` : `${machine} has no Flockbook helper yet, so the chat cannot read its agents.`;
+  }
+
+  // s32 (review): the install card over the reply box, after a Send anyway the helper there can't do (an older
+  // helper still reads, so no failed feed draws it). Null when there is nothing to install or it was cancelled
+  // (the note under the box says why).
+  sendCard(t, err, refresh) {
+    const i = err?.install;
+    if (!i || this.state.get(i.machine)?.step === "cancelled") return null;
+    return this.card(t, err, this.why(err, i.machine), refresh);
+  }
+
+  card(t, err, why, refresh) {
+    const other = err.code === "remote_helper_outdated" ? err.remote?.sidecar : null;
+    const i = err.install, s = this.state.get(i.machine);
     const row = (k, v) => h_flex().gap(10).items_start().text_size(12)
       .child(div().w(76).flex_none().text_color(t.muted).child(k))
       .child(div().flex_1().min_w(0).text_color(t.foreground).child(v));
@@ -78,7 +97,7 @@ export class HelperUI {
         .child(this.button(t, "helper-cancel", "Cancel", "plain", (cx) => { this.state.set(i.machine, { step: "cancelled" }); cx.notify(); }))
         .child(this.button(t, "helper-install", "Install", "primary", (cx) => this.install(cx, i, refresh))));
     }
-    return wrap(card);
+    return card;
   }
 
   install(cx, i, refresh) {

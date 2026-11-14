@@ -451,6 +451,14 @@ export class ChatView {
     }
   }
 
+  // s32: the helper card a Send anyway asked for (composer.helperAsk: the helper there is older), for this tab only;
+  // installed → the ask goes and the chat reloads.
+  sendHelperCard(t) {
+    const ask = this.composer?.helperAsk;
+    if (!ask || ask.address !== this.address) return null;
+    return this.helper.sendCard(t, ask.err, async (cx) => { this.composer.helperAsk = null; await this.refresh(cx); });
+  }
+
   // A failed `feed` in words people can act on; the sidecar's own message small below.
   problem(t, err) {
     if (isRemoteProblem(err)) return this.helper.problem(t, err, machineOf(this.address), this.refresh);
@@ -560,6 +568,8 @@ export class ChatView {
       // The reply box and the cards keep their stops.
       .child(v_flex().flex_1().min_h(0)
         .child(this.appear.wrap(main, "chat-body", this.address, cx).flex_1().min_h(0).flex().flex_col()))
+      .when(Boolean(this.sendHelperCard(t)), (el) => el.child(h_flex().w_full().px(16).pt(8).justify_center()
+        .on_mouse_down("left", stop).child(this.sendHelperCard(t))))
       .when(Boolean(this.helper.removeCard(t, this.refresh)), (el) => el.child(h_flex().w_full().px(16).pt(8).justify_center()
         .on_mouse_down("left", stop).child(this.helper.removeCard(t, this.refresh))))
       .when(Boolean(f) && f.error?.code !== "not-agent" && !isRemoteProblem(f.error), (el) => {

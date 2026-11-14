@@ -240,11 +240,12 @@ fn send_anyway_to_an_older_helper_there_sends_nothing_and_offers_this_builds() {
 fn an_older_helper_there_still_reads_and_sends_plain_text() {
     let w = world();
     older_there(&w, "");
-    for args in [&["card", "--terminal", "box/t3"][..], &["send", "--terminal", "box/t3", "--text", "hi"][..]] {
+    // A text that reads like the option is text (the option counts only before --text, as the helper there reads it).
+    for args in [&["card", "--terminal", "box/t3"][..], &["send", "--terminal", "box/t3", "--text", "hi"][..], &["send", "--terminal", "box/t3", "--text", "--over-suggestion"][..]] {
         let v = w.run(args);
         assert_eq!(v.last().unwrap()["ok"], true, "{args:?}: {v:?}");
     }
-    assert_eq!(calls_there(&w), vec!["card", "send"], "no version check for these: nothing they need is missing");
+    assert_eq!(calls_there(&w), vec!["card", "send", "send"], "no version check for these: nothing they need is missing");
 }
 
 #[test]

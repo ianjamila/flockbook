@@ -524,7 +524,16 @@ export class Composer {
       if (!r.error && (done?.result === "sent" || done?.result === "unconfirmed")) {
         if (this.address === a && this.input.value().replace(/\s+$/, "") === n.text) { this.setText(""); this.files = []; this.keepSoon(cx); }
         answered(a);
+        this.helperAsk = null;
         this.note = { text: done.result === "sent" ? "Sent over the suggestion." : "Sent. The agent did not confirm it yet.", bad: false };
+      } else if (r.error?.code === "remote_helper_outdated" && r.error.install) {
+        // s32: the helper there is older than this Flockbook: nothing was sent (a missing one fails the feed too, and
+        // the chat already shows its card). The chat draws its install
+        // card over the reply box from `helperAsk` (it draws it for a failed feed only, and an older helper still
+        // reads); Send anyway stays, to press again once it is installed.
+        this.helperAsk = { address: a, err: r.error };
+        const m = r.error.install.machine;
+        this.note = { text: `Not sent: the Flockbook helper on ${m} is older than this one. Install it (above), then press Send anyway again.`, bad: true, anyway: n };
       } else if (sidecar.conversationChanged(done)) {
         this.note = { text: "Not sent: this terminal is in another conversation now (a /clear or /resume?). Check the chat, then send again.", bad: true };
       } else {
