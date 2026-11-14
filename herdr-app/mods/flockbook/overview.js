@@ -5,7 +5,7 @@ import { withHover } from "./hover.js";
 import { theme, shared, setShared, home, notify } from "herdr";
 import { spaces, agents } from "./parked.js";
 import { spaceTitle } from "./machines.js";
-import { tabLabel, plainLabel, subStatus, SUB_GROUPS, tabAgents, agentName, openTab, showNeeds, needing, icon, FADE, watchEdge, noteWindowHeight } from "./state.js";
+import { tabLabel, plainLabel, subStatus, SUB_GROUPS, tabAgents, agentName, openTab, showNeeds, showSessions, needing, icon, FADE, watchEdge, noteWindowHeight } from "./state.js";
 import { openMenu, tabItems, suggestBadge } from "./menu.js";
 import { movedBadge, badgeTip } from "./automove.js";
 import { askOf, nowOf, handoffOf } from "./asks.js";
@@ -302,6 +302,7 @@ export class OverviewView {
         .child(div().flex_none().text_size(13).child("↻"))
         .child(div().flex_1().min_w(0).text_size(13).font_semibold().text_color(t.foreground).child(`${n} Claude ${n === 1 ? "session was" : "sessions were"} open before the restart`))
         .child(allOpening ? busy("ov-resume-all") : link("ov-resume-all", n === 1 ? "Resume" : "Resume all", () => resumeAll()))
+        .child(link("ov-resume-sessions", "All sessions…", () => showSessions()))
         .child(link("ov-resume-dismiss", "Dismiss", () => dismissOffer())))
       .children(o.tabs.map((x) => h_flex().id(`ov-resume-${x.sid}`).gap(10).items_center().pl(25)
         .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.foreground)
@@ -382,7 +383,10 @@ export class OverviewView {
               .child(div().id("ov-need-you").when(waiting > 0, (el) => el.text_color(t.foreground).hover((s) => s.underline()).on_click(() => showNeeds()))
                 .child(`${waiting} need you`))
               .when(merging > 0, (el) => el.child(` · ${merging} ready to merge`)))))
-        .child(this.segmented(t, by)))
+        // "Resume sessions…" is always here, offer or not: every closed conversation, a search box, resume several (sessions.js).
+        .child(h_flex().gap(14).items_center()
+          .child(div().id("ov-sessions").flex_none().text_size(12.5).text_color(t.accent).hover((s) => s.opacity(0.8)).cursor_pointer().on_click(() => showSessions()).child("Resume sessions…"))
+          .child(this.segmented(t, by))))
       .children(this.resumeBanner(t))
       .children(this.sinceStrip(t))
       .children(this.pauseBanners(t))

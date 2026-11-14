@@ -21,15 +21,15 @@ test("keys.json binds only commands that exist, in the flockbook layout's sectio
   const keys = JSON.parse(readFileSync(new URL("../keys.json", import.meta.url)));
   // Not mod:flockbook: with it, no key worked at all.
   assert.deepEqual(Object.keys(keys), ["layout:flockbook"]);
-  // The plus build adds tablist, keep-name and move-menu (top.js command).
-  const mine = ["terminal", "needs", "move-left", "move-right", "sidebar", "overview", "settings", "text-smaller", "text-larger", "text-default", "tablist", "keep-name", "move-menu"];
+  // The plus build adds tablist, keep-name, move-menu and sessions (top.js command).
+  const mine = ["terminal", "needs", "move-left", "move-right", "sidebar", "overview", "settings", "text-smaller", "text-larger", "text-default", "tablist", "keep-name", "move-menu", "sessions"];
   for (const [key, action] of Object.entries(keys["layout:flockbook"])) {
     if (action.startsWith("flockbook.")) assert.ok(mine.includes(action.slice(10)), `${key}: ${action}`);
   }
 });
 
 test("each view renders, and an unknown view says so", () => {
-  for (const view of ["top", "side", "chat", "needs", "overview", "settings"]) {
+  for (const view of ["top", "side", "chat", "needs", "overview", "settings", "sessions"]) {
     fake.props = { view }; const m = new Flockbook(); m.init(undefined, fakeCx());
     assert.ok(m.render(fakeCx()), view);
   }

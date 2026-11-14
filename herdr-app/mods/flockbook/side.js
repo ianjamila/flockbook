@@ -5,7 +5,7 @@ import { v_flex, h_flex } from "gpui-base";
 import { theme, run, openOverlay, closeOverlay, props } from "herdr";
 import { spaces } from "./parked.js";
 import { openMenu, spaceItems } from "./menu.js";
-import { watchGrace, needing, showNeeds, showOverview, showSettings, shownScreen, icon, showSpace, toggleSidebar, sidebarShown, peekClosed, PEEK_W, PEEK_GAP, SPRING, tabLabel, subStatus, tabAgents, tabStatus, answerInTerminal, noteWidth, KEY_SIDE_W } from "./state.js";
+import { watchGrace, needing, showNeeds, showOverview, showSettings, showSessions, shownScreen, icon, showSpace, toggleSidebar, sidebarShown, peekClosed, PEEK_W, PEEK_GAP, SPRING, tabLabel, subStatus, tabAgents, tabStatus, answerInTerminal, noteWidth, KEY_SIDE_W } from "./state.js";
 import { elicitOf } from "./asks.js";
 import { movedBadge, badgeTip } from "./automove.js";
 import { statusMark, lightsRoom, BAR_H } from "./top.js";
@@ -183,6 +183,7 @@ export class SideView {
         })
         .children(this.rows(list, space, t)))
       .when(Boolean(update), (el) => el.child(div().pb(4).child(update)))
+      .child(row("side-sessions", "refresh", "Resume sessions", () => showSessions(), null, false))
       .child(row("side-flockbook", "sliders", "Flockbook", () => showSettings(), null, false))
       .child(row("side-settings", "gear", "Settings", () => run("app.settings")));
   }

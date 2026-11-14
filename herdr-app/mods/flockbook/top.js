@@ -6,7 +6,7 @@ import { h_flex } from "gpui-base";
 import { theme, layout, window, settings, openOverlay, run, setAgentOrder, nextCommand, shared, setShared, props } from "herdr";
 import { openMenu, tabItems, openMoveMenu } from "./menu.js";
 import { spaceAgents, spaceTabs, activeTab, currentAgent, currentTerminal, tabLabel, plainLabel, sessionTitle, subStatus, withAsk, keepOrRename, screenFor, showTab, closeTab, openTerminal, showNeeds, icon, tabAgents, shownScreen,
-  SPIN_MS, FADE, sidebarShown, toggleSidebar, loadSidebar, showScreen, showOverview, showSettings, watchEdge, noteWindowHeight, applyTermRect, termShown, agentName, tabStatus, tablistShown, toggleTablist, watchGrace, keepTerminal, readTermPlace, KEY_TERM, noteWidth, KEY_WORK_W } from "./state.js";
+  SPIN_MS, FADE, sidebarShown, toggleSidebar, loadSidebar, showScreen, showOverview, showSettings, showSessions, watchEdge, noteWindowHeight, applyTermRect, termShown, agentName, tabStatus, tablistShown, toggleTablist, watchGrace, keepTerminal, readTermPlace, KEY_TERM, noteWidth, KEY_WORK_W } from "./state.js";
 import { loadConfig, pollUpdate, updateDot, stepTextSize } from "./config.js";
 import { checkHelperPatch } from "./patchcheck.js";
 import { asksTick, TICK_MS as ASKS_MS } from "./asks.js";
@@ -80,6 +80,8 @@ export function command(c) {
   if (c === "tablist") return toggleTablist();
   if (c === "overview") return showOverview();
   if (c === "settings") return showSettings();
+  // The Resume sessions dialog (sessions.js): the closed Claude conversations, a search box, tick several, resume them.
+  if (c === "sessions") return showSessions();
   // The shown tab, as a double-click on it: keep the session's topic as its name, or the rename box.
   if (c === "keep-name") return tab ? keepOrRename(tab) : undefined;
   if (c === "text-smaller" || c === "text-larger" || c === "text-default") return stepTextSize(c);
