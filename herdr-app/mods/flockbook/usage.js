@@ -16,7 +16,8 @@ export const KEY_USAGE = "flockbook.usage";            // { sources: { [machine 
 const KEY_USAGE_BUSY = "flockbook.usage.busy";         // source -> when its ask began
 export const USAGE_MS = 60_000;                        // this computer
 export const USAGE_REMOTE_MS = 120_000;                // each connected machine
-const BUSY_MS = 45_000;
+// Longer than the slowest ask: a remote read is the platform check + the command, each up to 35 s (s36 review P3).
+const BUSY_MS = 90_000;
 export const STALE_MS = 15 * 60_000;                   // older than this: "as of 2 h ago"
 export const LOW = 15;                                 // under this % left the bar turns the warning colour
 const LOCAL = "";
@@ -31,7 +32,9 @@ export function readings(data) {
     .filter((l) => l?.type === "usage" && (l.kind === "claude" || l.kind === "codex") && Number.isFinite(l.weekly?.left) && Number.isFinite(l.at))
     .map((l) => ({ ...l, machine })));
 }
-const baseName = (p) => String(p ?? "").replace(/\/+$/, "").split(/[\\/]/).pop();
+// A folder compared the same way on every machine: "\" as "/", no trailing slash (s36 review: Windows readings).
+const norm = (p) => String(p ?? "").replace(/\\/g, "/").replace(/\/+$/, "");
+const baseName = (p) => norm(p).split("/").pop();
 // Newest `at` wins; a tie goes to this computer.
 const newer = (a, b) => (!a || b.at > a.at || (b.at === a.at && b.machine === LOCAL && a.machine !== LOCAL) ? b : a);
 // Claude accounts by email (a reading without one by its config folder's name); Codex by kind. { claude: [{ key, email,
@@ -53,7 +56,7 @@ export function merge(list) {
 // An account's folder on this computer: the setting's config_dir, else the default ~/.claude.
 export const folderOf = (a, list, homeDir) => {
   const c = a.config_dir ? String(a.config_dir) : null;
-  if (c) return c.replace(/^~(?=\/|$)/, homeDir ?? "~").replace(/\/+$/, "");
+  if (c) return c.replace(/^~(?=[\\/]|$)/, homeDir ?? "~").replace(/[\\/]+$/, "");
   return `${homeDir ?? "~"}/.claude`;
 };
 // The rows to draw, in order: the "accounts" setting's accounts (matched by config folder; a reading from another
@@ -63,12 +66,20 @@ export function rows(data, list, homeDir) {
   const m = merge(readings(data));
   const used = new Set();
   const setAccounts = list.length ? list : [{ mark: "default" }];
-  const out = setAccounts.map((a) => {
-    const folder = folderOf(a, list, homeDir);
-    const hit = m.claude.find((x) => !used.has(x.key) && [...x.configs].some((c) => c === folder))
-      ?? m.claude.find((x) => !used.has(x.key) && [...x.configs].some((c) => baseName(c) === baseName(folder)));
-    if (hit) used.add(hit.key);
-    return { kind: "claude", id: a.mark, name: a.name ?? null, folder, email: hit?.email ?? null, reading: hit?.reading ?? null };
+  const folders = setAccounts.map((a) => folderOf(a, list, homeDir));
+  // Exact folders first for every row, then the folder's name for the rows still without one (s36 review P3: a row
+  // matched by name took the reading a later row matches exactly).
+  const hits = folders.map(() => null);
+  const pass = (same) => folders.forEach((folder, i) => {
+    if (hits[i]) return;
+    const hit = m.claude.find((x) => !used.has(x.key) && [...x.configs].some((c) => same(c, folder)));
+    if (hit) { used.add(hit.key); hits[i] = hit; }
+  });
+  pass((c, f) => norm(c) === norm(f));
+  pass((c, f) => baseName(c) === baseName(f));
+  const out = setAccounts.map((a, i) => {
+    const hit = hits[i];
+    return { kind: "claude", id: a.mark, name: a.name ?? null, folder: folders[i], email: hit?.email ?? null, reading: hit?.reading ?? null };
   });
   for (const x of m.claude.filter((y) => !used.has(y.key)).sort((p, q) => String(p.email ?? p.key).localeCompare(String(q.email ?? q.key)))) {
     const folder = [...x.configs][0] ?? null;

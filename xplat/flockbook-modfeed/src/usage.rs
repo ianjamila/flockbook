@@ -19,8 +19,9 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-/// The newest saved status line inputs read (the folder can hold hundreds).
-const CLAUDE_FILES: usize = 300;
+/// The newest saved status line inputs read (the folder can hold hundreds). 1000, not 300 (s36 review P3): one busy
+/// account must not push the other account's newest reading out; each is a few KB and read only until a reading is found.
+pub const CLAUDE_FILES: usize = 1000;
 /// A Claude Code input is a few KB; one this big is not one.
 const CLAUDE_FILE_MAX: u64 = 256 * 1024;
 /// Codex: how many days back from today, and how many rollouts, are looked at.
@@ -61,7 +62,8 @@ fn claude_weekly(rate_limits: &Value) -> Option<Value> {
 
 /// The config folder a saved input's transcript belongs to: the path before its last `/projects/`.
 fn config_of(transcript: &str) -> Option<&str> {
-    let i = transcript.rfind("/projects/")?;
+    // Claude Code on Windows writes it with backslashes (s36 review P2).
+    let i = [transcript.rfind("/projects/"), transcript.rfind("\\projects\\")].into_iter().flatten().max()?;
     (i > 0).then(|| &transcript[..i])
 }
 
@@ -207,4 +209,21 @@ pub fn lines(env: &HashMap<String, String>, flockbook: Option<&Path>, today: chr
 /// Today on this computer (Codex names its day folders by local date).
 pub fn today() -> chrono::NaiveDate {
     chrono::Local::now().date_naive()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::config_of;
+
+    // s36 review P2: Claude Code on Windows writes transcript_path with backslashes; the PC helper found no account.
+    #[test]
+    fn config_of_reads_unix_and_windows_transcript_paths() {
+        assert_eq!(config_of("/Users/x/.claude/projects/-Users-x/abc.jsonl"), Some("/Users/x/.claude"));
+        assert_eq!(config_of(r"C:\Users\x\.claude\projects\C--Users-x\abc.jsonl"), Some(r"C:\Users\x\.claude"));
+        assert_eq!(config_of(r"C:\Users\x\.claude-ew\projects\p\abc.jsonl"), Some(r"C:\Users\x\.claude-ew"));
+        // The last one wins (a project folder itself named projects).
+        assert_eq!(config_of("/h/.claude/projects/-h-projects-/a.jsonl"), Some("/h/.claude"));
+        assert_eq!(config_of("/projects/a.jsonl"), None);
+        assert_eq!(config_of("no folder"), None);
+    }
 }

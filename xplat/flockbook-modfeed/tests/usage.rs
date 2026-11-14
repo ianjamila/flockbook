@@ -137,18 +137,32 @@ fn claude_a_past_reset_is_passed_through_and_the_numbers_are_clamped() {
 }
 
 #[test]
-fn claude_reads_at_most_the_300_newest_files() {
+fn claude_reads_at_most_the_newest_files() {
     let t = tempfile::tempdir().unwrap();
     let (dir, home) = (t.path().join("statusline"), t.path().join("home"));
     let (a, old) = (format!("{}/.claude", home.display()), format!("{}/.claude-old", home.display()));
-    // The oldest file is the only one of its config: it is past the 300.
+    // The oldest file is the only one of its config: it is past the cap.
     session(&dir, "ancient", &old, Some(weekly(9.0, 1_795_000_000)), 5);
-    for i in 0..300 {
-        session(&dir, &format!("n{i:03}"), &a, Some(weekly(1.0, 1_795_000_000)), 1_000 + i);
+    for i in 0..usage::CLAUDE_FILES as u64 {
+        session(&dir, &format!("n{i:04}"), &a, Some(weekly(1.0, 1_795_000_000)), 1_000 + i);
     }
     let lines = usage::claude_lines(&dir, &home);
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert_eq!(lines[0]["config"], a.as_str());
+}
+
+// s36 review P3: with a cap of 300, one busy account's 400 newer files pushed the other account's reading out.
+#[test]
+fn a_busy_account_does_not_hide_the_other_accounts_reading() {
+    let t = tempfile::tempdir().unwrap();
+    let (dir, home) = (t.path().join("statusline"), t.path().join("home"));
+    let (a, b) = (format!("{}/.claude", home.display()), format!("{}/.claude-ew", home.display()));
+    session(&dir, "ew-last", &b, Some(weekly(64.0, 1_795_000_000)), 900);
+    for i in 0..400u64 {
+        session(&dir, &format!("busy{i:03}"), &a, Some(weekly(1.0, 1_795_000_000)), 1_000 + i);
+    }
+    let lines = usage::claude_lines(&dir, &home);
+    assert_eq!(lines.len(), 2, "{lines:?}");
 }
 
 // ---- Codex ----

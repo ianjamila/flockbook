@@ -124,6 +124,21 @@ test("order: the accounts setting's order, then other Claude accounts found, the
   assert.equal(textOf(byId(single, "usage-1-line")), "no Codex session found");
 });
 
+// s36 review P3: a Windows reading's folder has backslashes; and a row's match by folder NAME must not take the
+// reading another row matches by its exact folder.
+test("matching: Windows folders match exactly, and exact matches go first for every row", () => {
+  const WIN = { mark: "WIN", name: "PC account", config_dir: "C:\\Users\\x\\.claude-ew\\" };
+  const w = rows(data({ "pc-wsl": [claude("C:\\Users\\x\\.claude-ew", "pc@example.test", 55, NOW)] }), [WIN], "C:\\Users\\x");
+  assert.equal(w[0].email, "pc@example.test");
+  assert.equal(w[0].folder.replace(/\\/g, "/"), "C:/Users/x/.claude-ew");
+  // PERSONAL (~/.claude here) has no reading of its own; another machine's reading sits at a folder also named .claude
+  // but belongs to the account whose exact folder is listed second: it must stay with that row.
+  const SECOND = { mark: "PC", name: "PC Claude", config_dir: "/mnt/c/Users/x/.claude" };
+  const r = rows(data({ "pc-wsl": [claude("/mnt/c/Users/x/.claude", "pc@example.test", 44, NOW)] }), [PERSONAL, SECOND], "/home/test");
+  assert.equal(r[1].email, "pc@example.test", JSON.stringify(r));
+  assert.equal(r[0].reading, null, JSON.stringify(r));
+});
+
 test("the block is the last thing in the side bar and the tooltip tells the details", () => {
   const el = draw(data({ "": [claude("/home/test/.claude", "me@example.test", 36, Date.now() - 60_000)] }));
   const root = byId(el, "side-root");
