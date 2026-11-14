@@ -46,8 +46,12 @@ test("tags: the sidecar's, then folder, branch and agent name", () => {
   const tags = tagsFor(fake.agents[0], statusLine);
   assert.deepEqual(tags.map((t) => t.text), ["Opus 5.5", "high", "ctx 84%", "$0.42 est.", "app", "feat/login", "api"]);
   const dup = { tags: [...statusLine.tags, { kind: "own", text: "Opus 5.5 · high" }, { kind: "own", text: "…/app" }, { kind: "model", text: "api" }] };
-  assert.deepEqual(tagsFor(fake.agents[0], dup).map((t) => t.text), ["Opus 5.5", "high", "ctx 84%", "$0.42 est.", "api", "app", "feat/login"],
-    "the sidecar's own tags are left out, and a text shows once");
+  // plus build: the owner's own status-line parts (kind "own", e.g. "Opus 5.5 · high") now show, except those that repeat a chip (effort:, ctx, ~$ cost); a text still shows once.
+  assert.deepEqual(tagsFor(fake.agents[0], dup).map((t) => t.text), ["Opus 5.5", "high", "ctx 84%", "$0.42 est.", "Opus 5.5 · high", "…/app", "api", "app", "feat/login"],
+    "the owner's own parts show, and a text shows once");
+  const rep = { tags: [...statusLine.tags, { kind: "own", text: "effort:high" }, { kind: "own", text: "ctx:84% ███" }, { kind: "own", text: "~$0.42" }, { kind: "own", text: "7d:51% ↻1d10h" }] };
+  assert.deepEqual(tagsFor(fake.agents[0], rep).map((t) => t.text), ["Opus 5.5", "high", "ctx 84%", "$0.42 est.", "7d:51% ↻1d10h", "app", "feat/login", "api"],
+    "an own part that repeats a chip is left out");
   assert.equal(tags[2].warn, true);
   assert.deepEqual(tagsFor(fake.agents[1], null).map((t) => t.kind), ["agent"]);
 });
@@ -291,14 +295,24 @@ test("after /clear the send says the agent started a new conversation, and the c
   c.onNewConversation = (address) => moved.push(address);
   const b = c.box(fake.agents[0]);
   fake.sendResult = "changed"; fake.sendMessage = "the agent started a new conversation; the chat now shows it; nothing was sent";
+  // plus build: the cached log of the terminal is marked as checked long ago (sidecar.recheckLog) so the chat's next feed finds the new log.
+  const cache = { entries: { t1: { checked: 1700000000 } } };
+  fake.readText = () => JSON.stringify(cache);
   b.input.set_value("again"); await c.submit(cx);
   assert.equal(b.input.value(), "again", "nothing was sent: the text comes back");
   const note = textOf(byId(c.render(fake.agents[0], new Proxy({}, { get: (_t, k) => `#${k}` })), "send-note"));
-  assert.match(note, /The agent started a new conversation; the chat now shows it/);
+  assert.match(note, /This terminal is in a new conversation now.*press Send again/);
   assert.doesNotMatch(note, /Another agent/);
   assert.deepEqual(moved, ["t1"]);
+  assert.equal(JSON.parse(log.writes.at(-1)[1]).entries.t1.checked, 0, "the cached log is marked for a new look");
+  // plus build: no cached log to mark (or the chat not told): "has not caught up yet, send again in a few seconds".
+  fake.readText = () => null;
+  b.input.set_value("again"); await c.submit(cx);
+  assert.match(textOf(byId(c.render(fake.agents[0], new Proxy({}, { get: (_t, k) => `#${k}` })), "send-note")), /has not caught up yet/);
+  moved.length = 1;
   // Another agent: the old note, and the chat is not told of a new conversation.
   fake.sendMessage = "another agent is in this pane now; nothing was sent";
+  fake.readText = null;
   b.input.set_value("third"); await c.submit(cx);
   assert.deepEqual(moved, ["t1"]);
 });

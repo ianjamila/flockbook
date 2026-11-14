@@ -17,6 +17,22 @@ extension QuestionAdapter {
         String(s.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) })
     }
 
+    /// A named session (sent to Claude Code's background service, or renamed) draws its name in a rule at the very
+    /// bottom, under the picker and its key line ("────── Flockbook plus PR 1 continuation ─", live 2026-11-13). The
+    /// screen's lines without that one rule (and the blank lines after it); any other last line stays, so the exact
+    /// compares refuse it as before. The rule is herdr-core's `^─{3,} (.+) ─+$` on the trimmed line, and the name
+    /// must hold more than dashes.
+    static func aboveNameRule(_ lines: [String]) -> [String] {
+        guard let last = lines.lastIndex(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) else { return lines }
+        let t = Array(lines[last].trimmingCharacters(in: .whitespaces))
+        let lead = t.prefix { $0 == "─" }.count, trail = t.reversed().prefix { $0 == "─" }.count
+        // "───" + " " + name + " " + "─": the name sits between the two spaces next to the outer dash runs.
+        guard lead >= 3, trail >= 1, lead + 1 < t.count - trail - 1, t[lead] == " ", t[t.count - trail - 1] == " " else { return lines }
+        let name = t[(lead + 1)..<(t.count - trail - 1)]
+        guard name.contains(where: { $0 != "─" && !$0.isWhitespace }) else { return lines }
+        return Array(lines[..<last])
+    }
+
     /// The tab bar of `q`, whitespace dropped: one question, single choice: "☐Header"; else "←☐A☐B✔Submit→". A
     /// question's box is ☐ or ☒ (answered or not: Claude's own state, no key depends on it).
     static func claudeBar(_ q: QuestionRequest, _ line: String) -> Bool {
@@ -45,7 +61,7 @@ extension QuestionAdapter {
     static func claudeExact(_ q: QuestionRequest, question k: Int, screen: String, other: String?, focus: FieldFocus, checks: Set<Int>?) -> Bool {
         guard q.agent == "claude", !q.toolUseId.hasPrefix("screen-"), q.questions.indices.contains(k) else { return false }
         let want = q.questions[k], n = want.options.count
-        let lines = screen.components(separatedBy: "\n")
+        let lines = aboveNameRule(screen.components(separatedBy: "\n"))
         let blank: (String) -> Bool = { $0.trimmingCharacters(in: .whitespaces).isEmpty }
         guard let foot = lines.lastIndex(where: { !blank($0) }),
               claudeKeyLines.contains(lines[foot].split(whereSeparator: \.isWhitespace).joined(separator: " ")),
@@ -139,7 +155,7 @@ extension QuestionAdapter {
     static func claudeReviewExact(_ q: QuestionRequest, answers: [QuestionAnswer], screen: String) -> Bool {
         guard q.agent == "claude", !q.toolUseId.hasPrefix("screen-"), answers.count == q.questions.count, !reviewAmbiguous(q, answers: answers),
               zip(q.questions, answers).allSatisfy({ k, a in a.picks.allSatisfy { k.options.indices.contains($0) } }) else { return false }
-        let lines = screen.components(separatedBy: "\n")
+        let lines = aboveNameRule(screen.components(separatedBy: "\n"))
         guard let title = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "Review your answers" }),
               let head = lines[..<title].lastIndex(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }),
               claudeBar(q, lines[head]) else { return false }

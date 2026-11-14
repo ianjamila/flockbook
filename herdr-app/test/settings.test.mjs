@@ -6,7 +6,7 @@ import { textOf, byId } from "./stub/ui.mjs";
 import { fakeCx } from "./fake-cx.mjs";
 import { agent, space } from "./fixtures.mjs";
 import { setting, loadConfig, setSetting, configBad, pollUpdate, updateShown, textScale, DEFAULTS, KEY_CONFIG } from "../mods/flockbook/config.js";
-import { SettingsView } from "../mods/flockbook/settings.js";
+import { SettingsView, PLUS_UPDATE } from "../mods/flockbook/settings.js";
 import { SideView } from "../mods/flockbook/side.js";
 import { Composer } from "../mods/flockbook/composer.js";
 import { ChatView } from "../mods/flockbook/chat.js";
@@ -54,7 +54,11 @@ const press = (el) => el._h.on_click({}, fakeCx());
 
 test("no config.json: every setting is its default, and nothing is written", async () => {
   await loadConfig();
-  assert.deepEqual(DEFAULTS, { check_updates: true, status_row: "show", remote_helper: "ask", phone_read_only: false, text_size: "default" });
+  // plus build: the custom settings (auto_move, about_line, about_cap, terminal_size, terminal_px, pipeline_asks, accounts, ...) come on top of upstream's five;
+  // upstream's five keep their defaults, and the workflow switches that read a particular way of working are off.
+  const upstream = ["check_updates", "status_row", "remote_helper", "phone_read_only", "text_size"];
+  assert.deepEqual(Object.fromEntries(upstream.map((k) => [k, DEFAULTS[k]])), { check_updates: true, status_row: "show", remote_helper: "ask", phone_read_only: false, text_size: "default" });
+  for (const k of ["auto_move", "pipeline_asks", "handoff_marks", "worth_considering"]) assert.equal(DEFAULTS[k], "off", k);
   for (const [k, v] of Object.entries(DEFAULTS)) assert.equal(setting(k), v, k);
   assert.equal(configBad(), false);
   assert.equal(log.writes.length, 0, "opening Flockbook never creates the file");
@@ -157,7 +161,8 @@ test("the screen: three settings, each with its two choices, reachable with the 
 
 // Laid out as Herdr's own Settings: sections in a sidebar on the left, the chosen one filled; on the right
 // UPPERCASE headings, and rows with the title and one line about it on the left, the control on the right.
-const NAV = [["general", "General"], ["phone", "Phone page"], ["updates", "Updates"]];
+// plus build: a Workflow section (Needs you / Done / Workspaces switches) between General and Phone page.
+const NAV = [["general", "General"], ["workflow", "Workflow"], ["phone", "Phone page"], ["updates", "Updates"]];
 const nodes = (el) => { const all = []; (function walk(n) { if (!n || typeof n !== "object") return; all.push(n); (n.kids ?? []).forEach(walk); })(el); return all; };
 
 test("settings layout: a sidebar with General, Phone page and Updates; General is chosen first", async () => {
@@ -175,7 +180,7 @@ test("settings layout: a sidebar with General, Phone page and Updates; General i
     assert.equal(r._a.bg, id === "general" ? "#selected" : undefined, `${id}: only the chosen row is filled`);
     assert.equal(typeof r._a.tab_index, "number"); stops.push(r._a.tab_index);
   }
-  assert.deepEqual(stops, [1, 2, 3], "the sidebar comes first with Tab");
+  assert.deepEqual(stops, [1, 2, 3, 4],"the sidebar comes first with Tab");
   const pane = byId(el, "settings-root");
   assert.ok(byId(pane, "set-status_row") && byId(pane, "set-remote_helper"));
   assert.equal(byId(pane, "set-phone"), null);
@@ -196,7 +201,10 @@ test("settings layout: a click, Enter or Space on a section shows it; every sett
     assert.equal(byId(el, `set-nav-${id}`)._a.bg, "#selected");
     for (const key of [...SETTINGS.map((s) => s.key), "phone"]) if (byId(byId(el, "settings-root"), `set-${key}`)) (where[key] ??= []).push(id);
   }
-  assert.deepEqual(where, { text_size: ["general"], status_row: ["general"], remote_helper: ["general"], phone: ["phone"], check_updates: ["updates"] });
+  // plus build: more settings (auto_move, about_*, terminal_size, ...) sit in sections too; upstream's keep their sections, and every setting is in exactly one.
+  const upstream = ["text_size", "status_row", "remote_helper", "phone", "check_updates"];
+  assert.deepEqual(Object.fromEntries(upstream.map((k) => [k, where[k]])), { text_size: ["general"], status_row: ["general"], remote_helper: ["general"], phone: ["phone"], check_updates: ["updates"] });
+  for (const [k, sections] of Object.entries(where)) assert.equal(sections.length, 1, `${k} is in one section`);
 });
 
 test("settings layout: a row is the title and its line on the left, the control on the right", async () => {
@@ -259,22 +267,23 @@ test("a screen saved as the old settings screen shows the chat", () => {
   assert.equal(shownScreen(), "chat");
 });
 
-test("update line: a newer release shows one line in the sidebar, Copy puts the one-line install on the clipboard", async () => {
+// plus build: the line says the release is out upstream and copies this build's own update command (PLUS_UPDATE), not the official installer.
+test("update line: a newer release shows one line in the sidebar, Copy puts the plus build's update command on the clipboard", async () => {
   await loadConfig();
   await pollUpdate();
   assert.equal(updateShown()?.latest, "0.9.0");
   const el = new SideView(fakeCx()).render(fakeCx());
   const line = byId(el, "update-line");
-  assert.match(textOf(line), /Flockbook 0\.9\.0 is out/);
-  assert.match(textOf(byId(line, "update-copy")), /^Copy install command$/);
+  assert.match(textOf(line), /Flockbook 0\.9\.0 is out upstream/);
+  assert.match(textOf(byId(line, "update-copy")), /^Copy update command$/);
   assert.match(textOf(byId(line, "update-dismiss")), /^Not now$/);
   let copied = null;
   const cx = { ...fakeCx(), write_to_clipboard: (s) => { copied = s; } };
   byId(line, "update-copy")._h.on_click({}, cx);
-  assert.equal(copied, ONE_LINE);
+  assert.equal(copied, PLUS_UPDATE);
   // The settings dialog shows the command itself too.
   const sv = new SettingsView(fakeCx()); sv.section = "updates";
-  assert.match(textOf(sv.render(fakeCx())), /install\.sh \| sh/);
+  assert.match(textOf(sv.render(fakeCx())), /git pull && \.\/install\.sh/);
 });
 
 test("update line: Not now hides it for that version (the helper remembers)", async () => {

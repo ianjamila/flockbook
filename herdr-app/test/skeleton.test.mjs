@@ -12,7 +12,8 @@ function blocks(n, out = []) { if (n.type === "block") out.push(n); (n.children 
 test("every layout block shows the flockbook mod with a known view, or the shown tab", () => {
   const mods = blocks(layout).filter((b) => b.content.mod);
   const views = mods.map((b) => { assert.equal(b.content.mod, "flockbook"); return b.content.props.view; });
-  assert.deepEqual(views.sort(), ["chat", "needs", "overview", "side", "top"], "settings is a dialog, not a block");
+  // plus build: a "top" bar above each of the three screens (they draw no bar of their own, bar: "outside") and the tab list on the right (two "tabs" blocks: head and list).
+  assert.deepEqual(views.sort(), ["chat", "needs", "overview", "side", "tabs", "tabs", "top", "top", "top", "top"], "settings is a dialog, not a block");
   assert.deepEqual(blocks(layout).filter((b) => !b.content.mod).map((b) => [b.id, b.content.tab]), [["tab-panes", "active"]]);
 });
 
@@ -20,14 +21,15 @@ test("keys.json binds only commands that exist, in the flockbook layout's sectio
   const keys = JSON.parse(readFileSync(new URL("../keys.json", import.meta.url)));
   // Not mod:flockbook: with it, no key worked at all.
   assert.deepEqual(Object.keys(keys), ["layout:flockbook"]);
-  const mine = ["terminal", "needs", "move-left", "move-right", "sidebar", "overview", "settings", "text-smaller", "text-larger", "text-default"];
+  // The plus build adds tablist, keep-name, move-menu and sessions (top.js command).
+  const mine = ["terminal", "needs", "move-left", "move-right", "sidebar", "overview", "settings", "text-smaller", "text-larger", "text-default", "tablist", "keep-name", "move-menu", "sessions"];
   for (const [key, action] of Object.entries(keys["layout:flockbook"])) {
     if (action.startsWith("flockbook.")) assert.ok(mine.includes(action.slice(10)), `${key}: ${action}`);
   }
 });
 
 test("each view renders, and an unknown view says so", () => {
-  for (const view of ["top", "side", "chat", "needs", "overview", "settings"]) {
+  for (const view of ["top", "side", "chat", "needs", "overview", "settings", "sessions"]) {
     fake.props = { view }; const m = new Flockbook(); m.init(undefined, fakeCx());
     assert.ok(m.render(fakeCx()), view);
   }

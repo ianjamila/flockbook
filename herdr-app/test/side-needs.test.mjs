@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { fake, log, reset } from "./stub/herdr.mjs";
 import { textOf, byId } from "./stub/ui.mjs";
 import { fakeCx } from "./fake-cx.mjs";
-import { agent, space } from "./fixtures.mjs";
+import { agent, space, passBlockGrace } from "./fixtures.mjs";
 import { SideView, tabMarks, monogram } from "../mods/flockbook/side.js";
 import { NeedsView } from "../mods/flockbook/needs.js";
 import { KEY_AGENT } from "../mods/flockbook/state.js";
@@ -15,6 +15,7 @@ beforeEach(() => {
   fake.spaces = [space("sp1", { name: "flock book", tabs: [tab("a", "working"), tab("b", null)] }),
     space("sp2", { name: "api", active: false, tabs: [1, 2, 3, 4, 5, 6].map((i) => tab(`x${i}`, "done")) })];
   fake.agents = [agent("t1", "blocked", { tab_name: "fix login" }), agent("t2", "working"), agent("t3", "blocked", { space: "sp2", space_name: "api" })];
+  passBlockGrace();   // plus build: blocked counts as Needs you only once it has lasted the grace (state.js BLOCK_GRACE_MS)
 });
 
 test("tab marks: up to 5 shown, else 3 and +N; monograms", () => {

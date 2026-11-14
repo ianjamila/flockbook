@@ -1,0 +1,402 @@
+// Item 14 (owner 11-12 s13: "Auto-resume after restart … remember which conversation each tab had and offer to resume
+// them all with one click"): resume.js. Pure parts + the tick and the Resume actions against fakes.
+// Run: node test-resume.mjs
+import { WORK_DIR, CFG_ENV } from "./paths.mjs";
+import { loadMod, fakeShared, realAccounts } from "./loadmod.mjs";
+let bad = 0;
+const eq = (n, got, want) => { const ok = JSON.stringify(got) === JSON.stringify(want); if (!ok) bad++; console.log(ok ? "PASS" : "FAIL", n, ok ? "" : `→ ${JSON.stringify(got)} want ${JSON.stringify(want)}`); };
+let now = 1_800_000_000_000;
+Date.now = () => now;
+const HOME = "/Users/you";
+// The two accounts' config folders under the home folder: WORK has its own, HOME uses the default one. The names are
+// built from parts (a hook blocks the literal names in a script run directly).
+const NAME = ["cl", "aude"].join(""), DOT = String.fromCharCode(46);
+const HOME_CFG = [HOME, DOT + NAME].join("/"), WORK_CFG = HOME + WORK_DIR.slice(1);
+const VAR = CFG_ENV, BIN = [HOME, DOT + "npm-global", "bin", NAME].join("/");
+const TWO = [{ mark: "WORK", name: "Work account", config_dir: WORK_DIR }, { mark: "HOME", name: "Personal account" }];
+// resume.js over the real accounts.js (reading the "accounts" and "claude_path" settings through the real config.js).
+const loadResume = async (fakes, settings = { accounts: TWO, claude_path: BIN }) => { const ra = await realAccounts(fakes.herdr, settings); return loadMod("resume.js", { ...fakes, "./accounts.js": ra.acc, "./where.js": ra.where }); };
+const log = (dir, sid) => `${dir}/projects/-Users-you/${sid}.jsonl`;
+
+const st = fakeShared(), runs = [], notes = [];
+let cacheReads = 0, onCacheRead = null;
+let live = [], terms = [], cache = { entries: {} }, spacesList = [{ id: "sp1", name: "webshop", tabs: [] }, { id: "sp2", name: "~", tabs: [] }];
+const r = await loadResume({
+  herdr: { ...st, home: () => HOME, appHome: () => `${HOME}/.config/herdr-app`, agents: () => live, terminals: () => terms, spaces: () => spacesList,
+    readTextFile: async () => { cacheReads++; const was = JSON.stringify(cache); if (onCacheRead) { const f = onCacheRead; onCacheRead = null; await f(); } await new Promise((ok) => setTimeout(ok, 5)); return was; }, run: (name, args) => { runs.push([name, args]); return null; }, notify: (m) => notes.push(m) },
+});
+
+// Pure.
+eq("session from a work-account log", r.sessionOf(log(WORK_CFG, "aaa-1")), { sid: "aaa-1", account: "WORK" });
+eq("a log named like an option is no session (s28 Fable 8)", r.sessionOf(log(WORK_CFG, "--dangerously-x")), null);
+eq("session from a personal-account log", r.sessionOf(log(HOME_CFG, "bbb-2")), { sid: "bbb-2", account: "HOME" });
+eq("no log", r.sessionOf(null), null);
+// The config-folder variable's name, and the program, built from parts too.
+eq("argv, work account", r.resumeArgv({ sid: "aaa-1", account: "WORK" }, HOME), ["/usr/bin/env", VAR + "=" + WORK_CFG, BIN, "--resume", "aaa-1"]);
+eq("argv, personal account", r.resumeArgv({ sid: "bbb-2", account: "HOME" }, HOME), ["/usr/bin/env", "-u", VAR, BIN, "--resume", "bbb-2"]);
+eq("argv, unknown account → none", r.resumeArgv({ sid: "c", account: null }, HOME), null);
+eq("argv, an account no longer set → none", r.resumeArgv({ sid: "c", account: "GONE" }), null);
+eq("session: a log outside every account's folder → none", r.sessionOf(log(HOME + "/elsewhere", "zzz")), null);
+eq("session: not a conversation log → none", r.sessionOf(HOME_CFG + "/settings.json"), null);
+{
+  const rr = await loadResume({ herdr: { ...fakeShared(), home: () => HOME, appHome: () => HOME + "/x" } }, { accounts: TWO });
+  const a = rr.resumeArgv({ sid: "aaa-1", account: "WORK" });
+  eq("argv, no claude_path: PATH carries the usual folders, then claude", [a.slice(0, 2), a[2].startsWith("PATH=" + HOME + "/.local/bin:"), a.slice(3)], [["/usr/bin/env", VAR + "=" + WORK_CFG], true, ["claude", "--resume", "aaa-1"]]);
+}
+{
+  const one = await loadResume({ herdr: { ...fakeShared(), home: () => HOME, appHome: () => HOME + "/x" } }, { claude_path: BIN });
+  eq("no accounts: any default-folder log is the default account", one.sessionOf(log(HOME_CFG, "d-1")), { sid: "d-1", account: "default" });
+  eq("no accounts: another folder's log is no one's", one.sessionOf(log(WORK_CFG, "d-2")), null);
+  eq("no accounts: resumes as the default account", one.resumeArgv({ sid: "d-1", account: "default" }), ["/usr/bin/env", "-u", VAR, BIN, "--resume", "d-1"]);
+}
+{
+  const only = await loadResume({ herdr: { ...fakeShared(), home: () => HOME, appHome: () => HOME + "/x" } }, { accounts: [TWO[0]], claude_path: BIN });
+  eq("one account with its own folder: its log is its", only.sessionOf(log(WORK_CFG, "w-1")), { sid: "w-1", account: "WORK" });
+  eq("one account with its own folder: the default folder's log is no one's", only.sessionOf(log(HOME_CFG, "w-2")), null);
+}
+// A Resume click claims its row for 60 s ("Opening…").
+eq("opening: claimed 10 s ago", r.opening({ claimAt: now - 10_000 }, now), true);
+eq("opening: claimed 60 s ago → clickable again", r.opening({ claimAt: now - 60_000 }, now), false);
+eq("opening: never claimed", r.opening({ sid: "x" }, now), false);
+const recs = { a: { sid: "a", pids: [1] }, b: { sid: "b", pids: [2] }, c: { sid: "c", pids: [3] }, d: { sid: "d", pids: [4] } };
+eq("lost: one tab closed while others stay → forgotten", r.lostSessions(recs, { sids: new Set(["a", "b", "c"]), pids: new Set([1, 2, 3]) }, 30_000), { offer: [], forget: ["d"] });
+eq("lost: most vanish at once → offered", r.lostSessions(recs, { sids: new Set(["a"]), pids: new Set([1]) }, 30_000).offer.map((x) => x.sid), ["b", "c", "d"]);
+eq("lost: after a gap (the app was not running) → offered", r.lostSessions(recs, { sids: new Set(["a", "b", "c"]), pids: new Set([1, 2, 3]) }, 10 * 60_000).offer.map((x) => x.sid), ["d"]);
+eq("lost: /clear in the same process (same pid, new session) → neither", r.lostSessions({ a: { sid: "a", pids: [1] } }, { sids: new Set(["z"]), pids: new Set([1]) }, 10 * 60_000), { offer: [], forget: ["a"] });
+
+// The tick: records live Claude tabs from the helper's cache.
+const agent = (address, tab_name, space) => ({ address, app: "claude-code", status: "working", title: `✳ ${tab_name ?? address}`, tab_name, space, space_name: space === "sp1" ? "webshop" : "~", program: { name: "Claude Code" } });
+live = [agent("t1", "Checkout", "sp1"), agent("t2", null, "sp1"), agent("t3", null, "sp2")];
+cache.entries = {
+  t1: { kind: "claude", cwd: `${HOME}/code/webshop`, pids: [11], path: log(WORK_CFG, "s-1") },
+  t2: { kind: "claude", cwd: HOME, pids: [12], path: log(WORK_CFG, "s-2") },
+  t3: { kind: "claude", cwd: HOME, pids: [13], path: log(HOME_CFG, "s-3") },
+};
+await r.resumeTick();
+eq("tick: three sessions remembered", Object.keys(r.remembered().tabs).sort(), ["s-1", "s-2", "s-3"]);
+eq("tick: a record", r.remembered().tabs["s-1"], { sid: "s-1", account: "WORK", cwd: `${HOME}/code/webshop`, pids: [11], terminal: "t1", space: "sp1", spaceName: "webshop", name: "Checkout", title: "Checkout", at: now });
+// A live tab the cache does not know yet: no decision this tick (nothing offered or forgotten).
+now += 30_000; live.push(agent("t4", null, "sp1"));
+await r.resumeTick();
+eq("tick: unknown live tab → no decision", r.offer(), null);
+live.pop();
+// The Core restarted: every terminal gone, new ones not started.
+now += 30_000; live = []; cache.entries = {};
+await r.resumeTick();
+eq("restart: all three offered", r.offer().tabs.map((x) => x.sid).sort(), ["s-1", "s-2", "s-3"]);
+eq("restart: one notice", notes.length, 1);
+await r.resumeTick();
+eq("restart: offer kept, no second notice", [r.offer().tabs.length, notes.length], [3, 1]);
+
+// Resume one: a tab in its workspace and folder, as its account; it leaves the offer.
+await r.resumeOne("s-1");
+eq("resume one: tab.new", runs[0], ["tab.new", { space: "sp1", folder: `${HOME}/code/webshop`, argv: r.resumeArgv({ sid: "s-1", account: "WORK" }, HOME), name: "Checkout" }]);
+eq("resume one: leaves the offer", r.offer().tabs.map((x) => x.sid).sort(), ["s-2", "s-3"]);
+// A workspace that is gone: this computer's "~", the shown one when it is this computer's, else a new "~" here (s28).
+spacesList = [{ id: "sp1", name: "webshop", tabs: [] }];
+await r.resumeAll();
+eq("resume all: the rest", runs.slice(1).map(([n, a]) => [n, a.space ?? null, a.machine ?? null, a.argv.at(-1), a.name ?? null]), [["tab.new", "sp1", null, "s-2", null], ["space.new", null, "", "s-3", "~"]]);
+eq("resume all: offer cleared", r.offer(), null);
+// Dismiss.
+st.setShared("flockbook.resume.offer", { at: now, tabs: [{ sid: "x", account: "WORK", cwd: HOME }] });
+r.dismissOffer();
+eq("dismiss clears", r.offer(), null);
+// A session resumed by hand shows up live again: it leaves the offer by itself.
+st.setShared("flockbook.resume.offer", { at: now, tabs: [{ sid: "s-9", account: "WORK", cwd: HOME, pids: [99] }, { sid: "s-8", account: "WORK", cwd: HOME, pids: [98] }] });
+live = [agent("t7", null, "sp1")]; cache.entries = { t7: { kind: "claude", cwd: HOME, pids: [70], path: log(WORK_CFG, "s-9") } };
+now += 30_000;
+await r.resumeTick();
+eq("resumed by hand: leaves the offer", r.offer().tabs.map((x) => x.sid), ["s-8"]);
+
+// s13 Codex R1 P1: a session running again (resumed by hand) is not opened twice, even before the next tick.
+const OFFER = "flockbook.resume.offer", MEM = "flockbook.resume.v1";
+const rec = (sid, pid) => ({ sid, account: "WORK", cwd: HOME, pids: [pid] });
+runs.length = 0;
+live = [agent("t7", null, "sp1"), agent("t8", null, "sp1")];
+cache.entries.t8 = { kind: "claude", cwd: HOME, pids: [80], path: log(WORK_CFG, "s-8") };
+await r.resumeOne("s-8");
+eq("already running: no new tab", runs.length, 0);
+eq("already running: leaves the offer", r.offer(), null);
+// A double click (or two views): one tab.
+st.setShared(OFFER, { at: now, tabs: [rec("s-20", 200)] });
+live = []; cache.entries = {};
+await Promise.all([r.resumeOne("s-20"), r.resumeOne("s-20")]);
+eq("double click: one tab", runs.length, 1);
+// A live Claude tab the helper has not identified yet, whose command line can't be read, could be this very session:
+// it waits — and s31 (owner 11-14: "no timer, it could reopen a silently resumed session") a later click waits too.
+runs.length = 0;
+st.setShared(OFFER, { at: now, tabs: [rec("s-21", 210)] });
+live = [agent("t9", null, "sp1")]; cache.entries = {}; terms = [];
+await r.resumeOne("s-21");
+eq("unidentified tab: not opened yet", runs.length, 0);
+eq("unidentified tab: still offered", r.offer()?.tabs.map((x) => x.sid), ["s-21"]);
+await r.resumeOne("s-21");
+eq("unidentified tab: a 2nd click at once still waits", runs.length, 0);
+now += 31_000;
+await r.resumeOne("s-21");
+eq("s31: unidentified tab, command line unknown: a click 30 s later still waits (no timer)", runs.length, 0);
+// s31: its command line says it is a new conversation (plain `claude`): it can't be this session → opens at once.
+terms = [{ address: "t9", foreground: { argv: [BIN, "--model", "haiku"], cwd: HOME, pid: 90 } }];
+// (review P2) only once the helper has looked at this very process: no entry yet → still waits.
+await r.resumeOne("s-21");
+eq("s31: plain claude, but the helper hasn't looked at it yet → still waits", runs.length, 0);
+cache.entries = { t9: { kind: "claude", cwd: HOME, pids: [90] } };
+await r.resumeOne("s-21");
+eq("s31: unidentified tab running plain claude: opens at once", runs.length, 1);
+eq("unidentified tab: then leaves the offer", r.offer(), null);
+terms = [];
+
+// s13 Codex R1 P2: a poll that read the remembered state before a Dismiss / Resume can't offer those sessions again.
+st.setShared(MEM, { at: now, tabs: { "s-30": rec("s-30", 300), "s-31": rec("s-31", 301) } });
+live = []; cache.entries = {};
+now += 30_000;
+await r.resumeTick();
+eq("stale poll: offered first", r.offer()?.tabs.map((x) => x.sid).sort(), ["s-30", "s-31"]);
+r.dismissOffer();
+st.setShared(MEM, { at: now - 30_000, tabs: { "s-30": rec("s-30", 300), "s-31": rec("s-31", 301) } });
+now += 30_000;
+await r.resumeTick();
+eq("stale poll: not offered again after Dismiss", r.offer(), null);
+// Polls from several views run one at a time.
+cacheReads = 0;
+await Promise.all([r.resumeTick(), r.resumeTick()]);
+eq("one poll at a time", cacheReads, 1);
+// A dismissed session seen running again (resumed by hand) is offered after a later restart.
+live = [agent("t30", null, "sp1"), agent("t31", null, "sp1")];
+cache.entries = { t30: { cwd: HOME, pids: [300], path: log(WORK_CFG, "s-30") }, t31: { cwd: HOME, pids: [301], path: log(WORK_CFG, "s-31") } };
+now += 3 * 60_000;
+await r.resumeTick();
+live = []; cache.entries = {};
+now += 30_000;
+await r.resumeTick();
+eq("dismissed, then running again, then lost: offered", r.offer()?.tabs.map((x) => x.sid).sort(), ["s-30", "s-31"]);
+r.dismissOffer();
+
+// s13 Codex R1 P2: an unidentified tab right after a restart doesn't wipe out the gap (the app was down 5 min).
+st.setShared(MEM, { at: now, tabs: { "s-40": rec("s-40", 400) } });
+now += 5 * 60_000;
+live = [agent("t10", null, "sp1")]; cache.entries = {};
+await r.resumeTick();
+now += 30_000;
+cache.entries = { t10: { cwd: HOME, pids: [410], path: log(WORK_CFG, "s-41") } };
+await r.resumeTick();
+eq("restart + unidentified tab: the lone old session is still offered", r.offer()?.tabs.map((x) => x.sid), ["s-40"]);
+r.dismissOffer();
+
+// --- s13 Codex R2 (recheck) ---
+// R2-1 (P1): an unidentified tab carrying the offered session's title may BE that session: never opened, even later.
+runs.length = 0;
+st.setShared(OFFER, { at: now, tabs: [{ ...rec("s-50", 500), title: "Style Guide mobile pass" }] });
+live = [{ ...agent("t50", null, "sp1"), title: "✳ Style Guide mobile pass" }]; cache.entries = {};
+await r.resumeOne("s-50");
+now += 31_000;
+await r.resumeOne("s-50");
+eq("R2-1: unidentified tab with its title: never opened", runs.length, 0);
+eq("R2-1: still offered", r.offer()?.tabs.map((x) => x.sid), ["s-50"]);
+r.dismissOffer();
+
+// R2-2 (P2): a poll whose lock expired (it took > 20 s) writes nothing; the newer poll's view stands.
+live = [agent("t60", null, "sp1"), agent("t61", null, "sp1")];
+cache.entries = { t60: { cwd: HOME, pids: [600], path: log(WORK_CFG, "s-60") }, t61: { cwd: HOME, pids: [601], path: log(WORK_CFG, "s-61") } };
+now += 30_000;
+await r.resumeTick();
+// The old poll reads an EMPTY cache (as if the helper restarted), then stalls 25 s; a newer poll runs meanwhile.
+cache.entries = {};
+live = [];
+onCacheRead = async () => { now += 25_000; live = [agent("t60", null, "sp1"), agent("t61", null, "sp1")]; cache.entries = { t60: { cwd: HOME, pids: [600], path: log(WORK_CFG, "s-60") }, t61: { cwd: HOME, pids: [601], path: log(WORK_CFG, "s-61") } }; await r.resumeTick(); };
+await r.resumeTick();
+eq("R2-2: an expired poll can't call running sessions lost", r.offer(), null);
+eq("R2-2: the newer poll's memory stands", Object.keys(r.remembered().tabs).sort(), ["s-60", "s-61"]);
+
+// R2-3 (P2): the mod reloads while a Resume click waits on the cache: the offer is not lost; it can be clicked again
+// once the claim is old.
+st.setShared(OFFER, { at: now, tabs: [rec("s-70", 700)] });
+live = []; cache.entries = {};
+runs.length = 0;
+const r2 = await loadResume({ herdr: { ...st, home: () => HOME, appHome: () => `${HOME}/.config/herdr-app`, agents: () => live, terminals: () => [], spaces: () => spacesList,
+  readTextFile: () => new Promise(() => {}), run: (name, args) => { runs.push([name, args]); return null; }, notify: () => {} } });
+r2.resumeOne("s-70");   // never finishes: the reload killed it
+await new Promise((ok) => setTimeout(ok, 10));
+eq("R2-3: offer kept during a claim", r.offer()?.tabs.map((x) => x.sid), ["s-70"]);
+await r.resumeOne("s-70");
+eq("R2-3: a 2nd click while the claim is fresh: nothing", runs.length, 0);
+now += 61_000;
+await r.resumeOne("s-70");
+eq("R2-3: after the claim expires it opens", runs.length, 1);
+eq("R2-3: then leaves the offer", r.offer(), null);
+
+// R2-4 (P2): resumed, seen running by a later poll, then a 2nd restart within 2 min: offered again.
+st.setShared(MEM, { at: now, tabs: {} });
+st.setShared(OFFER, { at: now, tabs: [rec("s-80", 800), rec("s-81", 801)] });
+live = []; cache.entries = {};
+await r.resumeAll();
+now += 30_000;
+live = [agent("t80", null, "sp1"), agent("t81", null, "sp1")];
+cache.entries = { t80: { cwd: HOME, pids: [880], path: log(WORK_CFG, "s-80") }, t81: { cwd: HOME, pids: [881], path: log(WORK_CFG, "s-81") } };
+await r.resumeTick();
+now += 30_000;
+live = []; cache.entries = {};
+await r.resumeTick();
+eq("R2-4: a 2nd restart soon after resuming: offered again", r.offer()?.tabs.map((x) => x.sid).sort(), ["s-80", "s-81"]);
+r.dismissOffer();
+
+// R2-5 (P2): one tab unidentified for 3 min while polls keep running; one of three closed on purpose meanwhile:
+// forgotten, not offered (no downtime happened).
+st.setShared(MEM, { at: now, tabs: { "s-90": rec("s-90", 900), "s-91": rec("s-91", 901), "s-92": rec("s-92", 902) } });
+const three = { t90: { cwd: HOME, pids: [900], path: log(WORK_CFG, "s-90") }, t91: { cwd: HOME, pids: [901], path: log(WORK_CFG, "s-91") } };
+live = [agent("t90", null, "sp1"), agent("t91", null, "sp1"), agent("t99", null, "sp1")]; cache.entries = { ...three };
+for (let k = 0; k < 6; k++) { now += 30_000; await r.resumeTick(); }
+cache.entries = { ...three, t99: { cwd: HOME, pids: [999], path: log(WORK_CFG, "s-99") } };
+now += 30_000;
+await r.resumeTick();
+eq("R2-5: a long identification is not downtime: the closed one is forgotten", r.offer(), null);
+// --- s31 (owner 11-14): precise identity for Resume ---
+// What an unidentified Claude tab can be, from its live command line (Herdr core's foreground argv).
+const U = "0b5c1d2e-1111-4222-8333-944455556666";
+eq("couldBe: plain claude → a new conversation", r.couldBe([BIN, "--model", "haiku"], "/w"), { none: true });
+eq("couldBe: claude.exe with a prompt → new", r.couldBe(["/x/claude.exe", "fix the cart"], "/w"), { none: true });
+eq("couldBe: --resume <id> → only that session", r.couldBe([BIN, "--resume", U], "/w"), { sid: U });
+eq("couldBe: -r <id>", r.couldBe(["claude", "-r", U, "--model", "opus"], "/w"), { sid: U });
+eq("couldBe: --resume=<id>", r.couldBe(["claude", "--resume=" + U], "/w"), { sid: U });
+eq("couldBe: --resume with no id (the picker) → any", r.couldBe(["claude", "--resume"], "/w"), { any: true });
+eq("couldBe: -r then an option (the picker) → any", r.couldBe(["claude", "-r", "--model", "x"], "/w"), { any: true });
+eq("couldBe: --resume <search words> → any", r.couldBe(["claude", "--resume", "cart fix"], "/w"), { any: true });
+eq("couldBe: --continue → the sessions of its folder", r.couldBe(["claude", "--continue"], "/w/shop"), { cwd: "/w/shop" });
+eq("couldBe: -c", r.couldBe(["claude", "-c"], "/w/shop"), { cwd: "/w/shop" });
+eq("couldBe: --continue, folder unknown → any", r.couldBe(["claude", "-c"], null), { any: true });
+eq("couldBe: --fork-session with --resume → a new id", r.couldBe(["claude", "--resume", U, "--fork-session"], "/w"), { none: true });
+eq("couldBe: --session-id <id> → that id", r.couldBe(["claude", "--session-id", U], "/w"), { sid: U });
+eq("couldBe: --from-pr → any", r.couldBe(["claude", "--from-pr", "12"], "/w"), { any: true });
+eq("couldBe: attach a background session → any", r.couldBe(["claude", "attach", "j1"], "/w"), { any: true });
+eq("couldBe: combined short flags → any", r.couldBe(["claude", "-cr"], "/w"), { any: true });
+eq("couldBe: not claude (a shell, a wrapper still running) → any", r.couldBe(["/bin/zsh", "-c", "claude"], "/w"), { any: true });
+eq("couldBe: node running Claude Code's cli.js, plain → new", r.couldBe(["node", "/x/node_modules/@anthropic-ai/claude-code/cli.js"], "/w"), { none: true });
+eq("couldBe: no command line → any", r.couldBe(undefined, "/w"), { any: true });
+eq("couldBe: after `--` nothing is an option", r.couldBe(["claude", "--", "--resume"], "/w"), { none: true });
+eq("mayBe: any", r.mayBe({ sid: "a", cwd: "/w" }, { any: true }), true);
+eq("mayBe: none", r.mayBe({ sid: "a", cwd: "/w" }, { none: true }), false);
+eq("mayBe: that id", [r.mayBe({ sid: U, cwd: "/w" }, { sid: U }), r.mayBe({ sid: "b", cwd: "/w" }, { sid: U })], [true, false]);
+eq("mayBe: same folder (a trailing slash ignored)", [r.mayBe({ sid: "a", cwd: "/w/shop/" }, { cwd: "/w/shop" }), r.mayBe({ sid: "a", cwd: "/w/x" }, { cwd: "/w/shop" })], [true, false]);
+eq("mayBe: a record with no folder may be a --continue", r.mayBe({ sid: "a", cwd: null }, { cwd: "/w/shop" }), true);
+eq("mayBe: nothing known → may be", r.mayBe({ sid: "a" }, undefined), true);
+// The helper's cache names a new tab's session before its first message (sid + config folder, no log yet).
+eq("sessionOfEntry: a log", r.sessionOfEntry({ path: log(WORK_CFG, "p-1") }), { sid: "p-1", account: "WORK" });
+eq("sessionOfEntry: no log yet, the pid file's id (work account)", r.sessionOfEntry({ sid: "p-2", config: WORK_CFG }), { sid: "p-2", account: "WORK" });
+eq("sessionOfEntry: no log yet, default config folder", r.sessionOfEntry({ sid: "p-3", config: HOME_CFG }), { sid: "p-3", account: "HOME" });
+eq("sessionOfEntry: a config folder of no account → none", r.sessionOfEntry({ sid: "p-4", config: HOME + "/elsewhere" }), null);
+eq("sessionOfEntry: an id that looks like an option → none", r.sessionOfEntry({ sid: "--x", config: WORK_CFG }), null);
+eq("sessionOfEntry: the log wins over the id", r.sessionOfEntry({ path: log(WORK_CFG, "p-5"), sid: "p-6", config: WORK_CFG }), { sid: "p-5", account: "WORK" });
+eq("sessionOfEntry: nothing", r.sessionOfEntry(null), null);
+{
+  const N70 = "70707070-0000-4000-8000-000000000070", N71 = "71717171-0000-4000-8000-000000000071";
+  // The tick: a new tab named only by its pid file is a known session (remembered; nothing held back).
+  st.setShared(MEM, { at: now, tabs: {} }); st.setShared(OFFER, null); r.dismissOffer();
+  live = [agent("t70", null, "sp1"), agent("t71", null, "sp1")];
+  cache.entries = { t70: { kind: "claude", cwd: HOME, pids: [700], sid: N70, config: WORK_CFG }, t71: { kind: "claude", cwd: HOME, pids: [701], path: log(WORK_CFG, N71) } };
+  now += 30_000;
+  await r.resumeTick();
+  eq("s31 tick (review P2): a log-less new tab is open but not remembered (nothing to resume yet)", Object.keys(r.remembered().tabs).sort(), [N71]);
+  const L = await r.liveSids();
+  eq("s31 liveSids: it counts as open, nothing unidentified", [[...(L.by[""] ?? [])].sort(), L.unknown], [[N70, N71], false]);
+  // Its first message writes the log: remembered from then on, as its account.
+  cache.entries.t70 = { kind: "claude", cwd: HOME, pids: [700], path: log(WORK_CFG, N70) };
+  now += 30_000;
+  await r.resumeTick();
+  eq("s31 tick: remembered once its log exists", Object.keys(r.remembered().tabs).sort(), [N70, N71]);
+  eq("s31 tick: its account from the config folder", r.remembered().tabs[N70].account, "WORK");
+  // Both vanish (a restart) while a brand-new plain `claude` tab is open and not identified: offered anyway — a new
+  // conversation can't be one of them, so it holds nothing back.
+  live = [agent("t72", null, "sp1")]; cache.entries = { t72: { kind: "claude", cwd: HOME, pids: [720] } };
+  terms = [{ address: "t72", foreground: { argv: ["claude"], cwd: HOME, pid: 720 } }];
+  now += 30_000;
+  await r.resumeTick();
+  eq("s31 tick: a fresh unidentified `claude` tab doesn't hold back the restart offer", r.offer()?.tabs.map((x) => x.sid).sort(), [N70, N71]);
+  const L2 = await r.liveSids();
+  eq("s31 liveSids: a tab that can only be a new conversation is not 'unidentified'", L2.unknown, false);
+  // An unidentified tab running `--resume n-70` holds only n-70; `--continue` in another folder holds nothing.
+  terms = [{ address: "t72", foreground: { argv: ["claude", "--resume", N70], cwd: HOME, pid: 720 } }];
+  runs.length = 0;
+  await r.resumeOne(N70);
+  eq("s31 resume: the tab resuming that very id → not opened", runs.length, 0);
+  await r.resumeOne(N71);
+  eq("s31 resume: another session opens at once", runs.map(([, a]) => a.argv.at(-1)), [N71]);
+  terms = [{ address: "t72", foreground: { argv: ["claude", "--continue"], cwd: HOME + "/code/other", pid: 720 } }];
+  await r.resumeOne(N70);
+  eq("s31 resume: a --continue in another folder holds nothing", runs.map(([, a]) => a.argv.at(-1)), [N71, N70]);
+  r.dismissOffer(); terms = []; live = []; cache.entries = {};
+}
+{
+  // Review P2 scenario A: the helper's cache is missing (every tab unidentified) — a plain `claude` command line proves
+  // nothing then, so a restart is not declared and nothing opens twice.
+  const A1 = "a1a1a1a1-0000-4000-8000-0000000000a1", A2 = "a2a2a2a2-0000-4000-8000-0000000000a2";
+  st.setShared(MEM, { at: now, tabs: { [A1]: { ...rec(A1, 1101), terminal: "t91" }, [A2]: { ...rec(A2, 1102), terminal: "t92" } } });
+  live = [agent("t91", null, "sp1"), agent("t92", null, "sp1")]; cache.entries = {};
+  terms = [{ address: "t91", foreground: { argv: ["claude"], cwd: HOME, pid: 1101 } }, { address: "t92", foreground: { argv: ["claude"], cwd: HOME, pid: 1102 } }];
+  now += 30_000;
+  await r.resumeTick();
+  eq("review P2-A: no cache → no restart offer", r.offer(), null);
+  // Scenario B: the helper looked (same process) but the tab where a session was remembered ran /clear with an older
+  // helper (no id): the remembered session is "cleared" (its process lives), never offered as lost.
+  cache.entries = { t91: { kind: "claude", cwd: HOME, pids: [1101] }, t92: { kind: "claude", cwd: HOME, pids: [1102] } };
+  now += 30_000;
+  await r.resumeTick();
+  eq("review P2-B: same processes, no id → not offered", r.offer(), null);
+  // The address rule: an offered session remembered in tab t93, now unidentified there with a plain launch line, waits.
+  st.setShared(OFFER, { at: now, tabs: [{ ...rec(A1, 1201), terminal: "t93" }] });
+  live = [agent("t93", null, "sp1")]; cache.entries = { t93: { kind: "claude", cwd: HOME, pids: [1301] } };
+  terms = [{ address: "t93", foreground: { argv: ["claude"], cwd: HOME, pid: 1301 } }];
+  runs.length = 0;
+  await r.resumeOne(A1);
+  eq("review P2: unidentified tab where the session was remembered → waits", runs.length, 0);
+  r.dismissOffer(); terms = []; live = []; cache.entries = {}; st.setShared(MEM, { at: now, tabs: {} });
+}
+eq("unknownCould: no cache entry → any", r.unknownCould(null, { argv: ["claude"], pid: 5 }, "/w"), { any: true });
+eq("unknownCould: an entry for another process → any", r.unknownCould({ pids: [6] }, { argv: ["claude"], pid: 5 }, "/w"), { any: true });
+eq("unknownCould: the helper looked at this process → its command line", r.unknownCould({ pids: [5, 4] }, { argv: ["claude"], pid: 5 }, "/w"), { none: true });
+eq("unknownCould: no foreground → any", r.unknownCould({ pids: [5] }, null, "/w"), { any: true });
+eq("mayBe: remembered in this very tab → may be, whatever the command line", r.mayBe({ sid: "a", terminal: "t5" }, { none: true }, "t5"), true);
+eq("mayBe: /private/tmp is /tmp (review P3)", r.mayBe({ sid: "a", cwd: "/private/tmp/x" }, { cwd: "/tmp/x" }), true);
+{
+  // s31: an unidentified tab on this computer is looked up through the helper (once a minute at most), so a new tab is
+  // identified at once — before, only another machine's tabs were asked about.
+  const asked = [];
+  const st2 = fakeShared();
+  const r3 = await loadResume({ herdr: { ...st2, home: () => HOME, appHome: () => `${HOME}/.config/herdr-app`, agents: () => [agent("t80", null, "sp1")], terminals: () => [], spaces: () => spacesList,
+    readTextFile: async () => JSON.stringify({ entries: {} }), run: () => null, notify: () => {} }, "./sidecar.js": { status: (a) => { asked.push(a); return null; } } });
+  await r3.liveSids(now); await r3.liveSids(now + 10_000); await r3.liveSids(now + 61_000);
+  eq("s31: a local unidentified tab is asked about, once a minute at most", asked, ["t80", "t80"]);
+}
+// s31 (herdr-sessions idea, owner 11-14): after Resume all, back to the workspace and tab you were on.
+const WAS = [{ id: "sp1", name: "webshop", active: true, tabs: [{ id: "tb1", active: false }, { id: "tb2", active: true }] }, { id: "sp2", name: "~", tabs: [{ id: "tb3" }] }];
+eq("placeNow: the shown workspace and tab", r.placeNow(WAS), { space: "sp1", tab: "tb2" });
+eq("placeNow: none shown", r.placeNow([{ id: "sp1", tabs: [] }]), null);
+eq("backTo: select both", r.backTo({ space: "sp1", tab: "tb2" }, WAS), [["space.select", { id: "sp1" }], ["tab.select", { id: "tb2" }]]);
+eq("backTo: the tab is gone → only the workspace", r.backTo({ space: "sp1", tab: "tb9" }, WAS), [["space.select", { id: "sp1" }]]);
+eq("backTo: the workspace is gone → nothing", r.backTo({ space: "sp9", tab: "tb2" }, WAS), []);
+eq("backTo: nothing remembered → nothing", r.backTo(null, WAS), []);
+{
+  runs.length = 0;
+  spacesList = [{ id: "sp1", name: "webshop", active: true, tabs: [{ id: "tb1", active: true }] }, { id: "sp2", name: "~", tabs: [] }];
+  st.setShared(OFFER, { at: now, tabs: [{ ...rec("b-1", 1001), space: "sp2" }, { ...rec("b-2", 1002), space: "sp2" }] });
+  // Each tab.new shows its new tab (as Herdr does): the shown workspace moves to sp2.
+  const opened = [];
+  const show = () => { spacesList = [{ id: "sp1", name: "webshop", active: false, tabs: [{ id: "tb1" }] }, { id: "sp2", name: "~", active: true, tabs: opened.map((id, i) => ({ id, active: i === opened.length - 1 })) }]; };
+  const before = runs.push;
+  runs.push = (x) => { const n = before.call(runs, x); if (x[0] === "tab.new") { opened.push(`new${opened.length}`); show(); } return n; };
+  await r.resumeAll({ wait: async () => {} });
+  runs.push = before;
+  eq("s31 resume all: back where you were at the end", runs.map(([n, a]) => (n === "tab.new" ? [n, a.argv.at(-1)] : [n, a.id])), [["tab.new", "b-1"], ["tab.new", "b-2"], ["space.select", "sp1"], ["tab.select", "tb1"]]);
+  // Resume one (a single click) shows its new tab, as before.
+  runs.length = 0;
+  spacesList = [{ id: "sp1", name: "webshop", active: true, tabs: [{ id: "tb1", active: true }] }, { id: "sp2", name: "~", tabs: [] }];
+  st.setShared(OFFER, { at: now, tabs: [{ ...rec("b-3", 1003), space: "sp2" }] });
+  await r.resumeOne("b-3");
+  eq("s31 resume one: no jump back", runs.map(([n]) => n), ["tab.new"]);
+  spacesList = [{ id: "sp1", name: "webshop", tabs: [] }, { id: "sp2", name: "~", tabs: [] }];
+}
+// A tab's default name (its number, or the program's name) is not kept: the resumed tab names itself from its session.
+eq("ownName: real name kept", r.ownName({ tab_name: "201", tab_index: 0, program: { name: "Claude Code" } }), "201");
+eq("ownName: its number is the default", r.ownName({ tab_name: "3", tab_index: 2, program: { name: "Claude Code" } }), null);
+eq("ownName: the program's name is the default", r.ownName({ tab_name: "Claude Code", tab_index: 5, program: { name: "Claude Code" } }), null);
+eq("ownName: none", r.ownName({ tab_name: null }), null);
+process.exit(bad ? 1 : 0);

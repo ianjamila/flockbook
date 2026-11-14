@@ -110,6 +110,20 @@ pub fn drop_quote_bar<'a>(lines: &[&'a str]) -> Vec<&'a str> {
 }
 re!(submit_re, r"^(?:❯|\s)\s*Submit\s*$");
 
+re!(name_rule_re, r"^─{3,} (.+) ─+$");
+
+/// A named session (sent to Claude Code's background service, or renamed) draws its name in a rule at the very
+/// bottom, under the picker and its key line ("────── Flockbook plus PR 1 continuation ─", live 2026-11-13). The
+/// screen's lines without that one rule (and the blank lines after it); any other last line stays, so the exact
+/// compares refuse it as before. The name must hold more than dashes.
+pub fn above_name_rule<'a, 'b>(lines: &'b [&'a str]) -> &'b [&'a str] {
+    let Some(last) = lines.iter().rposition(|l| !trim_ws(l).is_empty()) else { return lines };
+    let named = name_rule_re()
+        .captures(trim_ws(lines[last]))
+        .is_some_and(|m| m[1].chars().any(|c| c != '─' && !is_ws_nl(c)));
+    if named { &lines[..last] } else { lines }
+}
+
 /// The rows read so far in `claude_exact`: which region lines are rows (or Submit), and where the current row's
 /// line ends.
 struct Rows<'a> {
@@ -161,7 +175,8 @@ pub fn claude_exact(
     }
     let want = &q.questions[k];
     let n = want.options.len();
-    let lines: Vec<&str> = screen.split('\n').collect();
+    let all: Vec<&str> = screen.split('\n').collect();
+    let lines = above_name_rule(&all);
     let Some(foot) = lines.iter().rposition(|l| !trim_ws(l).is_empty()) else { return false };
     if !claude_key_line(lines[foot]) {
         return false;
@@ -327,7 +342,8 @@ pub fn claude_review_exact(q: &QuestionRequest, answers: &[QuestionAnswer], scre
     {
         return false;
     }
-    let lines: Vec<&str> = screen.split('\n').collect();
+    let all: Vec<&str> = screen.split('\n').collect();
+    let lines = above_name_rule(&all);
     let Some(title) = lines.iter().rposition(|l| trim_ws(l) == "Review your answers") else { return false };
     let Some(head) = lines[..title].iter().rposition(|l| !trim_ws(l).is_empty()) else { return false };
     if !claude_bar(q, lines[head]) {

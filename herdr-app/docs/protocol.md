@@ -48,13 +48,16 @@ does not download; `install-isolated.sh` copies the sidecar in.
 | `card` | `--terminal <addr>` `[--answers <json>]` `[--cache <file>]` | `card` |
 | `approve` | `--terminal <addr> --request <id> --allow\|--deny` `[--cache <file>]` | `done` |
 | `answer` | `--terminal <addr> --request <id> --answers <json>` `[--cache <file>]` | `done` |
-| `send` | `--terminal <addr> --text <s>` `[--file <path>]…` `[--expect-kind <agent>]` `[--expect-path <log>]` `[--cache <file>]` | `done` (`changed` when the terminal now runs another agent or conversation than the expected one; nothing is sent. Its message says "new conversation" when the same agent process wrote the expected log, e.g. after `/clear`. With `--cache` the log is looked up again and written to the cache, so the next `feed` reads it) |
+| `send` | `--terminal <addr>` `[--over-suggestion </word>]` `--text <s>` `[--file <path>]…` `[--expect-kind <agent>]` `[--expect-path <log>]` `[--cache <file>]` | `done` (`changed` when the terminal now runs another agent or conversation than the expected one; nothing is sent. `--over-suggestion` (Send anyway; before `--text`, and only read there): after those checks, when Claude Code's box shows exactly that lone "/word" with no command list above it, Ctrl-E Ctrl-U clears its line, the screen is read again, and the text goes only into a box down to one row (else `box_not_empty`, "still has text"); a box showing anything else gets the usual check. A terminal `m/tN` runs it in the helper there. Its message says "new conversation" when the same agent process wrote the expected log, e.g. after `/clear`. With `--cache` the log is looked up again and written to the cache, so the next `feed` reads it) |
 | `queue` | `--terminal <addr>` `[--cache <file>]` (Rust sidecar only; `serve` and other machines) | `queued` |
 | `commands` | `--terminal <addr>` `[--cache <file>]` (Rust sidecar only) | `commands` |
+| `usage` | `[--machine <m>]` `[--cache <file>]` (Rust sidecar only) | `usage` (none, one or several) |
+| `awake` | `--for <secs>` or `--release` or `--status` (Rust sidecar only; this computer only) | `awake` |
 | `helper install` | `--machine <m> --sha256 <hex> [--cache <file>]` | `installed` |
 | `helper remove` | `--machine <m> [--cache <file>]` | `removed` |
 | `update-check` | `--home <herdr-app home>` `[--dismiss <x.y.z>]` (Rust sidecar only) | `update` |
 | `phone status` / `on` / `off` | `--home <herdr-app home>` (Rust sidecar only) | `phone` |
+| `parked` | — (Rust sidecar only) | `parked` |
 
 `card` and `commands` only read. `approve` and `answer` send keys to the agent; the mod runs them only when the
 owner presses a button, never on a timer. `send` types a message and presses Enter.
@@ -81,7 +84,16 @@ The helper there keeps its own cache (`"$HOME"/.cache/flockbook/cache.json` ther
 `--cache` is not passed on. `send --file`: the file is first put beside the terminal there (`terminal.put`) and the
 text names that copy. Only one level: `a/b/t7` is `bad_terminal`.
 
-The helper there must be this same version (`protocol` and `sidecar` both). It is never put on
+The helper there must be this same version (`protocol` and `sidecar` both). `approve`, `answer`, every `send` and
+`card --all` (it walks the picker's tabs with keys) there first ask the helper there for `version` (nothing else
+runs): one of another version answers `remote_helper_outdated` with `remote` and `install` (null when this Flockbook
+has nothing to put there), and nothing is done there (a read, `card` `feed` `status` `queue`, runs and its own header
+says it). When that ask itself fails or runs out of time (30 s), the command stops at once with
+`remote_failed` ("<machine> did not answer … Nothing was sent there") and nothing runs there; when there is no helper
+there, `remote_helper_missing` with `install` at once (s36, fail fast). Every build says 0.1.0, so a `send --over-suggestion` (Send anyway) also
+needs the `send-over-suggestion` ability: one that lacks it (an older build) answers `remote_helper_outdated` with
+`remote.missing` and nothing is sent. Other commands run on any build of this version (an older one does less: without `bare-session`,
+Resume reads a new tab by its command line). It is never put on
 another machine without the user's yes:
 
 1. A command for `m/t7` answers `remote_helper_missing` (or `remote_helper_outdated`) with
@@ -112,7 +124,7 @@ Targets: `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `universal-a
 ### `header` (every answer, line 1)
 
 ```json
-{"cmd":"feed","protocol":1,"sidecar":"0.1.0","type":"header"}
+{"abilities":["send-over-suggestion","bare-session"],"cmd":"feed","protocol":1,"sidecar":"0.1.0","type":"header"}
 ```
 
 | Field | Meaning |
@@ -120,6 +132,7 @@ Targets: `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `universal-a
 | `protocol` | This document's version. Changes the mod must know about raise it. |
 | `sidecar` | The sidecar's own version. |
 | `cmd` | The command it ran. |
+| `abilities` | What this build can do beyond its commands (also at the end of `version`'s `commands`): `send-over-suggestion` (`send --over-suggestion`), `bare-session` (a new Claude tab named by its pid file: cache `sid`/`config`). Missing in older builds. |
 
 ### `end` (every answer, last line)
 
@@ -160,7 +173,7 @@ Targets: `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `universal-a
 ### `version`
 
 ```json
-{"commands":["version","feed","status","card","approve","answer","send","paste-image","helper","update-check","queue","phone","commands"],"release":"0.9.0","type":"version"}
+{"commands":["version","feed","status","card","approve","answer","send","paste-image","helper","update-check","queue","phone","commands","parked","usage","awake"],"release":"0.9.0","type":"version"}
 ```
 
 `commands`: the commands this sidecar has. The mod hides actions whose command is missing.
@@ -370,6 +383,85 @@ while a Claude Code, Codex or Grok Build agent works. No queue: `agent` is `""` 
 - `pullable`: the agent's input box is empty, so the queue can be pulled back now.
 - `pullsAll`: Claude Code (Up takes back every queued message as one text).
 
+### `usage` (`usage`)
+
+How much of the weekly limit is left, per account. Read only: files this computer already has, no network, no
+credentials, nothing spent. One line per account found; an account with no reading has no line (the mod shows "—").
+Only the weekly window is read out (Claude Code's 5-hour limit is gone; Codex's plan has only a weekly one).
+
+- `kind` `claude`: one line per Claude Code config folder. Read from the status line wrapper's saved inputs
+  (`<folder>/<session id>.json`; the folder is the `--dir` of the `flockbook-statusline` command in Claude Code's
+  settings, else `<herdr-app home>/flockbook/statusline`): the newest 1000 files by mtime; per config folder, of its files with `rate_limits.seven_day` (the config folder is
+  the part of its `transcript_path` before the last `/projects/`), the latest week's (`resets_at` within an hour of
+  the latest one) highest `used`, the newest file on a tie: every session re-saves the figure from its own last
+  reply, so the newest file can be an idle session's old one. `at` is that file's mtime. `email`: `oauthAccount.emailAddress` in the folder's own `.claude.json`
+  (the default folder, `.claude` under the home, uses `.claude.json` beside it in the home), else null.
+- `kind` `codex`: `$CODEX_HOME` or `~/.codex`, `sessions/YYYY/MM/DD/rollout-*.jsonl`: the newest day folders (today
+  back 14 days), newest files first (at most 20), the last `rate_limits` (found at any depth) in the newest file that
+  has one, read from the last 256 KB. The weekly window is the `primary` or `secondary` one with `window_minutes`
+  10080. `at` is the line's `timestamp`, else the file's mtime. `plan`: its `plan_type` or null.
+- `weekly`: `used` is the percent used (0..100), `left` is 100 − used rounded, `resets_at` is in seconds (null when
+  unknown). A `resets_at` already past is passed on as it was read: the mod decides what that means.
+- `at` is in milliseconds.
+
+`usage --machine <m>` runs it in the helper on that machine, as the other commands do there (`remote_helper` Never
+gives `remote-off`; a missing, other-version or unsupported helper gives its `remote_helper_*` error; nothing is
+installed and nothing runs there but the helper). Its lines come back as they are; an older helper there that does not
+know `usage` answers with a `usage` error, which the mod skips quietly.
+
+```json
+{"type":"usage","kind":"claude","config":"/Users/me/.claude","email":"me@example.com","weekly":{"left":36,"used":64,"resets_at":1795208400},"at":1763197000000}
+{"type":"usage","kind":"codex","plan":"prolite","weekly":{"left":80,"used":20,"resets_at":1795252974},"at":1763197000000}
+```
+
+### `awake` (`awake`)
+
+Keeps THIS computer from idle sleep while agents work (the mod's `awake.js` decides when; see below). It never runs on
+another machine, takes no `--machine`, and needs `--home` (the mod passes it): the holder is recorded in
+`<home>/flockbook/awake.json`. The screen may still turn off and lock; closing the lid still sleeps the computer (that
+needs admin rights, and `pmset` and `sudo` are never used).
+
+- `awake --for <secs>` (1 to 3600): starts ONE holder for `<secs>`. A holder already there is replaced: the new one
+  starts first, then the old one is stopped. A holder always ends by itself after its time, so a crashed Herdr never
+  keeps the computer awake for longer than that. `until` is in seconds; `replaced`: an earlier holder of ours was running.
+- `awake --release`: stops our holder at once (`was` false: none was running).
+- `awake --status`: `holding` (with `pid` and `until`) or `idle`.
+- A computer that cannot hold (Linux): `state` `unsupported` with `ok` true; nothing is started and the mod shows nothing.
+- Errors: `usage` (no mode, a bad number of seconds), `no-home`, `awake` (the holder could not be started; the message says why).
+
+The holder: on a Mac a detached `caffeinate -i -t <secs>` (idle sleep only; not `-d`, not `-s`). On Windows this helper
+again as `awake-hold <secs> <record file> <token>` (not for the mod to call): it asks for `ES_SYSTEM_REQUIRED` and ends
+when its time is up or the record file no longer has its token (a renewal or a release changes it). A recorded pid is
+stopped only when it is still OUR holder (on a Mac: the start time that was recorded, and caffeinate as its program), so a
+recycled pid, or another program's caffeinate (Claude Code runs one), is never touched.
+
+What the mod does with it (`awake.js`, the Flockbook setting `stay_awake`, default `on`): while this computer's agents
+work (a tab working; a finished turn with CI, a Codex round or build agents behind it, as the Overview counts them; a tab
+blocked on the owner for under 3 hours; agents on other machines never count, on Windows the WSL machine named by
+`claude_machine` is this computer) it renews `awake --for 180` every minute, keeps renewing for 15 minutes after the last
+work, then releases. A failed call is shown once ("Can't keep awake: …") and not retried for 5 minutes. A helper whose
+`version` does not list `awake` is not asked, and the side bar shows nothing.
+
+```json
+{"type":"awake","state":"holding","for":180,"pid":4242,"until":1795208400,"replaced":false}
+{"type":"awake","state":"released","was":true}
+{"type":"awake","state":"idle"}
+```
+
+### `parked` (`parked`)
+
+The Claude Code tabs whose conversation went on in Claude Code's background service ("parked"): the client in the
+terminal stops reporting and the background session has no terminal to report to, so herdr gives the terminal no
+status and the app lists no agent there. Only reads (one process listing when a Claude terminal reports no status,
+Claude's pid files, the screen). `job`: the background job's id; `session`: its conversation id; `status`: `blocked`
+while a permission prompt or a question picker is on screen (`kind` `permission` / `question`), else `working` or
+`idle` from the job's pid file; `name`: the job's session name, or null. Every other command also treats such a
+terminal as that agent with this status (and `feed` reads the job's log).
+
+```json
+{"type":"parked","terminals":[{"terminal":"t7","job":"5c1e2d7a","session":"0d6b3f9e-…","status":"working","kind":null,"name":"Fix the login page"}]}
+```
+
 ### `commands` (`commands`)
 
 The "/" commands of an agent's terminal, for the list above the reply box: Claude Code, Codex, pi and agy. Read from
@@ -445,7 +537,7 @@ files only; no key goes to the agent. Another agent: `commands` is empty (the mo
 
 `send` reads the screen right before it types. Where it finds the agent's input box and the box has text, it sends
 nothing (`box_not_empty`). The box per agent (queue.rs `box_has_text`): Claude Code, the rows after "❯" between the
-last two rules (its placeholder `Try "…"` or "Press up to edit queued messages" counts as empty; with prompt
+last rule and the one above it (a named session draws its name in that top edge, "──── name ─"; its placeholder `Try "…"` or "Press up to edit queued messages" counts as empty; with prompt
 suggestions on, its default, a suggested prompt stands dim in the empty box and the screen's text has no dim, so only
 a box that starts with "/" counts as text: `"promptSuggestionEnabled": false` in `~/.claude/settings.json` reads
 any text); Codex, the last

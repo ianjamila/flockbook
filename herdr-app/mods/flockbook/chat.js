@@ -3,7 +3,7 @@
 // cannot be scrolled from code, and the chat must open at the newest message. Every row shows in full.
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextView, Scrollbar, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
-import { theme, run, shared, settings } from "herdr";
+import { theme, run, shared, settings, notify } from "herdr";
 import { currentAgent, machineOf, icon, SPIN_MS, FADE, shownScreen, watchEdge, noteWindowHeight, KEY_WIN_H } from "./state.js";
 import { Appear } from "./motion.js";
 import { now, record, flush, loadTiming } from "./timing.js";
@@ -14,14 +14,17 @@ import { ROW_PAD_Y, BUBBLE_PAD_X, BUBBLE_PAD_Y, BUBBLE_GAP, IMAGES_FS, bubbleWid
   CALL_H, SEP_H, FOOTER_H, STATUS_H, CARD_ROW_H, OTHER_H } from "./metrics.js";
 import { Composer } from "./composer.js";
 import { markdownView, codeBlockAt } from "./mdblocks.js";
+import { reentryPrompt, replyHandoff, handoffFile, askBefore } from "./blocks.js";
+import { readFullPrompt } from "./where.js";
 import { textScale } from "./config.js";
 
 // Herdr's zoom: line heights round in zoomed px (estimate.js lineHeight).
 const appZoom = () => { const z = Number(settings?.()?.zoom); return z > 0 ? z : 1; };
 import { openMenu } from "./menu.js";
 import { Cards, wanted } from "./cards.js";
-import { startTop, overBar, BAR_H } from "./top.js";
-import { HelperUI, isRemoteProblem } from "./helpercard.js";
+import { startTop, overBar, BAR_H, barOver, barRoom, noteScreenHeight } from "./top.js";
+import { HelperUI, isRemoteProblem, installedSince } from "./helpercard.js";
+import { askOf, askMark, askWords, grantAsk } from "./asks.js";
 
 export const POLL_MS = 2000;
 const CHECK_MS = 400;
@@ -66,6 +69,10 @@ export function noteSender(from) {
   return name.join(" ") || id || "agent";
 }
 
+const FULL_RETRY_MS = 60_000; // a hand-off file that could not be read is read again this much later
+const PRESS_MS = 1500;       // a press older than this does not say which half of a footer was clicked
+const FULL_ZONE_W = 180;     // s28 (Fable): only this much of the footer's right end is "Copy full prompt" (about its button)
+
 export class ChatView {
   constructor(cx) {
     this.scroll = VirtualListScrollHandle.new();
@@ -74,17 +81,36 @@ export class ChatView {
     this.width = 0;              // the pane's width, from on_size_change
     this.follow = true;          // keep the newest row on screen
     this.open = new Set();       // tool rows that show their calls
+    this.copied = null;          // the footer row whose "Copy all" was just clicked (says "Copied" for 2 s)
+    this.copiedFull = null;      // the footer row whose "Copy full prompt" was just clicked
+    this.fullBusy = null;        // the footer row whose full prompt is being read for a click
+    this.fullPrompts = new Map(); // "address\nfile" → { text } | { problem, at } | { pending }: hand-off files read
+    this.wantFull = new Map();   // the same keys → { address, file }: named by a drawn footer, read on the next tick
+    this.pressed = null;         // the last left press on the list: { x, w, at } (which half of a footer line)
+    this.granting = null;        // the agent whose ask strip button is sending (Extra round / Merge)
+    this.askNotes = new Map();   // address → { text, bad, ask } of its last strip send that did not go out
     this.heights = new WeakMap(); // row → { w, open, k, zoom, h }
     this.busy = false;
     this.lastPoll = 0;
     this.composer = new Composer(cx);
     this.composer.seen = (address) => { const f = this.feeds.get(address); return f ? { agent: f.agent ?? null, path: f.path ?? null } : null; };
-    this.top = {}; startTop(cx, this.top);
+    // After `send` refused a new conversation and its log was marked for a new look: read it now. True when the
+    // chat follows another log than before.
+    this.composer.onNewConversation = async (address, cx) => {
+      const f = this.feeds.get(address);
+      if (!f || address !== this.address) return false;
+      const before = f.path;
+      // A poll already running (with the old log) would make this one skip: wait for it, at most a second.
+      for (let i = 0; i < 10 && this.busy; i++) await new Promise((r) => cx.timer.after(100, () => r()));
+      this.lastPoll = 0; await this.poll(cx);
+      return f.path !== before;
+    };
+    this.barOver = barOver();
+    this.top = {}; if (this.barOver) startTop(cx, this.top);
     this.appear = new Appear();
     this.cards = new Cards(cx);
     this.helper = new HelperUI();
     this.refresh = (cx) => { this.lastPoll = 0; return this.poll(cx); };
-    this.composer.onNewConversation = (_address, cx) => this.refresh(cx);
     this.cards.canFocus = () => this.composer?.empty !== false;
     this.switchTo(currentAgent()?.address ?? null);
     cx.spawn((cx) => this.poll(cx));
@@ -114,6 +140,7 @@ export class ChatView {
     const agent = currentAgent();
     cx.spawn((cx) => this.cards.poll(cx, this.address, wanted(agent, this.feed()?.rows)));
     if (this.wantOlder) { this.wantOlder = false; cx.spawn((cx) => this.loadOlder(cx)); }
+    this.readAhead(cx);
     if (Date.now() - this.lastPoll >= POLL_MS) return this.poll(cx);
   }
 
@@ -147,6 +174,14 @@ export class ChatView {
       const answer = await sidecar.feed(f.address, f.cursor);
       const t1 = now();
       const at = applyFeed(f, answer);
+      // s36: a good read proves the helper there is this version now, also when it was fixed without this card (by
+      // hand, from another computer): a plain send's ask and its note go. An ask for an ability it lacks stays.
+      const ask = this.composer?.helperAsk;
+      if (!answer.error && ask && ask.address === f.address && !(ask.err?.remote?.missing?.length)) {
+        this.composer.helperAsk = null;
+        if (this.composer.note?.helper) this.composer.note = null;
+        cx.notify();
+      }
       record("feed.exec", t1 - t0);
       record("feed.apply", now() - t1, at >= 0 ? 1 : 0);
       if (at >= 0 && f === this.feed()) {
@@ -187,8 +222,25 @@ export class ChatView {
       case "tools": return this.tools(row, t);
       case "sep":
         return h_flex().w_full().h(SEP_H).items_center().justify_center().text_size(11.5).text_color(t.dim).child(row.text || "");
-      case "footer":
-        return div().w_full().h(FOOTER_H).pt(2).text_size(11.5).text_color(t.dim).child(row.text || "");
+      case "footer": {
+        // A reply that hands over to a fresh session (blocks.js reentryPrompt): "Copy all" beside its time, one click
+        // puts the whole prompt on the clipboard (click below; the list gives a whole row, so the line is the button).
+        // s27: a prompt naming its hand-off file also gets "Copy full prompt" at the right end (the right half of the
+        // line copies the file; click() tells the halves apart).
+        const h = this.handoffBefore(row);
+        if (!h) return div().w_full().h(FOOTER_H).pt(2).text_size(11.5).text_color(t.dim).child(row.text || "");
+        if (h.file && !this.fullPrompts.has(this.fullKey(h.file))) this.wantFull.set(this.fullKey(h.file), { address: this.address, file: h.file });
+        const done = this.copied === row.id;
+        const button = (id, on, label) => h_flex().id(id).flex_none().gap(5).items_center().px(8).py(2).rounded(8).border(1)
+          .border_color(on ? t.done : t.border).text_color(on ? t.done : t.foreground)
+          .child(svg(icon(on ? "check" : "copy")).size(12)).child(label);
+        const fullDone = this.copiedFull === row.id, fullBusy = this.fullBusy === row.id;
+        return h_flex().w_full().h(FOOTER_H).gap(10).items_center().text_size(11.5).text_color(t.dim).cursor_pointer()
+          .child(div().flex_none().child(row.text || ""))
+          .child(button(`copy-prompt-${row.id}`, done, done ? "Copied" : "Copy all"))
+          .when(Boolean(h.file), (el) => el.child(div().flex_1())
+            .child(button(`copy-full-${row.id}`, fullDone, fullDone ? "Copied" : fullBusy ? "Copying…" : "Copy full prompt")));
+      }
       case "status":
         return h_flex().w_full().h(STATUS_H).items_center().justify_center().text_size(12).text_color(t.muted).child(row.text || "");
       case "perm": {
@@ -255,7 +307,7 @@ export class ChatView {
   // against the row's box; the row's padding (and the first row's bar) is taken off to get the text's y.
   // Copy message works whatever the selection: a drag across two text views, or a redraw while the agent
   // writes, can leave ⌘C with nothing to copy.
-  rowMenu(key, e) {
+  rowMenu(key, e, cx) {
     const rows = this.feed()?.rows ?? [];
     const i = rows.findIndex((r) => r.id === key);
     const row = rows[i], y0 = e?.local_position?.y;
@@ -264,19 +316,163 @@ export class ChatView {
     const w = this.colWidth();
     const at = typeof y0 !== "number" ? null : row.k === "assistant" ? { y: y0 - ROW_PAD_Y, w }
       : row.from == null ? { y: y0 - ROW_PAD_Y - BUBBLE_PAD_Y, w: bubbleTextWidth(w) } : null;
-    const code = at ? codeBlockAt(row.text || "", at.w, at.y - (i === 0 ? BAR_H : 0), textScale(), appZoom()) : null;
+    const code = at ? codeBlockAt(row.text || "", at.w, at.y - (i === 0 ? barRoom(this.barOver) : 0), textScale(), appZoom()) : null;
     if (code !== null) items.push({ label: "Copy code", act: "copy", args: { text: code } });
+    const prompt = row.k === "assistant" ? reentryPrompt(row.text, this.askBefore(rows, i)) : null;
+    // s27: the hand-off file it names, once read (the tick reads it ahead; a menu opened before that starts the read).
+    const file = prompt ? handoffFile(prompt) ?? handoffFile(row.text) : null;
+    const full = file ? this.fullPrompts.get(this.fullKey(file)) : null;
+    if (full?.text) items.push({ label: "Copy full re-entry prompt", act: "copy", args: { text: full.text } });
+    else if (file && !full && cx?.spawn) cx.spawn(() => this.loadFull(this.address, file));
+    if (prompt) items.push({ label: "Copy re-entry prompt", act: "copy", args: { text: prompt } });
     items.push({ label: "Copy message", act: "copy", args: { text: row.text || "" } });
     return openMenu(items);
+  }
+
+  // The re-entry prompt of the reply this footer ends: its last assistant text with one, back to the user's message.
+  // The owner's message the reply ending before row `i` answers (blocks.js askBefore).
+  askBefore(rows, i) { return askBefore(rows, i); }
+
+  // The re-entry prompt of the reply this footer ends (blocks.js replyHandoff, which the Overview shares).
+  promptBefore(footer) { return this.handoffBefore(footer)?.prompt ?? null; }
+  // The same with the hand-off file it names: { prompt, file } or null (blocks.js replyHandoff).
+  handoffBefore(footer) {
+    const rows = this.feed()?.rows ?? [];
+    return replyHandoff(rows, rows.findIndex((r) => r.id === footer.id));
+  }
+
+  // s27 "Copy full prompt": hand-off files, read once per chat on the tab's machine (where.js readFullPrompt).
+  fullKey(file, address = this.address) { return `${address}\n${file}`; }
+  // `fresh`: never the read already under way (a press, s28 Codex R2: it may have read the file before a rewrite). Each
+  // read is numbered per file; only the newest one started may store its result (an older one finishing late is dropped).
+  async loadFull(address, file, fresh = false) {
+    const key = this.fullKey(file, address);
+    const had = this.fullPrompts.get(key);
+    if (had?.pending && !fresh) return had.pending;
+    this.fullSeq = (this.fullSeq ?? 0) + 1;
+    const seq = this.fullSeq;
+    (this.fullLatest ??= new Map()).set(key, seq);
+    const pending = readFullPrompt(address, file).catch((e) => ({ problem: String(e?.message ?? e) }));
+    this.fullPrompts.set(key, { pending });
+    const r = await pending;
+    if (this.fullLatest.get(key) === seq) this.fullPrompts.set(key, r.text ? { text: r.text } : { problem: r.problem, at: Date.now() });
+    return r;
+  }
+  // From the tick: the newest reply's file and those drawn footers named; a failed read is tried again a minute on.
+  // s28 (Codex R1 P2): a reply that ends (a new footer row) may have rewritten a hand-off file read before, so what was
+  // read is dropped then and read again (the right-click menu copies it as read).
+  readAhead(cx) {
+    const f = this.feed();
+    const lastFooter = f?.rows ? [...f.rows].reverse().find((r) => r.k === "footer")?.id ?? null : null;
+    if (this.fullSig !== undefined && lastFooter !== this.fullSig) {
+      // Reads still under way read the file before this reply ended: their results are dropped too (R2).
+      for (const k of [...this.fullPrompts.keys()]) { this.fullPrompts.delete(k); this.fullSeq = (this.fullSeq ?? 0) + 1; (this.fullLatest ??= new Map()).set(k, this.fullSeq); }
+    }
+    this.fullSig = lastFooter;
+    const want = new Map(this.wantFull);
+    this.wantFull.clear();
+    const newest = f?.loaded ? replyHandoff(f.rows ?? []) : null;
+    if (newest?.file) want.set(this.fullKey(newest.file), { address: this.address, file: newest.file });
+    for (const [key, w] of want) {
+      const had = this.fullPrompts.get(key);
+      if (had && !(had.problem && Date.now() - had.at >= FULL_RETRY_MS)) continue;
+      cx.spawn(() => this.loadFull(w.address, w.file));
+    }
+  }
+  // Which half of a footer line the click was on: the press the list box saw just before (a list row has no handlers
+  // of its own, RECIPE.md). No press seen: not the right half, so a click never guesses at the file.
+  rightHalf() {
+    const p = this.pressed;
+    this.pressed = null;
+    return Boolean(p && Date.now() - p.at < PRESS_MS && p.w > 0 && p.x >= Math.max(p.w / 2, p.w - FULL_ZONE_W));
+  }
+  // "Copy full prompt": the hand-off file on the clipboard, a notice, "Copied" for 2 s. Not readable: a warning.
+  async copyFull(row, cx) {
+    const h = this.handoffBefore(row);
+    if (!h?.file) return this.copyPrompt(row, cx);
+    if (typeof cx?.write_to_clipboard !== "function") {
+      notify({ title: "Couldn't copy the full prompt: no clipboard here. Right-click the reply → Copy full re-entry prompt.", level: "warning", timeout: 3000 });
+      return;
+    }
+    // Read again on every press (s28 Codex R1 P2: a newer reply may have rewritten the file since it was read).
+    const address = this.address;
+    if (this.fullBusy) return;
+    this.fullBusy = row.id; cx.notify?.();
+    let got;
+    try { got = await this.loadFull(address, h.file, true); } finally { this.fullBusy = null; }
+    if (!got?.text) {
+      notify({ title: `Couldn't read the full prompt (${h.file}): ${got?.problem ?? "unknown error"}. Copy all copies the short one.`, level: "warning", timeout: 5000 });
+      cx.notify?.();
+      return;
+    }
+    cx.write_to_clipboard(got.text);
+    notify({ title: "Full re-entry prompt copied to the clipboard", level: "info", timeout: 2000 });
+    this.copiedFull = row.id;
+    cx.notify?.();
+    cx.timer?.after?.(2000, (cx2) => { if (this.copiedFull === row.id) { this.copiedFull = null; cx2?.notify?.(); } });
+  }
+
+  // The ask strip's Extra round / Merge button (owner 11-13: "theres no button here"): the same checked send as Needs
+  // you's buttons (asks.js grantAsk). Sent → the ask is answered and the strip goes, so a notice says it; not sent →
+  // the reason shows in the strip.
+  async grant(cx, address, ask) {
+    if (this.granting) return;
+    this.granting = address; this.askNotes.delete(address); cx.notify?.();
+    let note;
+    try { note = await grantAsk(address, ask); } catch { note = { text: `Not sent. Type “${askWords(ask)}” below.`, bad: true, sent: false }; } finally { this.granting = null; }
+    if (note.sent) notify({ title: note.text, level: "info", timeout: 3000 });
+    else this.askNotes.set(address, { ...note, ask: JSON.stringify(ask) });
+    cx.notify?.();
+  }
+
+  // "Copy all": the prompt on the clipboard, a short notice, and the button says "Copied" for 2 s.
+  copyPrompt(row, cx) {
+    const p = this.promptBefore(row);
+    if (!p) return;
+    if (typeof cx?.write_to_clipboard !== "function") {
+      notify({ title: "Couldn't copy the re-entry prompt: no clipboard here. Right-click the reply → Copy re-entry prompt.", level: "warning", timeout: 3000 });
+      return;
+    }
+    cx.write_to_clipboard(p);
+    notify({ title: "Re-entry prompt copied to the clipboard", level: "info", timeout: 2000 });
+    this.copied = row.id;
+    cx.notify?.();
+    cx.timer?.after?.(2000, (cx2) => { if (this.copied === row.id) { this.copied = null; cx2?.notify?.(); } });
   }
 
   click(key, cx) {
     const row = this.feed()?.rows.find((r) => r.id === key);
     if (!row) return;
+    if (row.k === "footer") {
+      const file = this.rightHalf() ? this.handoffBefore(row)?.file : null;
+      if (file) {
+        // Read now (never an earlier read: the file may have changed), then copied, as the Overview's copy does.
+        if (typeof cx?.spawn !== "function") { this.copyFull(row, cx); return; }
+        cx.spawn((cx2) => this.copyFull(row, typeof cx2?.write_to_clipboard === "function" ? cx2 : cx));
+        return;
+      }
+      return this.copyPrompt(row, cx);
+    }
     if (row.k === "tools" || (row.k === "user" && row.from != null)) {
       if (this.open.has(row.id)) this.open.delete(row.id); else this.open.add(row.id);
       cx.notify();
     }
+  }
+
+  // s32: the helper card a Send anyway asked for (composer.helperAsk: the helper there is older), for this tab only;
+  // installed → the ask goes and the chat reloads.
+  // s34: not while the chat's own card shows (a feed that failed for the same reason: no second card).
+  sendHelperCard(t) {
+    const ask = this.composer?.helperAsk;
+    if (!ask || ask.address !== this.address || isRemoteProblem(this.feed()?.error)) return null;
+    // Installed since, from any card (the chat's own, Needs you's): the ask goes; a plain send's note with it (a Send
+    // anyway's note keeps its button, to press again).
+    if (installedSince(ask.err.install.machine, ask.at)) {
+      this.composer.helperAsk = null;
+      if (this.composer.note?.helper) this.composer.note = null;
+      return null;
+    }
+    return this.helper.sendCard(t, ask.err, async (cx) => { this.composer.helperAsk = null; await this.refresh(cx); });
   }
 
   // A failed `feed` in words people can act on; the sidecar's own message small below.
@@ -305,9 +501,22 @@ export class ChatView {
 
   list(t, f) {
     const rows = f.rows, n = rows.length;
-    // The first row starts below the bar; the rest scroll up under it.
-    const sizes = rows.map((r, i) => this.height(r) + (i === 0 ? BAR_H : 0));
-    const box = v_flex().relative().flex_1().min_h(0)
+    // The first row starts below the bar; the rest scroll up under it (no room when the bar is outside).
+    const sizes = rows.map((r, i) => this.height(r) + (i === 0 ? barRoom(this.barOver) : 0));
+    const box = v_flex().id("chat-list").relative().flex_1().min_h(0)
+      .on_mouse_down("left", (e) => {
+        const w = e?.bounds?.size?.width ?? this.listSize?.w ?? 0;
+        this.pressed = typeof e?.local_position?.x === "number" ? { x: e.local_position.x, w, at: Date.now() } : null;
+      })
+      // The list keeps its scroll when its room changes: the status rows, an ask strip or a card under it, or a
+      // narrower pane (rows re-wrap taller). While following, that left the newest row half under the reply box
+      // (owner 11-13: a footer and its Copy all cut off), so a size change scrolls back to it.
+      .on_size_change((size, cx) => {
+        const was = this.listSize;
+        this.listSize = { w: size?.width ?? 0, h: size?.height ?? 0 };
+        if (was && Math.abs(was.w - this.listSize.w) < 1 && Math.abs(was.h - this.listSize.h) < 1) return;
+        if (this.follow) { this.toNewest(); cx?.notify?.(); }
+      })
       .on_scroll_wheel((e, cx) => {
         const up = e?.delta?.y > 0;
         if (this.follow && up) { this.follow = false; cx.notify(); }
@@ -324,11 +533,11 @@ export class ChatView {
           this.autoOlder++; this.wantOlder = true;
         }
         const out = [];
-        for (let i = range.start; i < range.end; i++) out.push(i === 0 ? div().w_full().pt(BAR_H).child(this.item(rows[i], t)) : this.item(rows[i], t));
+        for (let i = range.start; i < range.end; i++) out.push(i === 0 ? div().w_full().pt(barRoom(this.barOver)).child(this.item(rows[i], t)) : this.item(rows[i], t));
         record("chat.rows", now() - t0, range.end - range.start);
         return out;
       }).track_scroll(this.scroll).on_item_click((key, cx) => this.click(key, cx))
-        .on_item_secondary_click((key, e) => this.rowMenu(key, e)))
+        .on_item_secondary_click((key, e, cx) => this.rowMenu(key, e, cx)))
       .child(Scrollbar.vertical("chat").absolute().inset_0());
     // A round ↓ that fades in while you read older messages and out when you are back at the end.
     if (n) {
@@ -341,7 +550,7 @@ export class ChatView {
           .child(svg(icon("arrow-down")).size(15))));
     }
     // While older rows load: a small note under the bar's tabs. Drawn only then: a hidden spinner still costs frames.
-    if (this.olderBusy) box.child(h_flex().absolute().top(BAR_H + 6).left(0).right(0).justify_center()
+    if (this.olderBusy) box.child(h_flex().absolute().top(barRoom(this.barOver) + 6).left(0).right(0).justify_center()
       .child(h_flex().id("older").h(26).px(12).gap(6).items_center().rounded(13).bg(t.raised).border(1).border_color(t.border)
         .text_size(12).text_color(t.muted)
         .child(svg(icon("spinner")).size(11).spin(SPIN_MS)).child("Loading earlier messages")));
@@ -364,23 +573,48 @@ export class ChatView {
     else main = this.list(t, f);
     const stop = (_e, cx) => cx.stop_propagation();
     return watchEdge(v_flex().id("root").relative().size_full().min_w(0).bg(t.background))
-      .on_size_change((size, cx) => { noteWindowHeight(size); if (Math.abs(size.width - this.width) >= 1) { this.width = size.width; cx.notify(); } })
+      .on_size_change((size, cx) => { noteScreenHeight(size, this.barOver); if (Math.abs(size.width - this.width) >= 1) { this.width = size.width; cx.notify(); } })
       .on_drop((e, cx) => this.composer.addFiles(e?.paths, cx))
       // The chat input keeps ⌘⌥↑/↓ from the app's keys, so the chat switches spaces itself.
       .on_key_down((e, cx) => { const go = spaceKey(e); if (go) { cx.stop_propagation?.(); run(go); } })
       // Another agent's chat fades in; a new card fades in and rises into place.
       // No press stop on the content: under Herdr 0.1.13 an ancestor's stop_propagation on the left press
-      // makes TextView text unselectable. Put the stop back (so content presses don't drag the window; the
-      // block has window_drag for the bar) once Herdr fixes that. The reply box and the cards keep theirs.
+      // makes TextView text unselectable. So with the bar drawn over the chat (its block has window_drag),
+      // a drag on the text moves the window. The layout puts the bar outside (props.bar) so it does not.
+      // The reply box and the cards keep their stops.
       .child(v_flex().flex_1().min_h(0)
         .child(this.appear.wrap(main, "chat-body", this.address, cx).flex_1().min_h(0).flex().flex_col()))
+      .when(Boolean(this.sendHelperCard(t)), (el) => el.child(h_flex().w_full().px(16).pt(8).justify_center()
+        .on_mouse_down("left", stop).child(this.sendHelperCard(t))))
       .when(Boolean(this.helper.removeCard(t, this.refresh)), (el) => el.child(h_flex().w_full().px(16).pt(8).justify_center()
         .on_mouse_down("left", stop).child(this.helper.removeCard(t, this.refresh))))
       .when(Boolean(f) && f.error?.code !== "not-agent" && !isRemoteProblem(f.error), (el) => {
         const card = this.cards.view(this.address, t, "chat-card");
+        // What the reply ends asking for (an extra round, a merge, a migration go), as a strip over the reply box: the
+        // ask's line is easy to miss at the end of a long reply (owner 11-12). Not while a question card shows.
+        const ask = card ? null : askOf(this.address), mark = askMark(ask);
+        if (mark) {
+          // Extra round / Merge as a button here too (owner 11-13), coloured as on Needs you: round = working, merge = done.
+          const address = this.address, words = askWords(ask), busy = this.granting === address, round = ask.kind === "round";
+          // A note is about the ask it was sent for: a later, different ask starts clean.
+          const note = this.askNotes.get(address)?.ask === JSON.stringify(ask) ? this.askNotes.get(address) : null;
+          el.child(h_flex().w_full().px(16).pt(8).justify_center().on_mouse_down("left", stop)
+            .child(h_flex().id("chat-ask").w_full().max_w(800).px(14).py(8).gap(10).items_center().rounded(12)
+              .bg(t.raised).border(1).border_color(t.accent)
+              .child(div().flex_none().text_size(18).child(mark.glyph))
+              .child(v_flex().flex_1().min_w(0)
+                .child(div().truncate().text_size(13.5).font_semibold().text_color(t.foreground).child(mark.title))
+                .child(div().text_size(12).text_color(t.muted).child(mark.hint))
+                .when(Boolean(note), (n) => n.child(div().id("chat-ask-note").text_size(12).text_color(note.bad ? t.blocked : t.muted).child(note.text))))
+              .when(Boolean(words), (b) => b.child(div().id(round ? "chat-ask-round" : "chat-ask-merge").flex_none().px(14).h(32).flex().items_center()
+                .rounded(8).text_size(13).font_semibold()
+                .bg(busy ? t.chrome : round ? t.working : t.done).text_color(busy ? t.dim : t.background)
+                .when(!busy, (x) => x.hover((y) => y.opacity(0.9)).on_click((_e, cx) => cx.spawn((cx) => this.grant(cx, address, ask))))
+                .child(busy ? "Sending…" : round ? "🔁 Extra round" : "🔀 Merge")))));
+        }
         if (card) el.child(this.appear.wrap(h_flex().w_full().px(16).pt(8).justify_center().on_mouse_down("left", stop).child(card), "chat-card-in", `${this.address}:${this.cards.key?.(this.address) ?? ""}`, cx, 10));
         return el.child(div().w_full().on_mouse_down("left", stop).child(this.composer.render(currentAgent(), t)));
       })
-      .child(overBar(t));
+      .when(this.barOver, (el) => el.child(overBar(t)));
   }
 }

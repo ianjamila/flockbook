@@ -1,10 +1,11 @@
 // Fake "herdr" module. Tests set the live data in `fake` and read what the mod asked for in `log`.
 export const fake = { spaces: [], agents: [], panes: [], focused: null, shared: {}, home: "/home/test", appHome: "/home/test/.config/herdr-app", exec: null,
   layout: null, window: { platform: "macos", titlebar: "none", buttons: false, maximized: false, fullscreen: false, active: true }, settings: { zoom: 1 } };
-export const log = { run: [], exec: [], notify: [], shared: [], overlays: [], order: [], writes: [] };
-export function reset() { Object.assign(fake, { props: {}, spaces: [], agents: [], panes: [], focused: null, shared: {}, exec: null, layout: null, readText: null, writeText: null }); for (const k of Object.keys(log)) log[k] = []; }
+export const log = { run: [], exec: [], reads: [], notify: [], shared: [], overlays: [], order: [], writes: [] };
+export function reset() { Object.assign(fake, { props: {}, machines: [], spaces: [], agents: [], panes: [], focused: null, shared: {}, exec: null, layout: null, readText: null, writeText: null }); for (const k of Object.keys(log)) log[k] = []; }
 export const theme = () => new Proxy({}, { get: (_t, k) => (typeof k === "string" ? `#${k}` : undefined) });
 export const spaces = () => fake.spaces;
+export const machines = () => fake.machines ?? [];
 export const agents = () => fake.agents;
 export const panes = () => fake.panes;
 export const terminals = () => [];
@@ -27,7 +28,7 @@ export const exec = async (cmd, args = [], opts) => {
   return fake.exec ? fake.exec(cmd, args, opts) : { code: 127, stdout: "", stderr: "no exec in tests" };
 };
 export const hc = (args) => exec("hc", args);
-export const readTextFile = async (p) => (fake.readText ? fake.readText(p) : null);
+export const readTextFile = async (p, opts) => { (log.reads ??= []).push([p, opts]); return fake.readText ? fake.readText(p, opts) : null; };
 // Records each write; fake.writeText may reject it (a stale snapshot) or keep it for readText.
 export const writeTextFile = async (p, text, expected) => { log.writes.push([p, text, expected]); return fake.writeText ? fake.writeText(p, text, expected) : null; };
 export const pickFolder = async () => null;

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { fake, log, reset } from "./stub/herdr.mjs";
 import { textOf, byId } from "./stub/ui.mjs";
 import { fakeCx } from "./fake-cx.mjs";
-import { agent, space } from "./fixtures.mjs";
+import { agent, space, passBlockGrace } from "./fixtures.mjs";
 import { Cards, wanted, answersFor } from "../mods/flockbook/cards.js";
 import { NeedsView } from "../mods/flockbook/needs.js";
 
@@ -21,6 +21,7 @@ beforeEach(() => {
   reset(); acts = []; cardNow = approval;
   fake.spaces = [space()];
   fake.agents = [agent("t1", "blocked")];
+  passBlockGrace();   // plus build: blocked counts as Needs you only once it has lasted the grace (state.js BLOCK_GRACE_MS)
   fake.exec = (_c, args) => {
     if (args[0] === "card") return jl(header("card"), cardNow ?? { type: "card" }, end);
     if (args[0] === "approve" || args[0] === "answer") { acts.push(args); const r = fake.result ?? "sent"; if (r === "sent") cardNow = null; return jl(header(args[0]), { type: "done", result: r, message: fake.message ?? null }, end); }
@@ -197,8 +198,11 @@ test("own answer: a row like the options; clicks and keys in it stay in the text
   assert.match(textOf(row), /3/, "numbered after the options");
   let stopped = 0; const ecx = { ...cx, stop_propagation() { stopped++; } };
   row._h.on_mouse_down?.({}, ecx);
-  row._h.on_key_down({ key: "1", modifiers: {} }, ecx);
-  assert.equal(stopped, 2, "the card neither takes the focus nor picks option 1");
+  assert.equal(stopped, 1, "the card does not take the focus");
+  // plus build: the row no longer stops keys (a stopped key never reaches the box as typed text); the card's own key handler skips them while the box has the keyboard.
+  assert.equal(row._h.on_key_down, undefined);
+  c.typingIn = 0;
+  assert.equal(c.key_down({ key: "1", modifiers: {} }, ecx, "t1"), false, "the card does not pick option 1");
   assert.equal(c.byAgent.get("t1").picks.size, 0);
 });
 
@@ -311,4 +315,231 @@ test("an own answer the review cannot show: checked again as it changes, Send of
   assert.equal(byId(el, "card-blocked"), null, "fine now");
   assert.notEqual(byId(el, "card-answer")._h.on_click, undefined, "Send is on");
   assert.equal(c.others[1].value(), "olive", "the typed text stays");
+});
+
+// s27 (owner 11-14 "one-click MCP Supabase migrations"): an MCP server's input request (an "elicitation", e.g. Supabase
+// apply_migration's "destructive operations … Run it on project …?") gets Accept / Decline on its card. Each press
+// reads the screen again and sends keys only while the SAME request is still there, with the terminal's selection
+// where the press needs it; nothing is ever pressed by itself.
+const RULE = "─".repeat(60);
+const elicitScreen = (focus = "accept", text = "Run it on project webshop-prod?") => [
+  "⏺ Applying the migration", "", RULE, " MCP server “supabase” requests your input", "",
+  " This tool performs destructive operations on the database.", ` ${text}`, "",
+  focus === "accept" ? " ❯ Accept    Decline" : "   Accept  ❯ Decline", "", " Esc to cancel · ↑↓ to navigate"].join("\n");
+const after = "⏺ Migration applied.\n\n" + RULE + "\n❯ \n" + RULE;
+// The fake terminal: `screens` are what `hc read` shows, one per read (the last one stays); every `hc keys` recorded.
+function elicitWorld(screens) {
+  const keys = [];
+  let i = 0;
+  cardNow = null;
+  const exec0 = fake.exec;
+  fake.exec = (cmd, args) => {
+    if (cmd === "hc" && args[0] === "read") { const s = screens[Math.min(i, screens.length - 1)]; i++; return { code: 0, stdout: s, stderr: "" }; }
+    if (cmd === "hc" && args[0] === "keys") { keys.push(args.slice(1)); return { code: 0, stdout: "", stderr: "" }; }
+    return exec0(cmd, args);
+  };
+  return { keys, reads: () => i };
+}
+const quick = (c) => { c.wait = async () => {}; return c; };
+
+test("MCP request card: server and request text, Accept / Decline / Answer in terminal; reading it presses nothing", async () => {
+  const w = elicitWorld([elicitScreen()]);
+  const cx = fakeCx(); const c = quick(new Cards());
+  await c.poll(cx, "t1", true);
+  await c.poll(cx, "t1", true, true);
+  const el = c.view("t1", T);
+  assert.match(textOf(el), /MCP server “supabase” asks for your input/);
+  assert.match(textOf(byId(el, "card-elicit")), /destructive operations on the database\. Run it on project webshop-prod\?/);
+  assert.ok(byId(el, "card-elicit-accept")); assert.ok(byId(el, "card-elicit-decline")); assert.ok(byId(el, "card-elicit-terminal"));
+  assert.deepEqual(w.keys, [], "a card that is read sends no key");
+});
+
+test("Accept: the same request still on screen with Accept selected → one Enter, then the card goes", async () => {
+  const w = elicitWorld([elicitScreen(), elicitScreen(), after]);
+  const cx = fakeCx(); const c = quick(new Cards());
+  await c.poll(cx, "t1", true);
+  byId(c.view("t1", T), "card-elicit-accept")._h.on_click({}, cx); await cx.settle();
+  assert.deepEqual(w.keys, [["t1", "enter"]]);
+  assert.equal(c.view("t1", T), null, "answered: the request is gone");
+});
+
+test("Accept: a different request on screen now → no key, the new one shown with a note", async () => {
+  const w = elicitWorld([elicitScreen(), elicitScreen("accept", "Run it on project OTHER-prod?")]);
+  const cx = fakeCx(); const c = quick(new Cards());
+  await c.poll(cx, "t1", true);
+  byId(c.view("t1", T), "card-elicit-accept")._h.on_click({}, cx); await cx.settle();
+  assert.deepEqual(w.keys, []);
+  const el = c.view("t1", T);
+  assert.match(textOf(el), /OTHER-prod/);
+  assert.match(textOf(byId(el, "card-note")), /Not sent: the request on screen changed/);
+});
+
+test("Accept: a changed request that shares its first 1200 characters → no key; the card shows the whole request", async () => {
+  const pre = "y".repeat(1300);
+  const w = elicitWorld([elicitScreen("accept", `${pre} Run it on project webshop-prod?`), elicitScreen("accept", `${pre} Run it on project OTHER-prod?`)]);
+  const cx = fakeCx(); const c = quick(new Cards());
+  await c.poll(cx, "t1", true);
+  assert.match(textOf(byId(c.view("t1", T), "card-elicit")), /webshop-prod\?$/, "the card shows the request in full");
+  byId(c.view("t1", T), "card-elicit-accept")._h.on_click({}, cx); await cx.settle();
+  assert.deepEqual(w.keys, []);
+  assert.match(textOf(byId(c.view("t1", T), "card-note")), /Not sent: the request on screen changed/);
+});
+
+test("a request whose screen can't be checked well enough: the card shows it, but only Answer in terminal", async () => {
+  const odd = elicitScreen() + "\n Some other words under the dialog";
+  const w = elicitWorld([odd]);
+  const cx = fakeCx(); const c = quick(new Cards());
+  await c.poll(cx, "t1", true);
+  const el = c.view("t1", T);
+  assert.match(textOf(byId(el, "card-elicit")), /webshop-prod/);
+  assert.equal(byId(el, "card-elicit-accept"), null); assert.equal(byId(el, "card-elicit-decline"), null);
+  assert.ok(byId(el, "card-elicit-terminal"));
+  assert.match(textOf(el), /Answer it in its terminal/);
+  assert.deepEqual(w.keys, []);
+});
+
+test("Accept: the request gone from the screen → no key", async () => {
+  const w = elicitWorld([elicitScreen(), after]);
+  const cx = fakeCx(); const c = quick(new Cards());
+  await c.poll(cx, "t1", true);
+  byId(c.view("t1", T), "card-elicit-accept")._h.on_click({}, cx); await cx.settle();
+  assert.deepEqual(w.keys, []);
+  assert.equal(c.view("t1", T), null);
+});
+
+test("Accept: the terminal's selection on Decline → no key, a note to answer in the terminal", async () => {
+  const w = elicitWorld([elicitScreen("decline")]);
+  const cx = fakeCx(); const c = quick(new Cards());
+  await c.poll(cx, "t1", true);
+  byId(c.view("t1", T), "card-elicit-accept")._h.on_click({}, cx); await cx.settle();
+  assert.deepEqual(w.keys, []);
+  assert.match(textOf(byId(c.view("t1", T), "card-note")), /selection is not on Accept/);
+});
+
+test("Decline: down, checked on Decline, then Enter; never Enter while Accept is selected (Esc instead)", async () => {
+  let w = elicitWorld([elicitScreen(), elicitScreen(), elicitScreen("decline"), after]);
+  let cx = fakeCx(); let c = quick(new Cards());
+  await c.poll(cx, "t1", true);
+  byId(c.view("t1", T), "card-elicit-decline")._h.on_click({}, cx); await cx.settle();
+  assert.deepEqual(w.keys, [["t1", "down"], ["t1", "enter"]]);
+  assert.equal(c.view("t1", T), null);
+  // The selection did not move: Esc (cancel: nothing runs), never Enter.
+  reset(); fake.agents = [agent("t1", "blocked")]; passBlockGrace();
+  fake.exec = (_c, args) => (args[0] === "card" ? jl(header("card"), { type: "card" }, end) : jl(header(args[0]), end));
+  w = elicitWorld([elicitScreen(), elicitScreen(), elicitScreen(), after]);
+  cx = fakeCx(); c = quick(new Cards());
+  await c.poll(cx, "t1", true);
+  byId(c.view("t1", T), "card-elicit-decline")._h.on_click({}, cx); await cx.settle();
+  assert.deepEqual(w.keys, [["t1", "down"], ["t1", "esc"]]);
+});
+
+test("Decline already selected: Enter straight away; a request on another machine is answered there", async () => {
+  fake.agents = [agent("wsl/t3", "blocked")];
+  const w = elicitWorld([elicitScreen("decline"), elicitScreen("decline"), after]);
+  const cx = fakeCx(); const c = quick(new Cards());
+  await c.poll(cx, "wsl/t3", true);
+  byId(c.view("wsl/t3", T), "card-elicit-decline")._h.on_click({}, cx); await cx.settle();
+  assert.deepEqual(w.keys, [["wsl/t3", "enter"]]);
+});
+
+test("the request still on screen after the key: a note says to check its terminal", async () => {
+  const w = elicitWorld([elicitScreen()]);
+  const cx = fakeCx(); const c = quick(new Cards());
+  await c.poll(cx, "t1", true);
+  byId(c.view("t1", T), "card-elicit-accept")._h.on_click({}, cx); await cx.settle();
+  assert.deepEqual(w.keys, [["t1", "enter"]]);
+  assert.match(textOf(byId(c.view("t1", T), "card-note")), /still shows/);
+});
+
+// s34 (owner, item 12): approve and answer for a terminal on another machine ask the helper there first; one of
+// another version runs nothing and answers outdated with the install card's data. The card says so and shows the
+// install card; Needs you shows it in place of a card it could not read; installed, it goes and the card is read again.
+const SHA34 = "ab".repeat(32);
+const outdated34 = { type: "error", code: "remote_helper_outdated", message: "The helper on box is another version (0.0.9); this Flockbook needs 0.1.0.",
+  remote: { protocol: 1, sidecar: "0.0.9" }, install: { machine: "box", target: "aarch64-apple-darwin", path: "~/.local/share/flockbook/helper/0.1.0/flockbook-modfeed", bytes: 4e6, sha256: SHA34, source: "release" } };
+const remoteHelper34 = (state) => (_c, args) => {
+  if (args[0] === "helper" && args[1] === "install") { state.installed = true; acts.push(args); return jl(header("helper"), { type: "installed", machine: "box", sha256: SHA34, parts: 1 }, end); }
+  if (args[0] === "card") return state.cardFails ? jl(header("card"), outdated34, { type: "end", ok: false }) : jl(header("card"), cardNow ?? { type: "card" }, end);
+  if (args[0] === "approve" || args[0] === "answer") { acts.push(args); return state.installed ? jl(header(args[0]), { type: "done", result: "sent" }, end) : jl(header(args[0]), outdated34, { type: "end", ok: false }); }
+  return jl(header(args[0]), end);
+};
+
+test("approve on another machine whose helper is another version: nothing sent, the card says install, the install card shows", async () => {
+  fake.agents = [agent("box/t7", "blocked")];
+  const state = {}; fake.exec = remoteHelper34(state);
+  const cx = fakeCx(); const c = new Cards();
+  await c.poll(cx, "box/t7", true);
+  assert.equal(c.helperCard("box/t7", T), null, "no install card while the card reads fine");
+  byId(c.view("box/t7", T), "card-allow")._h.on_click({}, cx); await cx.settle();
+  const el = c.view("box/t7", T);
+  assert.match(textOf(byId(el, "card-note")), /Not sent: the Flockbook helper on box has to be installed or updated first/);
+  assert.match(textOf(el), /Install the Flockbook helper on box\?.*another version \(0\.0\.9\)/);
+  byId(el, "helper-install")._h.on_click({}, cx); await cx.settle();
+  assert.deepEqual(acts.find((a) => a[0] === "helper")?.slice(0, 6), ["helper", "install", "--machine", "box", "--sha256", SHA34]);
+  assert.equal(c.helperCard("box/t7", T), null, "installed: the card goes");
+  byId(c.view("box/t7", T), "card-allow")._h.on_click({}, cx); await cx.settle();
+  assert.equal(acts.filter((a) => a[0] === "approve").length, 2, "pressed again after the install, it goes");
+  assert.equal(c.helperCard("box/t7", T), null);
+});
+
+test("answer on another machine whose helper is another version: the same install card", async () => {
+  fake.agents = [agent("box/t7", "blocked")];
+  cardNow = question;
+  const state = {}; fake.exec = remoteHelper34(state);
+  const cx = fakeCx(); const c = new Cards(); await c.poll(cx, "box/t7", true);
+  byId(c.view("box/t7", T), "card-q0-o1")._h.on_click({}, cx);
+  byId(c.view("box/t7", T), "card-q1-o0")._h.on_click({}, cx);
+  byId(c.view("box/t7", T), "card-answer")._h.on_click({}, cx); await cx.settle();
+  const el = c.view("box/t7", T);
+  assert.ok(acts.some((a) => a[0] === "answer"));
+  assert.match(textOf(byId(el, "card-note")), /has to be installed or updated first/);
+  assert.ok(byId(el, "helper-install"), "the install card under the note");
+});
+
+test("Needs you: a card on another machine that can't be read for its helper shows the install card, not 'Reading…'", async () => {
+  fake.agents = [agent("box/t7", "blocked")];
+  fake.spaces = [space("sp1", { machine: "box" })];
+  passBlockGrace();
+  const state = { cardFails: true }; fake.exec = remoteHelper34(state);
+  const cx = fakeCx(); const v = new NeedsView(cx);
+  v.tick(cx); await cx.settle();
+  let el = v.render(cx);
+  assert.match(textOf(byId(el, "needs-detail")), /Install the Flockbook helper on box\?/);
+  assert.doesNotMatch(textOf(byId(el, "needs-detail")), /Reading what it waits for/);
+  state.cardFails = false;
+  byId(el, "helper-install")._h.on_click({}, cx); await cx.settle();
+  el = v.render(cx);
+  assert.equal(byId(el, "helper-install"), null, "installed: the card goes");
+  assert.ok(byId(el, "needs-card-allow"), "and the card is read again");
+});
+
+// s36 (s34 recheck item 2): the helper fixed WITHOUT any card (by hand, or from another computer): the next good read
+// of the card proves it is this version, so the press's install card and its note go and the approval can be pressed.
+test("the helper fixed elsewhere: the next good read clears a press's install card and its note", async () => {
+  fake.agents = [agent("box/t7", "blocked")];
+  const state = {}; fake.exec = remoteHelper34(state);
+  const cx = fakeCx(); const c = new Cards();
+  await c.poll(cx, "box/t7", true);
+  byId(c.view("box/t7", T), "card-allow")._h.on_click({}, cx); await cx.settle();
+  assert.ok(byId(c.view("box/t7", T), "helper-install"), "the press's card");
+  state.installed = true;   // updated by hand: no card was used
+  await c.poll(cx, "box/t7", true, true);
+  const el = c.view("box/t7", T);
+  assert.equal(byId(el, "helper-install"), null, "a good read: the card goes");
+  assert.equal(byId(el, "card-note"), null, "and its note");
+  assert.ok(byId(el, "card-allow"), "the approval stays, to press again");
+});
+
+test("an install from another card (the chat's, Needs you's) clears a press's install card and its note", async () => {
+  fake.agents = [agent("box/t7", "blocked")];
+  const state = {}; fake.exec = remoteHelper34(state);
+  const cx = fakeCx(); const c = new Cards();
+  await c.poll(cx, "box/t7", true);
+  byId(c.view("box/t7", T), "card-allow")._h.on_click({}, cx); await cx.settle();
+  assert.ok(byId(c.view("box/t7", T), "helper-install"), "the press's card");
+  fake.shared["flockbook.helper.installed"] = { box: Date.now() + 1000 };
+  const el = c.view("box/t7", T);
+  assert.equal(byId(el, "helper-install"), null, "installed elsewhere: the card goes");
+  assert.equal(byId(el, "card-note"), null, "and its note");
+  assert.ok(byId(el, "card-allow"), "the approval stays, to press again");
 });

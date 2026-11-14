@@ -7,3 +7,13 @@ export function agent(address, status, extra = {}) {
 export function space(id = "sp1", extra = {}) {
   return { id, index: 1, name: "app", named: false, folder: "/w/app", machine: null, branch: "main", active: true, status: null, tabs: [], ...extra };
 }
+
+// plus build: a blocked agent counts as blocked (red dot, Needs you) only once it has stayed blocked for BLOCK_GRACE_MS (state.js:
+// auto mode settles some prompts by itself). This notes every agent that is blocked now as first seen long ago, so it counts at once.
+import { reallyBlocked, BLOCK_GRACE_MS } from "../mods/flockbook/state.js";
+import { agents } from "./stub/herdr.mjs";
+export function passBlockGrace() {
+  const real = Date.now;
+  Date.now = () => real() - BLOCK_GRACE_MS - 1;
+  try { reallyBlocked({ status: "blocked", address: "" }); } finally { Date.now = real; }
+}

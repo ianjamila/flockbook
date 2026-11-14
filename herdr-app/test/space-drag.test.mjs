@@ -120,6 +120,7 @@ test("the floating sidebar drags the same way", () => {
 
 test("the tab drag and the workspace drag do not mix", async () => {
   const { TopView } = await import("../mods/flockbook/top.js");
+  fake.shared["flockbook.tablist"] = false;   // plus build: the tab list on the right (the default) replaces the bar's pills
   fake.spaces[0].tabs = [{ id: "t1", index: 1, name: "1", active: true, status: null }, { id: "t2", index: 2, name: "2", active: false, status: null }];
   fake.layout = { id: "root", children: [{ id: "sidebar", hidden: false }, { id: "screen", active: "chat" }] };
   let el = render();

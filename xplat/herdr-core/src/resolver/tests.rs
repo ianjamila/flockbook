@@ -754,6 +754,62 @@ fn write_pid_file(dir: &str, pid: i32, sid: &str, start: Date) -> String {
     p
 }
 
+fn write_pid_json(dir: &str, pid: i32, start: Date, extra: serde_json::Value) {
+    let mut o = serde_json::json!({"pid": pid, "procStart": lstart_utc(start), "cwd": "/tmp"});
+    for (k, v) in extra.as_object().unwrap() {
+        o[k] = v.clone();
+    }
+    fs::write(format!("{dir}/{pid}.json"), serde_json::to_vec(&o).unwrap()).unwrap();
+}
+
+/// Claude Code can park a terminal's conversation in its background service (owner 11-13): the client in the
+/// terminal keeps its old `sessionId` and gets `parkedJobId`; the session runs on as a `bg` process (often in the
+/// client's own process tree, under the service it started) whose pid file has that `jobId`.
+#[test]
+fn claude_parked_sessions() {
+    let procs = parse_ps(
+        "  500     1 Sat Oct 31 10:00:00 2026     -zsh HC_TERMINAL_ID=t1
+  501   500 Sat Oct 31 10:01:00 2026     claude --resume old HC_TERMINAL_ID=t1
+  502   501 Sat Oct 31 10:02:00 2026     /x/claude.exe daemon run --origin transient
+  503   502 Sat Oct 31 10:02:00 2026     /x/claude.exe --bg-pty-host /tmp/a.sock 1
+  504   503 Sat Oct 31 10:02:01 2026     /x/claude.exe --session-id j1 --fork-session
+  505   502 Sat Oct 31 10:03:00 2026     /x/claude.exe --bg-pty-host /tmp/b.sock 1
+  506   505 Sat Oct 31 10:03:01 2026     /x/claude.exe --session-id j2
+  600     1 Sat Oct 31 10:00:00 2026     -zsh HC_TERMINAL_ID=t2
+  601   600 Sat Oct 31 10:01:00 2026     claude HC_TERMINAL_ID=t2
+  700     1 Sat Oct 31 10:00:00 2026     -zsh HC_TERMINAL_ID=t3
+  701   700 Sat Oct 31 10:01:00 2026     claude HC_TERMINAL_ID=t3
+  702   701 Sat Oct 31 10:02:00 2026     /x/claude.exe daemon run --origin transient
+  703   702 Sat Oct 31 10:02:01 2026     /x/claude.exe --session-id j4
+  800     1 Sat Oct 31 10:00:00 2026     -zsh HC_TERMINAL_ID=t4
+  801   800 Sat Oct 31 10:01:00 2026     claude HC_TERMINAL_ID=t4
+  900     1 Sat Oct 31 09:00:00 2026     /x/claude.exe daemon run
+  901   900 Sat Oct 31 10:04:00 2026     /x/claude.exe --session-id j3",
+    );
+    let (_t, dir) = tmp();
+    let at = |pid: i32| procs.iter().find(|p| p.pid == pid).unwrap().start;
+    write_pid_json(&dir, 501, at(501), serde_json::json!({"sessionId": "sid-old", "kind": "interactive", "status": "idle", "parkedJobId": "J1"}));
+    write_pid_json(&dir, 504, at(504), serde_json::json!({"sessionId": "sid-bg", "kind": "bg", "status": "busy", "jobId": "J1", "name": "Parked work"}));
+    write_pid_json(&dir, 506, at(506), serde_json::json!({"sessionId": "sid-j2", "kind": "bg", "status": "idle", "jobId": "J2"}));
+    write_pid_json(&dir, 601, at(601), serde_json::json!({"sessionId": "sid-old2", "kind": "interactive", "status": "idle", "parkedJobId": "J3"}));
+    write_pid_json(&dir, 901, at(901), serde_json::json!({"sessionId": "sid-far", "kind": "bg", "status": "idle", "jobId": "J3"}));
+    write_pid_json(&dir, 701, at(701), serde_json::json!({"sessionId": "sid-own", "kind": "interactive", "status": "busy"}));
+    write_pid_json(&dir, 703, at(703), serde_json::json!({"sessionId": "sid-j4", "kind": "bg", "status": "busy", "jobId": "J4"}));
+    write_pid_json(&dir, 801, at(801), serde_json::json!({"sessionId": "sid-gone", "kind": "interactive", "status": "idle", "parkedJobId": "J9"}));
+    let parked = |pids: &[i32]| claude_parked(pids, &procs, &dir);
+    assert_eq!(claude_session(&[501, 500], &procs, &dir), Some("sid-bg".into()), "the parked job's session, not the client's old one or another job's");
+    assert_eq!(
+        parked(&[501, 500]),
+        Some(ParkedClaude { job: "J1".into(), session: "sid-bg".into(), pid: 504, status: "busy".into(), name: Some("Parked work".into()) })
+    );
+    assert_eq!(claude_session(&[601, 600], &procs, &dir), Some("sid-far".into()), "a job the service runs outside the terminal's tree");
+    assert_eq!(parked(&[601, 600]).map(|p| (p.pid, p.status)), Some((901, "idle".into())));
+    assert_eq!(claude_session(&[701, 700], &procs, &dir), Some("sid-own".into()), "a job the client started is not its conversation");
+    assert_eq!(parked(&[701, 700]), None, "not parked");
+    assert_eq!(claude_session(&[801, 800], &procs, &dir), None, "parked, its job gone: no guess (the old log is not the live one)");
+    assert_eq!(parked(&[801, 800]), None);
+}
+
 #[test]
 fn hc_sessions() {
     let procs = parse_ps(
@@ -827,6 +883,41 @@ fn hc_claude_config_dir_log_later() {
     let log = format!("{cfg}/projects/-w/sid-new.jsonl");
     fs::write(&log, "{}\n").unwrap();
     assert_eq!(get(&mut res), Some(log), "the first turn writes the log under the config dir: the same pid file now gives its path");
+}
+
+/// s31 (owner 11-14, Resume sessions): a Claude tab is identified before its first message. The pid file names the
+/// session at start (live-checked 11-14 on Claude Code 2.1.323: sessionId written, no log yet); the resolver tells its
+/// bare id and the config folder that holds it, so the helper's cache can carry them.
+#[test]
+fn claude_bare_session_names_the_config_folder() {
+    let (_t, cfg) = tmp();
+    let (_d, home_cfg) = tmp();
+    fs::create_dir_all(format!("{cfg}/sessions")).unwrap();
+    fs::create_dir_all(format!("{home_cfg}/sessions")).unwrap();
+    let procs = parse_ps(&format!(
+        "  500     1 Sat Oct 31 10:00:00 2026     -zsh HC_TERMINAL_ID=t1\n  501   500 Sat Oct 31 10:01:00 2026     claude CLAUDE_CONFIG_DIR={cfg} HC_TERMINAL_ID=t1\n  600     1 Sat Oct 31 10:00:00 2026     -zsh HC_TERMINAL_ID=t2\n  601   600 Sat Oct 31 10:02:00 2026     claude HC_TERMINAL_ID=t2\n  700     1 Sat Oct 31 10:00:00 2026     node /opt/bin/codex HC_TERMINAL_ID=t3\n"
+    ));
+    let start = |pid| procs.iter().find(|p| p.pid == pid).unwrap().start;
+    write_pid_file(&format!("{cfg}/sessions"), 501, "sid-own", start(501));
+    write_pid_file(&format!("{home_cfg}/sessions"), 601, "sid-default", start(601));
+    let mut res = resolver(|r| {
+        r.claude_dir = format!("{home_cfg}/sessions");
+        r.retry = 0.0;
+    });
+    let needs = [
+        Need::new("hc:t1", "claude", "/w", vec![501, 500]),
+        Need::new("hc:t2", "claude", "/w", vec![601, 600]),
+        Need::new("hc:t3", "codex", "/w", vec![700]),
+    ];
+    res.resolve_with(&needs, &set(&[]), &HashMap::new(), Some(&procs));
+    assert_eq!(res.claude_bare_session("hc:t1"), Some(("sid-own".into(), cfg.clone())), "its own CLAUDE_CONFIG_DIR, no log yet");
+    assert_eq!(res.claude_bare_session("hc:t2"), Some(("sid-default".into(), home_cfg.clone())), "the default config folder");
+    assert_eq!(res.claude_bare_session("hc:t3"), None, "not a Claude pane found by its pid file");
+    assert_eq!(res.claude_bare_session("hc:t9"), None, "no such pane");
+    fs::create_dir_all(format!("{cfg}/projects/-w")).unwrap();
+    fs::write(format!("{cfg}/projects/-w/sid-own.jsonl"), "{}\n").unwrap();
+    res.resolve_with(&needs, &set(&[]), &HashMap::new(), Some(&procs));
+    assert_eq!(res.claude_bare_session("hc:t1"), None, "the log is found: a path, not a bare id");
 }
 
 #[test]

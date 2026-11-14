@@ -197,6 +197,163 @@ fn another_version_there_is_an_error_not_a_guess() {
     }
 }
 
+// s32: every build says 0.1.0, so an older helper there (before Send anyway over a suggestion) passed the version
+// check and, given --over-suggestion, typed into the suggestion. Its header lists what it can do (`abilities`). Before
+// a Send anyway there, the helper there is asked first (`version`): one without the ability is outdated, with what it
+// lacks, and nothing runs there; review P1. Every other command still runs on an older helper (review P2).
+fn older_there(w: &World, abilities: &str) {
+    there_as(w, remote::helper_version(), abilities);
+}
+/// A fake helper there of version `v` whose header lists `abilities` (a JSON tail); it notes each command it ran.
+fn there_as(w: &World, v: &str, abilities: &str) {
+    std::fs::create_dir_all(w.installed().parent().unwrap()).unwrap();
+    let fake = format!(
+        "#!/bin/sh\necho \"$1\" >> \"$HOME/calls\"\necho '{{\"cmd\":\"x\",\"protocol\":1,\"sidecar\":\"{v}\",\"type\":\"header\"{abilities}}}'\necho '{{\"ms\":0,\"ok\":true,\"type\":\"end\"}}'\n"
+    );
+    std::fs::write(w.installed(), fake).unwrap();
+    std::fs::set_permissions(w.installed(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _ = std::fs::remove_file(w.home.join("calls"));
+}
+fn calls_there(w: &World) -> Vec<String> {
+    std::fs::read_to_string(w.home.join("calls")).unwrap_or_default().lines().map(String::from).collect()
+}
+
+#[test]
+fn send_anyway_to_an_older_helper_there_sends_nothing_and_offers_this_builds() {
+    let w = world();
+    let send = ["send", "--terminal", "box/t3", "--over-suggestion", "/handoff", "--text", "/clear"];
+    for abilities in ["".to_string(), ",\"abilities\":[\"bare-session\"]".to_string()] {
+        older_there(&w, &abilities);
+        let e = w.error(&send);
+        assert_eq!(e["code"], "remote_helper_outdated", "{abilities}: {e}");
+        assert_eq!(e["remote"]["sidecar"], remote::helper_version());
+        assert_eq!(e["remote"]["missing"], serde_json::json!(["send-over-suggestion"]), "{e}");
+        assert!(e["message"].as_str().unwrap().contains("older"), "{e}");
+        assert_eq!(e["install"]["machine"], "box", "the card can offer this build's helper");
+        assert_eq!(calls_there(&w), vec!["version"], "only asked what it can do: no send ran there");
+    }
+    // With the ability, the Send anyway goes there after the check.
+    older_there(&w, ",\"abilities\":[\"send-over-suggestion\"]");
+    let ok = w.run(&send);
+    assert_eq!(ok.last().unwrap()["ok"], true, "{ok:?}");
+    assert_eq!(calls_there(&w), vec!["version", "send"]);
+}
+
+#[test]
+fn an_older_helper_there_still_reads_and_sends_plain_text() {
+    let w = world();
+    older_there(&w, "");
+    // A text that reads like the option is text (the option counts only before --text, as the helper there reads it).
+    for args in [&["card", "--terminal", "box/t3"][..], &["send", "--terminal", "box/t3", "--text", "hi"][..], &["send", "--terminal", "box/t3", "--text", "--over-suggestion"][..]] {
+        let v = w.run(args);
+        assert_eq!(v.last().unwrap()["ok"], true, "{args:?}: {v:?}");
+    }
+    // s34: a send is checked first (`version`), and goes: a plain send needs nothing an older build lacks.
+    assert_eq!(calls_there(&w), vec!["card", "version", "send", "version", "send"], "reads unchecked; each send checked, then sent");
+}
+
+// s34 (owner, item 12): approve, answer and every send change something there, so the helper there is asked first
+// (`version`), as a Send anyway is: one of another version gets the install card and nothing runs there (before, the
+// command ran and only its answer's header said it was another version). One of this version runs them after the check.
+#[test]
+fn approve_answer_and_send_to_another_version_there_run_nothing() {
+    let w = world();
+    let acts: [&[&str]; 5] = [
+        &["approve", "--terminal", "box/t3", "--request", "r1", "--allow"],
+        // s34 review: `card --all` sends keys there (it walks the picker's tabs), so it is checked too.
+        &["card", "--terminal", "box/t3", "--all"],
+        &["answer", "--terminal", "box/t3", "--request", "r1", "--answers", "[[\"Yes\"]]"],
+        &["send", "--terminal", "box/t3", "--text", "hi"],
+        &["send", "--terminal", "box/t3", "--over-suggestion", "/handoff", "--text", "/clear"],
+    ];
+    for args in acts {
+        there_as(&w, "0.0.9", ",\"abilities\":[\"send-over-suggestion\",\"bare-session\"]");
+        let e = w.error(args);
+        assert_eq!(e["code"], "remote_helper_outdated", "{args:?}: {e}");
+        assert_eq!(e["remote"]["sidecar"], "0.0.9", "{e}");
+        assert!(e["message"].as_str().unwrap().contains("another version"), "{e}");
+        assert_eq!(e["install"]["machine"], "box", "the card can offer this version");
+        assert_eq!(calls_there(&w), vec!["version"], "{args:?}: only asked its version, nothing ran there");
+    }
+    // This version there: each runs there after the check.
+    for args in acts {
+        older_there(&w, ",\"abilities\":[\"send-over-suggestion\",\"bare-session\"]");
+        let ok = w.run(args);
+        assert_eq!(ok.last().unwrap()["ok"], true, "{args:?}: {ok:?}");
+        assert_eq!(calls_there(&w), vec!["version".to_string(), args[0].to_string()], "{args:?}");
+    }
+    // An older build of this version (no abilities): approve, answer and a plain send need none, so they run.
+    for args in [&acts[0][..], &acts[2][..], &acts[3][..]] {
+        older_there(&w, "");
+        let ok = w.run(args);
+        assert_eq!(ok.last().unwrap()["ok"], true, "{args:?}: {ok:?}");
+        assert_eq!(calls_there(&w), vec!["version".to_string(), args[0].to_string()], "{args:?}");
+    }
+    // A read (card, feed, status, queue) is not checked first: its own answer says the version, and nothing changed.
+    there_as(&w, "0.0.9", "");
+    assert_eq!(w.error(&["card", "--terminal", "box/t3"])["code"], "remote_helper_outdated");
+    assert_eq!(calls_there(&w), vec!["card"]);
+}
+
+// s36 (owner 11-15: "fail fast"): when the version ask itself fails or runs out of time, nothing runs there and the
+// answer says so at once. Before, the command went on and could wait another 30 s for the same silent machine.
+const ACTS: [&[&str]; 4] = [
+    &["approve", "--terminal", "box/t3", "--request", "r1", "--allow"],
+    &["card", "--terminal", "box/t3", "--all"],
+    &["answer", "--terminal", "box/t3", "--request", "r1", "--answers", "[[\"Yes\"]]"],
+    &["send", "--terminal", "box/t3", "--text", "hi"],
+];
+
+#[test]
+fn a_version_ask_that_times_out_runs_nothing_there_and_says_so() {
+    let w = world();
+    older_there(&w, "");
+    w.here.state.lock().unwrap().version_timed_out = true;
+    for args in ACTS {
+        let before = w.here.calls("machine.exec").len();
+        let e = w.error(args);
+        assert_eq!(e["code"], "remote_failed", "{args:?}: {e}");
+        let m = e["message"].as_str().unwrap();
+        assert!(m.contains("box did not answer") && m.contains("Nothing was"), "{args:?}: {m}");
+        let ran: Vec<Value> = w.here.calls("machine.exec")[before..].to_vec();
+        assert!(ran.last().unwrap()["argv"].as_array().unwrap().last().unwrap() == "version", "{args:?}: the ask was the last call there: {ran:?}");
+        assert!(calls_there(&w).is_empty(), "{args:?}: nothing ran there");
+    }
+    // A read is not checked first, so it still goes (and says on its own if the machine is silent).
+    let ok = w.run(&["card", "--terminal", "box/t3"]);
+    assert_eq!(ok.last().unwrap()["ok"], true, "{ok:?}");
+}
+
+#[test]
+fn a_version_ask_that_fails_runs_nothing_there_and_says_so() {
+    let w = world();
+    // A helper there that answers the ask with no header (it crashed): exit 3, a line on stderr.
+    std::fs::create_dir_all(w.installed().parent().unwrap()).unwrap();
+    std::fs::write(w.installed(), "#!/bin/sh\necho \"$1\" >> \"$HOME/calls\"\necho 'boom' >&2\nexit 3\n").unwrap();
+    std::fs::set_permissions(w.installed(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    for args in ACTS {
+        let _ = std::fs::remove_file(w.home.join("calls"));
+        let e = w.error(args);
+        assert_eq!(e["code"], "remote_failed", "{args:?}: {e}");
+        let m = e["message"].as_str().unwrap();
+        assert!(m.contains("box did not answer") && m.contains("boom") && m.contains("Nothing was"), "{args:?}: {m}");
+        assert_eq!(calls_there(&w), vec!["version"], "{args:?}: only the ask ran there");
+    }
+}
+
+#[test]
+fn a_version_ask_with_no_helper_there_offers_the_install_at_once() {
+    let w = world();
+    for args in ACTS {
+        let before = w.here.calls("machine.exec").len();
+        let e = w.error(args);
+        assert_eq!(e["code"], "remote_helper_missing", "{args:?}: {e}");
+        assert_eq!(e["install"]["machine"], "box", "{args:?}: {e}");
+        let ran = w.here.calls("machine.exec").len() - before;
+        assert!(ran <= 2, "{args:?}: the platform and the ask only, the command is not tried again: {ran}");
+    }
+}
+
 #[test]
 fn a_platform_without_a_helper_is_unsupported() {
     let w = world();
@@ -223,6 +380,26 @@ fn values_reach_the_helper_there_unchanged() {
     let at = argv.iter().position(|a| *a == "--text").unwrap();
     assert_eq!(argv[at + 1], text, "the value is one argument, as typed");
     assert_eq!(w.there.calls("terminal.send")[0]["text"], text, "the agent there gets exactly the text");
+}
+
+/// Send anyway for a terminal on another machine (report 11-14): --over-suggestion goes there as it is, and the
+/// helper there clears its box's lone "/word" line, then sends.
+#[test]
+fn send_anyway_runs_on_the_machine_of_the_terminal() {
+    let w = world();
+    w.install_by_hand();
+    w.there.set_terminals(vec![claude("t3", "idle", "")]);
+    let rule = "─".repeat(40);
+    w.there.set_screen("t3", &format!("● Done.\n\n{rule}\n❯\u{a0}/handoff\n{rule}\n  ~/proj\n"));
+    let d = w.run(&["send", "--terminal", "box/t3", "--over-suggestion", "/handoff", "--text", "/clear"]);
+    assert_eq!(d[1]["result"], "sent", "{d:?}");
+    let exec = w.here.calls("machine.exec");
+    let argv: Vec<&str> = exec.last().unwrap()["argv"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    let at = argv.iter().position(|a| *a == "--over-suggestion").unwrap();
+    assert_eq!(argv[at + 1], "/handoff", "the word goes there unchanged");
+    assert_eq!(w.there.keys(), vec![vec!["ctrl+e".to_string(), "ctrl+u".to_string()]], "cleared there");
+    assert_eq!(w.there.calls("terminal.send")[0]["text"], "/clear");
+    assert!(w.here.keys().is_empty(), "no keys here");
 }
 
 #[test]
@@ -354,4 +531,49 @@ fn send_with_a_file_puts_it_there_first() {
     let sent = w.there.calls("terminal.send");
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0]["text"], "look at '/remote/tmp/shot one.png'", "the text names the copy there");
+}
+
+/// `usage --machine box`: the helper there reads its own home (here: a Codex rollout under box's `.codex`) and its
+/// lines come back as they are. Nothing is installed by it.
+#[test]
+fn usage_on_another_machine_runs_the_helper_there() {
+    let w = world();
+    let day = w.home.join(".codex/sessions").join(chrono::Local::now().date_naive().format("%Y/%m/%d").to_string());
+    std::fs::create_dir_all(&day).unwrap();
+    let rl = json!({"timestamp": "2026-11-15T01:00:00.000Z", "payload": {"rate_limits": {"plan_type": "prolite",
+        "primary": {"used_percent": 20.0, "window_minutes": 10080, "resets_at": 1_795_252_974}}}});
+    std::fs::write(day.join("rollout-a.jsonl"), format!("{rl}\n")).unwrap();
+    // Missing there: the install card's data, and nothing was put there.
+    let e = w.error(&["usage", "--machine", "box"]);
+    assert_eq!(e["code"], "remote_helper_missing", "{e}");
+    assert!(!w.installed().exists(), "usage installs nothing");
+    w.install_by_hand();
+    let v = w.run(&["usage", "--machine", "box", "--home", "/nonexistent-home"]);
+    assert_eq!(v[0]["type"], "header");
+    assert_eq!(v[0]["cmd"], "usage");
+    let l = v.iter().find(|l| l["type"] == "usage").unwrap_or_else(|| panic!("a usage line: {v:?}"));
+    assert_eq!(l["kind"], "codex");
+    assert_eq!(l["plan"], "prolite");
+    assert_eq!(l["weekly"], json!({"left": 80, "used": 20, "resets_at": 1_795_252_974}));
+    assert_eq!(v.last().unwrap()["ok"], true);
+    let exec = w.here.calls("machine.exec");
+    let last = exec.last().unwrap();
+    assert_eq!(last["on"], "box");
+    assert!(last.get("line").is_none(), "argv, no shell line");
+    assert_eq!(last["argv"][4], "usage");
+    assert_eq!(last["argv"].as_array().unwrap().len(), 5, "no value goes there: {last}");
+    assert!(w.here.keys().is_empty() && w.there.keys().is_empty());
+}
+
+/// Never stops `usage --machine` before anything runs there.
+#[test]
+fn usage_on_another_machine_follows_never() {
+    let w = world();
+    w.install_by_hand();
+    let app = w.home.parent().unwrap().join("app");
+    std::fs::create_dir_all(app.join("flockbook")).unwrap();
+    std::fs::write(app.join("flockbook/config.json"), r#"{"remote_helper":"never"}"#).unwrap();
+    let e = w.error(&["usage", "--machine", "box", "--home", app.to_str().unwrap()]);
+    assert_eq!(e["code"], "remote-off");
+    assert!(w.here.calls("machine.exec").is_empty(), "nothing ran there");
 }

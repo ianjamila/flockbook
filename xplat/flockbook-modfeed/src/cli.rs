@@ -10,9 +10,12 @@
 //!   flockbook-modfeed answer --terminal <addr> --request <id> --answers <json> [--cache <file>]
 //!   flockbook-modfeed queue  --terminal <addr> [--cache <file>]   (the agent's own queue: one `queued` line; read only)
 //!   flockbook-modfeed paste-image --dir <folder>   (copied files, else the clipboard's image as a PNG there; path null when none)
-//!   flockbook-modfeed send   --terminal <addr> --text <s> [--file <path>]... [--expect-kind <k>] [--expect-path <log>]
+//!   flockbook-modfeed send   --terminal <addr> [--over-suggestion </word>] --text <s> [--file <path>]... [--expect-kind <k>] [--expect-path <log>]
+//!                            (--over-suggestion: Send anyway; the box's line is cleared first when it shows only that /word)
 //!   flockbook-modfeed helper install --machine <m> --sha256 <hex>   (the helper on another machine; after the user's yes)
 //!   flockbook-modfeed helper remove --machine <m>
+//!   flockbook-modfeed usage [--machine <m>]   (the weekly limit left per account: `usage` lines; read only; --machine: the helper there)
+//!   flockbook-modfeed awake  --for <secs> | --release | --status   (keep this computer from idle sleep: one detached holder for <secs>, replaced on renewal; an `awake` line)
 //!   flockbook-modfeed update-check --home <herdr-app home> [--dismiss <version>]   (a newer release? once a day)
 //!
 //! Every command takes `--home <herdr-app home>` (the mod passes it): its flockbook/config.json has the
@@ -20,8 +23,8 @@
 //!
 //! A terminal `m/tN` on another machine: the command runs there, in the helper there (`remote`). Rust only.
 
-use crate::protocol::{JsonLines, PROTOCOL_VERSION, SIDECAR_VERSION};
-use crate::{cards, config, feed, locate, paste, phone, queue, remote, status, update};
+use crate::protocol::{JsonLines, ABILITIES, PROTOCOL_VERSION, SIDECAR_VERSION};
+use crate::{awake, cards, config, feed, locate, paste, phone, queue, remote, status, update, usage};
 use herdr_core::hc::{HcClient, HcSession};
 use herdr_core::PaneScreen;
 use herdr_core::resolver::SessionResolver;
@@ -57,10 +60,28 @@ pub fn run(argv: &[String]) -> String {
     // The mod puts --home last; the last one counts, so a text that says "--home" is not taken for it.
     let home = || args.iter().rposition(|a| a == "--home").and_then(|i| args.get(i + 1).cloned());
     let mut r = Run { t0: Instant::now(), out: JsonLines::new() };
-    r.out.emit_value(json!({"type": "header", "protocol": PROTOCOL_VERSION, "sidecar": SIDECAR_VERSION, "cmd": cmd}));
+    r.out.emit_value(json!({"type": "header", "protocol": PROTOCOL_VERSION, "sidecar": SIDECAR_VERSION, "cmd": cmd, "abilities": ABILITIES}));
     match cmd.as_str() {
         "version" => {
-            r.out.emit_value(json!({"type": "version", "commands": ["version", "feed", "status", "card", "approve", "answer", "send", "paste-image", "helper", "update-check", "queue", "phone", "commands"], "release": update::release()}));
+            // The commands, then what this build can do beyond them (review P3: from ABILITIES, so a new one is listed).
+            let mut commands: Vec<&str> = vec!["version", "feed", "status", "card", "approve", "answer", "send", "paste-image", "helper", "update-check", "queue", "phone", "commands", "parked", "usage", "awake"];
+            commands.extend(ABILITIES);
+            r.out.emit_value(json!({"type": "version", "commands": commands, "release": update::release()}));
+            r.finish(true)
+        }
+        "parked" => {
+            // The Claude tabs whose conversation went on in Claude Code's background service, with the job's status.
+            let session = HcSession::resolve_env();
+            if !session.is_available() {
+                return r.fail("no-core", "herdr-core is not running");
+            }
+            let client = HcClient::new(session, 8, 22);
+            let mut ws = match client.snapshot() {
+                Ok(ws) => ws,
+                Err(e) => return r.fail("core", &format!("herdr-core: {e}")),
+            };
+            let list = crate::parked::promote(&mut ws, &client);
+            r.out.emit_value(crate::parked::line(&list));
             r.finish(true)
         }
         "paste-image" => {
@@ -84,6 +105,68 @@ pub fn run(argv: &[String]) -> String {
                     r.finish(true)
                 }
                 Err(e) => r.fail("write", &format!("cannot save the image: {e}")),
+            }
+        }
+        "usage" => {
+            // The weekly limit left per account, from files only. On another machine: the helper there reads its own.
+            if let Some(machine) = opt("--machine") {
+                if machine.is_empty() || machine.starts_with('-') {
+                    return r.fail("usage", "usage --machine needs a machine name");
+                }
+                if config::load(config::dir(home().as_deref()).as_deref()).remote_never {
+                    return r.fail("remote-off", config::REMOTE_OFF);
+                }
+                let session = HcSession::resolve_env();
+                if !session.is_available() {
+                    return r.fail("no-core", "herdr-core is not running");
+                }
+                let client = HcClient::new(session, 8, 22);
+                let cache = opt("--cache").map(PathBuf::from);
+                return remote::forward(&client, &cmd, &[], &machine, "", cache.as_deref());
+            }
+            let dir = config::dir(home().as_deref());
+            for line in usage::lines(&herdr_core::hc::session::process_env(), dir.as_deref(), usage::today()) {
+                r.out.emit_value(line);
+            }
+            r.finish(true)
+        }
+        "awake" => {
+            // Keeps this computer from idle sleep (awake.rs): the mod asks for 3 minutes every minute while agents work.
+            let for_secs = opt("--for");
+            let modes = [for_secs.is_some(), has("--release"), has("--status")].iter().filter(|m| **m).count();
+            let secs = match for_secs.as_deref().map(str::parse::<u64>) {
+                Some(Ok(n)) if (1..=awake::MAX_SECS).contains(&n) => Some(n),
+                Some(_) => return r.fail("usage", &format!("awake --for needs a number of seconds, 1 to {}", awake::MAX_SECS)),
+                None => None,
+            };
+            if modes != 1 {
+                return r.fail("usage", "awake needs one of --for <secs>, --release, --status");
+            }
+            if !awake::supported() {
+                r.out.emit_value(awake::unsupported());
+                return r.finish(true);
+            }
+            let Some(dir) = config::dir(home().as_deref()) else { return r.fail("no-home", "awake needs --home <herdr-app home>") };
+            if let Some(secs) = secs {
+                match awake::hold(&dir, secs) {
+                    Ok(line) => r.out.emit_value(line),
+                    Err(e) => return r.fail("awake", &e),
+                }
+            } else if has("--release") {
+                r.out.emit_value(awake::release(&dir));
+            } else {
+                r.out.emit_value(awake::status(&dir));
+            }
+            r.finish(true)
+        }
+        "awake-hold" => {
+            // The holder itself on Windows (awake.rs); started by `awake --for`, not by a person or the mod.
+            match (args.first().and_then(|s| s.parse::<u64>().ok()), args.get(1), args.get(2)) {
+                (Some(secs), Some(record), Some(token)) if awake::supported() => {
+                    awake::hold_here(secs.min(awake::MAX_SECS), Path::new(record), token);
+                    r.finish(true)
+                }
+                _ => r.fail("usage", "awake-hold <secs> <record file> <token> (Windows)"),
             }
         }
         "update-check" => {
@@ -213,7 +296,16 @@ pub fn run(argv: &[String]) -> String {
                     let Some(text) = opt("--text").filter(|t| !t.is_empty()) else { return r.fail("usage", "send needs --text <s>") };
                     let files: Vec<String> =
                         args.iter().enumerate().filter(|(i, a)| *a == "--file" && *i + 1 < args.len()).map(|(i, _)| args[i + 1].clone()).collect();
-                    let d = cards::send(&found.pane, &client, &text, &files, log, opt("--expect-kind").as_deref(), opt("--expect-path").as_deref(), was.as_ref());
+                    // Send anyway: the mod puts --over-suggestion before --text, and only that part is read, so a text that
+                    // says "--over-suggestion" is never taken for it.
+                    let before_text = &args[..args.iter().position(|a| a == "--text").unwrap_or(args.len())];
+                    let over = before_text.iter().position(|a| a == "--over-suggestion").map(|i| before_text.get(i + 1).cloned());
+                    let over = match over {
+                        None => None,
+                        Some(Some(w)) if crate::queue::slash_word(&w) => Some(w),
+                        Some(_) => return r.fail("usage", "send --over-suggestion needs a lone \"/word\" before --text"),
+                    };
+                    let d = cards::send(&found.pane, &client, &text, &files, log, opt("--expect-kind").as_deref(), opt("--expect-path").as_deref(), was.as_ref(), over.as_deref());
                     r.out.emit(&d);
                     return r.finish(true);
                 }
@@ -248,7 +340,7 @@ pub fn run(argv: &[String]) -> String {
             }
         }
         // `queue` is serve's own, not offered to the mod.
-        _ => r.fail("usage", "commands: version, feed, status, card, approve, answer, send"),
+        _ => r.fail("usage", "commands: version, feed, status, card, approve, answer, send, usage"),
     }
 }
 
@@ -261,7 +353,10 @@ fn find(terminal: &str, cache: Option<&Path>, recheck: bool) -> Result<(locate::
     }
     // exec gives the sidecar 30 s; a send that waits longer reports `unconfirmed`.
     let client = HcClient::new(session.clone(), 8, 22);
-    let ws = client.snapshot().map_err(|e| ("core", format!("herdr-core: {e}")))?;
+    let mut ws = client.snapshot().map_err(|e| ("core", format!("herdr-core: {e}")))?;
+    // A parked Claude (its conversation runs on in the background service) gets its job's status: the card, answer
+    // and send rules read it.
+    crate::parked::promote(&mut ws, &client);
     let now_s = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
     let mut resolver = SessionResolver::new(&session.socket_path);
     let found = if recheck { locate::recheck(terminal, &ws, &mut resolver, cache, now_s) } else { locate::find(terminal, &ws, &mut resolver, cache, now_s).map(|f| (f, None)) };
@@ -299,7 +394,7 @@ pub fn keys(terminal: &str, cache: Option<&Path>, home: Option<&str>, keys: Keys
     let d = match keys {
         Keys::Approve { request, allow } => cards::approve(&found.pane, &client, log, &request, allow, cache),
         Keys::Answer { request, answers } => cards::answer(&found.pane, &client, log, &request, &answers),
-        Keys::Send { text, expect_kind, expect_path } => cards::send(&found.pane, &client, &text, &[], log, expect_kind.as_deref(), expect_path.as_deref(), was.as_ref()),
+        Keys::Send { text, expect_kind, expect_path } => cards::send(&found.pane, &client, &text, &[], log, expect_kind.as_deref(), expect_path.as_deref(), was.as_ref(), None),
     };
     serde_json::to_value(&d).unwrap_or_else(|_| json!({"type": "done", "result": "failed"}))
 }

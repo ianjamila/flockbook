@@ -50,10 +50,16 @@ impl HcSession {
         }
         let session = non_empty(env, "HC_SESSION").unwrap_or("default");
         if cfg!(windows) {
-            // TODO(windows): herdr-core's endpoint on Windows is not documented upstream (docs/security.md names Unix
-            // sockets only). Until it is, only an explicit HC_SOCKET / HERDR_DESK_HC_SOCKET is used; this path never
-            // exists, so the sidecar answers `no-core`.
-            return HcSession::new(&format!("<no herdr-core endpoint on Windows yet: set HC_SOCKET> ({session})"));
+            // Windows: herdr-core listens on a named pipe (core 0.1.21: \\.\pipe\herdr-core-<user>-<session>.sock; not
+            // documented upstream) and writes it into its state folder's core.lock, so that is read first; else the
+            // pipe is found among this machine's pipes. None found: a path that is never there (`no-core`).
+            if let Some(p) = core_lock_path(env, session).and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| pipe_from_lock(&t)) {
+                return HcSession::new(&p);
+            }
+            let user = non_empty(env, "USERNAME");
+            return HcSession::new(&pick_core_pipe(&pipe_names(), session, user)
+                .map(|n| format!("{PIPE_DIR}{n}"))
+                .unwrap_or_else(|| format!("<no herdr-core pipe found: set HC_SOCKET> ({session})")));
         }
         if let Some(r) = non_empty(env, "XDG_RUNTIME_DIR") {
             return HcSession::new(&format!("{r}/herdr-core/{session}.sock"));
@@ -74,10 +80,65 @@ impl HcSession {
         }
         #[cfg(not(unix))]
         {
-            // TODO(windows): see `resolve`; no endpoint kind is known, so nothing counts as available.
-            false
+            // Windows: a pipe that is listed now (opening it to look would take one of the core's instances).
+            match self.socket_path.strip_prefix(PIPE_DIR) {
+                Some(name) => pipe_names().iter().any(|n| n.eq_ignore_ascii_case(name)),
+                None => std::path::Path::new(&self.socket_path).exists(),
+            }
         }
     }
+}
+
+/// Where every named pipe lives (Windows).
+pub const PIPE_DIR: &str = r"\\.\pipe\";
+
+/// The pipes on this machine by name (Windows; elsewhere none).
+pub fn pipe_names() -> Vec<String> {
+    if !cfg!(windows) {
+        return vec![];
+    }
+    std::fs::read_dir(PIPE_DIR)
+        .map(|d| d.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default()
+}
+
+/// Windows: `<LOCALAPPDATA>\herdr-core\<session>\core.lock`, where herdr-core writes its endpoint. None without
+/// LOCALAPPDATA.
+pub fn core_lock_path(env: &HashMap<String, String>, session: &str) -> Option<String> {
+    non_empty(env, "LOCALAPPDATA").map(|d| format!("{}\\herdr-core\\{session}\\core.lock", d.trim_end_matches('\\')))
+}
+
+/// The pipe a core.lock names: its first line that is a named pipe's path (`\\.\pipe\<name>`).
+pub fn pipe_from_lock(text: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .find(|l| l.len() > PIPE_DIR.len() && l[..PIPE_DIR.len()].eq_ignore_ascii_case(PIPE_DIR))
+        .map(String::from)
+}
+
+/// herdr-core's pipe among `names` (Windows): one named `herdr-core-…` that is not a holder's; with several, the
+/// one that ends in `-<session>` (or is `herdr-core-<session>`), then the one that names this user (pipes are
+/// machine-wide, so other users' cores show too). None: no such pipe, or no way to tell several apart.
+pub fn pick_core_pipe(names: &[String], session: &str, user: Option<&str>) -> Option<String> {
+    let lower = |s: &str| s.to_ascii_lowercase();
+    let core: Vec<&String> = names
+        .iter()
+        .filter(|n| lower(n).starts_with("herdr-core-") && !lower(n).contains("holder"))
+        .collect();
+    let one = |v: Vec<&String>| (v.len() == 1).then(|| v[0].clone());
+    if core.len() <= 1 {
+        return one(core);
+    }
+    let tail = format!("-{}", lower(session));
+    // core 0.1.21 names it herdr-core-<user>-<session>.sock: the ".sock" does not count.
+    let by_session: Vec<&String> =
+        core.iter().copied().filter(|n| lower(n).trim_end_matches(".sock").ends_with(&tail)).collect();
+    let pool = if by_session.is_empty() { core } else { by_session };
+    if pool.len() == 1 {
+        return one(pool);
+    }
+    let user = lower(user?);
+    one(pool.into_iter().filter(|n| !user.is_empty() && lower(n).contains(&user)).collect())
 }
 
 /// `/run/user/<uid>` when it exists.
@@ -120,5 +181,58 @@ mod tests {
     #[test]
     fn missing_socket_is_not_available() {
         assert!(!HcSession::new("/nonexistent/herdr-core/x.sock").is_available());
+    }
+
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    // Windows: herdr-core's pipe among the machine's pipes (the rule runs everywhere; only Windows lists pipes).
+    #[test]
+    fn core_pipe_rules() {
+        let pick = |v: &[&str], session: &str, user: Option<&str>| pick_core_pipe(&names(v), session, user);
+        // One core pipe: it, whatever its middle; holders and other programs' pipes do not count.
+        assert_eq!(pick(&["ProtectedPrefix", "herdr-core-jamil-default", "herdr-core-jamil-default.holder"], "default", None).as_deref(), Some("herdr-core-jamil-default"));
+        assert_eq!(pick(&["herdr-core-3f2a9c"], "default", Some("jamil")).as_deref(), Some("herdr-core-3f2a9c"));
+        assert_eq!(pick(&["HERDR-CORE-X"], "default", None).as_deref(), Some("HERDR-CORE-X"));
+        // None: no core pipe at all, or only holders.
+        assert_eq!(pick(&[], "default", None), None);
+        assert_eq!(pick(&["mojo.1.2", "herdr-core-a-holder"], "default", None), None);
+        // Several: the session decides, then the user (pipes are machine-wide).
+        assert_eq!(pick(&["herdr-core-jamil-default", "herdr-core-jamil-work"], "work", None).as_deref(), Some("herdr-core-jamil-work"));
+        assert_eq!(pick(&["herdr-core-ana-default", "herdr-core-jamil-default"], "default", Some("Jamil")).as_deref(), Some("herdr-core-jamil-default"));
+        assert_eq!(pick(&["herdr-core-default", "herdr-core-work"], "default", None).as_deref(), Some("herdr-core-default"));
+        // The real name (PC, core 0.1.21: core.lock says \\.\pipe\herdr-core-jamil-default.sock): ".sock" at the end.
+        assert_eq!(pick(&["herdr-core-jamil-default.sock", "herdr-core-jamil-work.sock"], "work", None).as_deref(), Some("herdr-core-jamil-work.sock"));
+        assert_eq!(pick(&["herdr-core-jamil-default.sock", "herdr-core-jamil-default.holder.sock"], "default", None).as_deref(), Some("herdr-core-jamil-default.sock"));
+        // Several and nothing tells them apart: None (HC_SOCKET picks one).
+        assert_eq!(pick(&["herdr-core-ana-default", "herdr-core-bo-default"], "default", None), None);
+        assert_eq!(pick(&["herdr-core-ana-default", "herdr-core-bo-default"], "default", Some("cy")), None);
+    }
+
+    // Windows: the core writes its endpoint into <LOCALAPPDATA>\herdr-core\<session>\core.lock (seen on the PC).
+    #[test]
+    fn core_lock_names_the_pipe() {
+        assert_eq!(pipe_from_lock("\\\\.\\pipe\\herdr-core-jamil-default.sock").as_deref(), Some("\\\\.\\pipe\\herdr-core-jamil-default.sock"));
+        assert_eq!(pipe_from_lock("  \\\\.\\pipe\\herdr-core-jamil-default.sock\r\n").as_deref(), Some("\\\\.\\pipe\\herdr-core-jamil-default.sock"));
+        assert_eq!(pipe_from_lock("pid 4242\n\\\\.\\pipe\\herdr-core-x.sock\n").as_deref(), Some("\\\\.\\pipe\\herdr-core-x.sock"));
+        assert_eq!(pipe_from_lock(""), None);
+        assert_eq!(pipe_from_lock("/home/x/.local/state/herdr-core/default/default.sock"), None);
+        assert_eq!(pipe_from_lock("\\\\.\\pipe\\"), None);
+        let env = env_any(&[("LOCALAPPDATA", "C:\\Users\\x\\AppData\\Local")]);
+        assert_eq!(core_lock_path(&env, "default").as_deref(), Some("C:\\Users\\x\\AppData\\Local\\herdr-core\\default\\core.lock"));
+        assert_eq!(core_lock_path(&env_any(&[]), "default"), None);
+    }
+
+    fn env_any(kv: &[(&str, &str)]) -> HashMap<String, String> {
+        kv.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn no_pipes_off_windows() {
+        if !cfg!(windows) {
+            assert!(pipe_names().is_empty());
+            assert!(!HcSession::new(r"\\.\pipe\herdr-core-x").is_available());
+        }
     }
 }

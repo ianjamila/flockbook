@@ -12,6 +12,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 pub const HELD_WAIT: Duration = Duration::from_secs(60);
+/// After a key timed out on a clipped box (no tool or command read), how long another clipped box refuses a press: a
+/// resize re-wraps the same box under another id, and the held key (hc's typing-quiet rule holds it about 3 s) may
+/// still land; a second key then would answer the next prompt.
+pub const HELD_GUARD: Duration = Duration::from_secs(15);
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 struct Mark {
@@ -19,6 +23,13 @@ struct Mark {
     tool: String,
     command: String,
     held: bool,
+    /// When `hold` marked it (ms since 1970); 0 in a claim written before s35.
+    #[serde(default)]
+    held_at: u64,
+}
+
+fn ms(t: SystemTime) -> u64 {
+    t.duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
 pub struct FeedAnswered {
@@ -72,9 +83,19 @@ impl FeedAnswered {
         }
     }
 
+    /// The same prompt: its id, or its tool and command (a re-wrapped box). A box with neither read (clipped: taller
+    /// than the pane) is known by its id alone: every clipped box has the same empty tool and command, so one press
+    /// would otherwise mark the next clipped box answered too (s35: five migrations, one Allow each).
     fn same(m: &Option<Mark>, id: &str, tool: &str, command: &str) -> bool {
         let Some(m) = m else { return false };
-        m.id == id || (m.tool == tool && m.command == Self::flat(command))
+        let flat = Self::flat(command);
+        m.id == id || ((!tool.is_empty() || !flat.is_empty()) && m.tool == tool && m.command == flat)
+    }
+
+    /// A clipped box's key that timed out less than `HELD_GUARD` ago (a time off by more than that either way: no).
+    fn guarding(m: &Option<Mark>, now: SystemTime) -> bool {
+        let Some(m) = m else { return false };
+        m.held && m.held_at > 0 && m.tool.is_empty() && m.command.is_empty() && ms(now).abs_diff(m.held_at) < HELD_GUARD.as_millis() as u64
     }
 
     /// A file that does not parse and is younger than this may be another run's claim mid-write (an older sidecar
@@ -116,6 +137,9 @@ impl FeedAnswered {
         if self.is_claimed(terminal, id, tool, command, blocked, now) {
             return Claim::Taken;
         }
+        if tool.is_empty() && Self::flat(command).is_empty() && self.marks(terminal).iter().any(|(_, m)| Self::guarding(m, now)) {
+            return Claim::Wait;
+        }
         if path.exists() {
             let mark = std::fs::read(&path).ok().and_then(|d| serde_json::from_slice::<Mark>(&d).ok());
             if Self::fresh_unread(&path, &mark, now) {
@@ -123,7 +147,7 @@ impl FeedAnswered {
             }
             let _ = std::fs::remove_file(&path); // not live (is_claimed above): its time is over
         }
-        let m = Mark { id: id.into(), tool: tool.into(), command: Self::flat(command), held: false };
+        let m = Mark { id: id.into(), tool: tool.into(), command: Self::flat(command), held: false, held_at: 0 };
         let nanos = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
         let tmp = folder.join(format!(".claim-{}-{nanos}", std::process::id()));
         let mut opts = std::fs::OpenOptions::new();
@@ -156,6 +180,7 @@ impl FeedAnswered {
         let Some(path) = self.file(terminal, id) else { return };
         let Some(mut m) = std::fs::read(&path).ok().and_then(|d| serde_json::from_slice::<Mark>(&d).ok()) else { return };
         m.held = true;
+        m.held_at = ms(SystemTime::now());
         // Atomic, as Swift's `.atomic` write: a temp file, then a rename.
         let Some(folder) = path.parent() else { return };
         let tmp = folder.join(format!(".hold-{}", std::process::id()));
@@ -176,16 +201,16 @@ impl FeedAnswered {
         self.marks(terminal).iter().any(|(p, m)| Self::same(m, id, tool, command) && Self::live(p, m, blocked, now))
     }
 
-    /// A screen read that worked shows `bx` (None: no approval box): the claims of other prompts go. Never called
-    /// when the read failed: that is no evidence.
-    pub fn seen(&self, terminal: &str, bx: Option<(&str, &str)>) {
+    /// A screen read that worked shows `bx` (id, tool, command; None: no approval box): the claims of other prompts
+    /// go. Never called when the read failed: that is no evidence.
+    pub fn seen(&self, terminal: &str, bx: Option<(&str, &str, &str)>) {
         let now = SystemTime::now();
         for (p, m) in self.marks(terminal) {
-            if Self::fresh_unread(&p, &m, now) {
+            if Self::fresh_unread(&p, &m, now) || Self::guarding(&m, now) {
                 continue;
             }
-            if let (Some((tool, command)), Some(m)) = (bx, &m) {
-                if m.tool == tool && m.command == Self::flat(command) {
+            if let Some((id, tool, command)) = bx {
+                if Self::same(&m, id, tool, command) {
                     continue;
                 }
             }
@@ -203,6 +228,9 @@ pub enum Claim {
     Taken,
     /// Another run is claiming in this folder now: nothing is decided, the user can press again.
     Busy,
+    /// A clipped box while an earlier clipped box's timed-out key may still land (`HELD_GUARD`): nothing is sent,
+    /// the user can press again in a few seconds.
+    Wait,
 }
 
 /// An OS lock (`flock`) on `.lock`, held while one run claims. The kernel lets it go when its run ends, dead or not,

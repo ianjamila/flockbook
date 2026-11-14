@@ -2,5 +2,8 @@
   "name": "flockbook-herdr-mod",
   "private": true,
   "type": "module",
-  "scripts": { "test": "node --import ./test/stub/register.mjs --test test/*.test.mjs" }
+  "scripts": {
+    "test": "node --import ./test/stub/register.mjs --test test/*.test.mjs && node test/plus/runall.mjs",
+    "test:plus": "node test/plus/runall.mjs"
+  }
 }

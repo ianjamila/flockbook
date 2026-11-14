@@ -102,6 +102,40 @@ export function cellLines(text, width, fs = 13.5, k = 1) {
   return n;
 }
 
+// Lines of one code-box line (mdblocks.js: Menlo, drawn as a TextView paragraph) `width` px wide at `fs` px.
+// gpui wraps it like prose, by word, not by character: measured on the owner's 11-13 screenshot (a 22-line
+// re-entry prompt in a 681 px box at 13 px), lines broke before a word that did not fit, a slash or a backtick,
+// and a character-by-character count at 0.58 em came out 3+ lines short, so the box's end and the footer under
+// it were cut. Menlo's advance is 0.602 em; counted at CODE_EM, a little wide. Full-width characters 1 em,
+// emoji (drawn by a fallback font) 1.3 em, other non-ASCII (an arrow, an ellipsis) 0.7 em, a space 1 letter.
+// Leading spaces are no-break spaces in the box (codeMarkdown): they open the first line, never a break.
+const CODE_EM = 0.61;
+export function codeLines(text, width, fs = 13) {
+  width = Math.max(fs, width);
+  const chW = (ch) => {
+    const c = ch.codePointAt(0);
+    if (c < 128) return fs * CODE_EM;
+    if (isWide(c)) return fs;
+    if (c >= 0x1f000 || (c >= 0x2600 && c <= 0x27bf)) return fs * 1.3;
+    return fs * 0.7;
+  };
+  const s = String(text), lead = /^ */.exec(s)[0].length;
+  const units = s.slice(lead).match(/\/?[A-Za-z0-9_\-+.:@#%&=?!'"$<>~^*()[\]{}]+|\s+|./gsu) ?? [];
+  let n = 1, w = lead * fs * CODE_EM;
+  while (w > width) { n++; w -= width; }
+  for (const u of units) {
+    let uw = 0;
+    for (const ch of u) uw += /\s/.test(ch) ? fs * CODE_EM : chW(ch);
+    if (w > 0 && w + uw > width) {
+      n++; w = 0;
+      if (/^\s+$/.test(u)) continue;  // a space at the break is not drawn
+    }
+    while (uw > width) { n++; uw -= width; }
+    w += uw;
+  }
+  return n;
+}
+
 export function wrapLines(text, width, fs = 14) {
   let w = 0, n = 1;
   for (let i = 0; i < text.length; i++) {
@@ -130,7 +164,10 @@ export function lineHeight(size, zoom = 1) {
 export function markdownHeight(text, width, spans = null, k = 1, zoom = 1) {
   const CODE_LH = lineHeight(13 * k, zoom);    // TextView at 13 px (Menlo): its own line height
   const CELL_LH = lineHeight(13.5 * k, zoom);  // table text at 13.5 px (measured 11-10)
-  const fs = FS * k, lh = lineHeight(fs, zoom), up = Math.max(1, k);
+  // Prose (TextView) under a zoom below 1 draws at its unzoomed line height while the list's rows shrink
+  // (Herdr 0.1.15, measured 11-12 at zoom 0.9: 26 pt a line = 29 row px, not 23.5): a long reply lost its last
+  // lines, the merge or extra-round ask among them. So the taller of the two is counted.
+  const fs = FS * k, lh = Math.max(lineHeight(fs, zoom), lineHeight(fs, 1) / zoom), up = Math.max(1, k, 1 / zoom);
   let h = 0, p = 0, prevBlank = true;  // h: drawn exactly; p: prose, wraps
   // A blank line is a 10 px paragraph gap, but not next to a code box or table: their margin is the gap.
   let gap = 0;
@@ -150,7 +187,7 @@ export function markdownHeight(text, width, spans = null, k = 1, zoom = 1) {
       h += 34;
       for (const raw of b.lines) {
         if (spans) spans.at(-1).lines.push(raw.replace(/\r$/, ""));
-        h += CODE_LH * Math.max(1, wrapLines(raw.replace(/\t/g, "    "), width - 30, 13 * k));
+        h += CODE_LH * Math.max(1, codeLines(raw.replace(/\r$/, "").replace(/\t/g, "    "), width - 30, 13 * k));
       }
       if (spans) spans.at(-1).bottom = h + p - 6;
       prevBlank = true;
