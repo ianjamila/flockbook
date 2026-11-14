@@ -3,8 +3,8 @@
 // may still turn off and lock; closing the lid still sleeps it: that needs admin rights and is not touched).
 //
 // Work is what the Overview already counts, not a second opinion: a tab working (its turn runs), a finished turn with
-// something running behind it (CI watch ⏳, Codex round 🔍, build agents 🛠: state.js subStatus().background, which is
-// what puts a tab under "Working" / "CI / Final Review / Merging" there), or a tab blocked on the owner for less than 3 h.
+// something running behind it (CI watch ⏳, Codex round 🔍, build agents 🛠: state.js workKind, the rule that also
+// sets the tab mark and puts a tab under "Working" / "CI / Final Review / Merging" there), or a tab blocked on the owner for less than 3 h.
 // Only this computer's agents count (a tab on another machine keeps THAT machine awake); on Windows the WSL machine named
 // by "claude_machine" is this computer too.
 //
@@ -18,9 +18,9 @@ import { h_flex } from "gpui-base";
 import * as sidecar from "./sidecar.js";
 import { setting, setSetting } from "./config.js";
 import { snapShared, withSnapshot } from "./parked.js";
-import { subStatus, tabAgents } from "./state.js";
+import { subStatus, tabAgents, workKind } from "./state.js";
 import { askOf } from "./asks.js";
-import { allTabs, statusOf } from "./overview.js";
+import { allTabs } from "./overview.js";
 import { claudeMachine, localWindows } from "./where.js";
 
 export const KEY_AWAKE = "flockbook.awake";         // { work, lastWork, holding, renewedAt, phase, error, retryAt, seen }
@@ -45,9 +45,10 @@ export const waitsOnOwner = (tab) => tab.status === "blocked" || tabAgents(tab.i
 
 // What this computer's tabs are doing: { working, ci, review, other, waiting, total, seen }. `items`: the Overview's
 // allTabs(). A tab is counted once: working (its turn runs), waiting on the owner for less than BLOCKED_MAX_MS
-// (`waiting`; since the tab's changed_at, else when it was first seen waiting, kept in `seen`), or background (statusOf
-// says working behind a finished turn: `ci`, `review` or `other` by its sub-status). Everything else is not work.
-export function classify(items, now, { windows = false, wsl = null, seen = {}, sub = subStatus, status = statusOf, waits = waitsOnOwner } = {}) {
+// (`waiting`; since the tab's changed_at, else when it was first seen waiting, kept in `seen`), or background work behind a
+// finished turn (state.js workKind, the rule the tab mark and the Overview share: `ci`, `review` or `other`). Everything
+// else is not work. `kind(tab)`: workKind with `sub`.
+export function classify(items, now, { windows = false, wsl = null, seen = {}, sub = subStatus, kind = (tab) => workKind(tab, sub), waits = waitsOnOwner } = {}) {
   const out = { ...EMPTY, seen: {} };
   for (const { space, tab } of items) {
     if (!isLocal(space, { windows, wsl })) continue;
@@ -56,12 +57,12 @@ export function classify(items, now, { windows = false, wsl = null, seen = {}, s
       out.seen[tab.id] = first;
       const since = Number.isFinite(tab.changed_at) && tab.changed_at > 0 ? tab.changed_at : first;
       if (now - since < BLOCKED_MAX_MS) out.waiting++;
-    } else if (tab.status === "working") out.working++;
-    else if (status(tab, sub) === "working") {
-      const key = sub(tab)?.key;
-      if (key === "ci") out.ci++;
-      else if (key === "review" || key === "reviewwait") out.review++;
-      else out.other++;
+    } else {
+      const k = kind(tab);
+      if (k === "turn") out.working++;
+      else if (k === "ci") out.ci++;
+      else if (k === "review") out.review++;
+      else if (k) out.other++;
     }
   }
   out.total = out.working + out.ci + out.review + out.other + out.waiting;

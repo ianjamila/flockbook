@@ -18,12 +18,12 @@ const asksSrc = fs.readFileSync(MOD + "asks.js", "utf8");
 const askMark = new Function(cut(asksSrc, "export function askMark", "export function askDetail").replaceAll("export ", "") + "; return askMark;")();
 const S = new Function("AGENTS", "askMark", "askOf", "prOf", "bgOf", "bgWords", "handoffOf", "nowWait", stateCode.replaceAll("export ", "")
   + "; function tabAgents(id) { return AGENTS[id] ? [{ ...AGENTS[id], address: id }] : []; }"
-  + "; return { overlays, subStatus, plainLabel, tabLabel, withAsk, SUB_GROUPS };")(AGENTS, askMark, (addr) => ASKS[addr] ?? null, (addr) => PRS[addr] ?? null, (addr) => BG[addr] ?? null, bgWords, (addr) => Boolean(HO[addr]), (addr) => NOWW[addr] ?? null);
+  + "; return { overlays, subStatus, plainLabel, tabLabel, withAsk, SUB_GROUPS, workKind };")(AGENTS, askMark, (addr) => ASKS[addr] ?? null, (addr) => PRS[addr] ?? null, (addr) => BG[addr] ?? null, bgWords, (addr) => Boolean(HO[addr]), (addr) => NOWW[addr] ?? null);
 const ovCode = cut(ov, "// Grouped by status", "export class OverviewView");
 // machines.js spaceTitle ("api on pc-wsl"), as the Overview names a workspace by it (owner 11-14).
 const spaceTitle = new Function(/^export const spaceTitle = .*$/m.exec(fs.readFileSync(MOD + "machines.js", "utf8"))[0].replace("export ", "") + "; return spaceTitle;")();
-const O = new Function("subStatus", "SUB_GROUPS", "tabAgents", "askOf", "spaceTitle", ovCode.replaceAll("export ", "") + "; return { groups, subGroups, waitingOn, waitingLabel, statusOf };")(
-  S.subStatus, S.SUB_GROUPS, (id) => (AGENTS[id] ? [{ ...AGENTS[id], address: id }] : []), (addr) => ASKS[addr] ?? null, spaceTitle);
+const O = new Function("subStatus", "SUB_GROUPS", "workKind", "tabAgents", "askOf", "spaceTitle", ovCode.replaceAll("export ", "") + "; return { groups, subGroups, waitingOn, waitingLabel, statusOf };")(
+  S.subStatus, S.SUB_GROUPS, S.workKind, (id) => (AGENTS[id] ? [{ ...AGENTS[id], address: id }] : []), (addr) => ASKS[addr] ?? null, spaceTitle);
 
 let bad = 0;
 const eq = (name, got, want) => { const ok = JSON.stringify(got) === JSON.stringify(want); if (!ok) bad++; console.log(ok ? "PASS" : "FAIL", name, ok ? "" : `→ ${JSON.stringify(got)} want ${JSON.stringify(want)}`); };
@@ -183,6 +183,28 @@ AGENTS.k = { ...ag("Doc 201 follow-ups"), status: "blocked" };
 eq("blocked stays blocked", O.statusOf(tab("k", "blocked")), "blocked");
 delete BG.k;
 eq("no background → done", O.statusOf(tab("k", "done")), "done");
+
+// s37 review P2 #3: one workKind(tab) says what work a tab does — the tab mark (tabStatus), the Overview (statusOf) and
+// stay-awake (classify) all read it. "turn" = its turn runs; behind a finished turn "ci" / "review" / "other"; null = none.
+AGENTS.k = ag("Doc 201 follow-ups");
+eq("workKind: a running turn", S.workKind(tab("k", "working")), "turn");
+eq("workKind: finished, nothing behind it", S.workKind(tab("k", "done")), null);
+eq("workKind: idle, nothing behind it", S.workKind(tab("k", "idle")), null);
+BG.k = { shells: 1, agents: 0 };
+eq("workKind: a background shell", S.workKind(tab("k", "done")), "other");
+eq("workKind: blocked is never work (it waits on the owner)", S.workKind(tab("k", "blocked")), null);
+delete BG.k;
+AGENTS.k = ag("⏳ PR #9");
+eq("workKind: a CI wait", S.workKind(tab("k", "done")), "ci");
+AGENTS.k = ag("🔍 round 2");
+eq("workKind: a review wait", S.workKind(tab("k", "done")), "review");
+AGENTS.k = ag("🟣✅ Fable");
+eq("workKind: a review dot", S.workKind(tab("k", "idle")), "review");
+AGENTS.k = ag("🛠 build");
+eq("workKind: a leftover 🛠 with no agent running is not work", S.workKind(tab("k", "done")), null);
+eq("workKind: a stub sub-status", S.workKind(tab("k", "done"), () => ({ key: "ci", background: true })), "ci");
+eq("statusOf goes by workKind", O.statusOf(tab("k", "done"), () => ({ key: "results", background: true })), "working");
+delete AGENTS.k;
 
 // 11-12 s9: an extra-round / merge ask from the reply shows as a symbol even when the title has none.
 AGENTS.r = ag("✅ Style Guide Part A (PR #1838)");

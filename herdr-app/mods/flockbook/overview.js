@@ -5,7 +5,7 @@ import { withHover } from "./hover.js";
 import { theme, shared, setShared, home, notify } from "herdr";
 import { spaces, agents, withSnapshot } from "./parked.js";
 import { spaceTitle } from "./machines.js";
-import { tabLabel, plainLabel, subStatus, SUB_GROUPS, tabAgents, agentName, openTab, showNeeds, showSessions, needing, icon, FADE, watchEdge, noteWindowHeight } from "./state.js";
+import { tabLabel, plainLabel, subStatus, workKind, SUB_GROUPS, tabAgents, agentName, openTab, showNeeds, showSessions, needing, icon, FADE, watchEdge, noteWindowHeight } from "./state.js";
 import { openMenu, tabItems, suggestBadge } from "./menu.js";
 import { movedBadge, badgeTip } from "./automove.js";
 import { askOf, nowOf, handoffOf } from "./asks.js";
@@ -69,8 +69,9 @@ const inPipeline = (tab, sub) => {
   const k = sub(tab)?.key;
   return PIPELINE.includes(k) && !(UNTIL_FINISHED.includes(k) && statusOf(tab, sub) !== "working");
 };
-// A finished turn with a shell or agent still running behind it counts as working (subStatus().background).
-export const statusOf = (tab, sub = subStatus) => (tab.status !== "blocked" && sub(tab)?.background ? "working" : tab.status);
+// A finished turn with a shell or agent still running behind it counts as working (state.js workKind). Blocked stays
+// blocked here (Needs you lists it); the tab mark (tabStatus) also shows a blocked tab inside its grace as working.
+export const statusOf = (tab, sub = subStatus) => (tab.status !== "blocked" && workKind(tab, sub) ? "working" : tab.status);
 const STATUS_GROUPS = [
   ["Working", (tab, sub) => !waitsOnAnswer(tab) && !inPipeline(tab, sub) && statusOf(tab, sub) === "working"],
   ["CI / Final Review / Merging", (tab, sub) => !waitsOnAnswer(tab) && inPipeline(tab, sub)],

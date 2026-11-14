@@ -7,7 +7,8 @@ import { textOf, byId } from "./stub/ui.mjs";
 import { fakeCx } from "./fake-cx.mjs";
 import { agent, space } from "./fixtures.mjs";
 import { SideView } from "../mods/flockbook/side.js";
-import { allTabs } from "../mods/flockbook/overview.js";
+import { allTabs, statusOf } from "../mods/flockbook/overview.js";
+import { workKind, tabStatus } from "../mods/flockbook/state.js";
 import { KEY_CONFIG } from "../mods/flockbook/config.js";
 import { forgetCommands } from "../mods/flockbook/sidecar.js";
 import { SETTINGS, SECTIONS } from "../mods/flockbook/settings.js";
@@ -266,6 +267,36 @@ test("the setting is a switch in the settings dialog, default on, in one section
   assert.ok(s && s.title === "Keep this computer awake while agents work");
   assert.deepEqual(s.choices.map((c) => c[0]), ["on", "off"]);
   assert.equal(SECTIONS.filter((sec) => (sec.parts ?? []).some(([, keys]) => keys.includes("stay_awake"))).length, 1);
+});
+
+// ---- s37 review P2 #3: one workKind ----
+test("workKind: the tab mark, the Overview and stay-awake agree on what is work", () => {
+  setTabs([
+    ["w", { status: "working" }],
+    ["ci", { status: "done" }, { title: "⏳ PR #9" }],
+    ["rv", { status: "done" }, { title: "🔍 round 2" }],
+    ["sh", { status: "done" }, { title: "✅ Usage review" }],
+    ["bg", { status: "done" }, { title: "🛠 build" }],
+    ["id", { status: "idle" }],
+    ["dn", { status: "done" }],
+  ]);
+  fake.shared["flockbook.background"] = { sh: { shells: 1, agents: 0 } };
+  const kinds = Object.fromEntries(allTabs().map(({ tab: t }) => [t.id, workKind(t)]));
+  assert.deepEqual(kinds, { "tb-w": "turn", "tb-ci": "ci", "tb-rv": "review", "tb-sh": "other", "tb-bg": null, "tb-id": null, "tb-dn": null });
+  for (const { tab: t } of allTabs()) {
+    const working = workKind(t) !== null;
+    assert.equal(tabStatus(t) === "working", working, `tab mark of ${t.id}`);
+    assert.equal(statusOf(t) === "working", working, `Overview of ${t.id}`);
+  }
+  const w = classify(allTabs(), NOW);
+  assert.deepEqual({ working: w.working, ci: w.ci, review: w.review, other: w.other, total: w.total }, { working: 1, ci: 1, review: 1, other: 1, total: 4 });
+});
+
+test("workKind: classify counts by the kind it is given", () => {
+  setTabs([["x", { status: "done" }], ["y", { status: "idle" }], ["z", { status: "done" }]]);
+  const kind = (t) => ({ "tb-x": "ci", "tb-y": "review", "tb-z": "other" })[t.id];
+  const w = classify(allTabs(), NOW, { kind });
+  assert.deepEqual({ ci: w.ci, review: w.review, other: w.other, working: w.working, total: w.total }, { ci: 1, review: 1, other: 1, working: 0, total: 3 });
 });
 
 // ---- s37 review fixes ----

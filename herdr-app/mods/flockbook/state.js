@@ -302,11 +302,22 @@ function leftoverShells(a, b) {
   const st = b?.merge ? prOf(a?.address)?.state : null;
   return st === "MERGED" || st === "CLOSED";
 }
+// What work a tab does now — the one rule the tab mark (tabStatus), the Overview (overview.js statusOf) and stay-awake
+// (awake.js classify) share (s37 review P2 #3): "turn" while its turn runs; behind a finished turn a CI wait ("ci"), a
+// review ("review": 🔍 or a review dot) or another shell / agent still running ("other"); null = no work. A blocked
+// tab waits on the owner, which is not work here (each caller decides what blocked means for it). `sub`: subStatus.
+export function workKind(tab, sub = subStatus) {
+  if (tab.status === "working") return "turn";
+  if (tab.status === "blocked") return null;
+  const ss = sub(tab);
+  if (!ss?.background) return null;
+  return ss.key === "ci" ? "ci" : ss.key === "review" || ss.key === "reviewwait" ? "review" : "other";
+}
 // The status a tab's mark shows: working while a shell or agent still runs behind a finished turn.
 export const tabStatus = (tab) => {
   // Blocked only past the grace (needReason): a permission check auto mode settles shows as working.
   if (tab.status === "blocked") return tabAgents(tab.id).some((a) => reallyBlocked(a)) ? "blocked" : "working";
-  return tab.status !== "working" && subStatus(tab)?.background ? "working" : tab.status;
+  return workKind(tab) ? "working" : tab.status;
 };
 // A tab's sub-status: { key, title, glyphs, hint, tip } from its first agent's symbols, or null.
 // hint is short ("🛠 building · ✅ results waiting"); tip says it in words.
