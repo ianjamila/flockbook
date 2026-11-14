@@ -239,6 +239,56 @@ async function resumeWorld(opts) {
   eq("status call for an unidentified remote tab: once a minute at most", w.statuses.length - s0, 1);
 }
 {
+  // s29 (Fable P3): restart offers are judged per machine. After a 10-minute gap the Mac's own session is gone while
+  // a new wsl tab is still unidentified: the Mac's is offered now; wsl's records wait (its lost one is neither
+  // offered nor forgotten), and once that tab is identified the downtime still counts, so wsl's lost one is offered.
+  const tab = (t, sid) => ({ path: WORKLOG(sid), cwd: WSL, pids: [Number(t.slice(1)) * 10] });
+  const MACLOG = `${MAC}/.${NAME}/projects/-Users-you/s-mac.jsonl`;
+  const files = {
+    [`wsl:${WSL}/.cache/flockbook/cache.json`]: { entries: { t3: tab("t3", "s-w1"), t4: tab("t4", "s-w2") } },
+    [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: { t1: { path: MACLOG, cwd: MAC, pids: [1] } } },
+  };
+  const ag = (address) => ({ app: "claude-code", address, space: "sp1", space_name: "~", title: `Tab ${address}`, tab_name: "1", tab_index: 0, program: { name: "Claude Code" } });
+  const agents = [ag("t1"), ag("wsl/t3"), ag("wsl/t4")];
+  const w = await resumeWorld({ settings: { claude_machine: "wsl" }, files, agents, ready: ["wsl"] });
+  await w.r.resumeTick();
+  eq("per machine: Mac + wsl sessions remembered", Object.keys(w.r.remembered().tabs).sort(), ["s-mac", "s-w1", "s-w2"]);
+  // Restart: the Mac tab is gone; on wsl t4 is gone and a new tab t5 is not identified yet.
+  agents.splice(0, agents.length, ag("wsl/t3"), ag("wsl/t5"));
+  files[`:${MAC}/.config/herdr-app/flockbook/cache.json`] = { entries: {} };
+  files[`wsl:${WSL}/.cache/flockbook/cache.json`] = { entries: { t3: tab("t3", "s-w1") } };
+  now += 10 * 60_000; await w.r.resumeTick();
+  eq("per machine: the Mac's lost session is offered while a wsl tab is unidentified", (w.r.offer()?.tabs ?? []).map((x) => x.sid), ["s-mac"]);
+  eq("per machine: wsl's records wait (s-w2 neither offered nor forgotten)", Object.keys(w.r.remembered().tabs).sort(), ["s-w1", "s-w2"]);
+  now += 30_000; await w.r.resumeTick();
+  eq("per machine: still waiting on the next poll", Object.keys(w.r.remembered().tabs).sort(), ["s-w1", "s-w2"]);
+  files[`wsl:${WSL}/.cache/flockbook/cache.json`] = { entries: { t3: tab("t3", "s-w1"), t5: tab("t5", "s-new") } };
+  now += 30_000; await w.r.resumeTick();
+  eq("per machine: once identified, wsl's downtime still counts → its lost one offered", (w.r.offer()?.tabs ?? []).map((x) => x.sid), ["s-mac", "s-w2"]);
+  eq("per machine: then live tabs are what is remembered", Object.keys(w.r.remembered().tabs).sort(), ["s-new", "s-w1"]);
+  eq("per machine: no held gaps left", [w.r.remembered().gapMax, w.r.remembered().gaps ?? null], [0, null]);
+}
+{
+  // s29: a quiet poll after a full look: a wsl tab identified at once does not inherit the Mac's old gap. Mac tab
+  // closed on purpose (one of two, 30 s gap) is forgotten, not offered.
+  const MACLOG = (sid) => `${MAC}/.${NAME}/projects/-Users-you/${sid}.jsonl`;
+  const files = {
+    [`wsl:${WSL}/.cache/flockbook/cache.json`]: { entries: {} },
+    [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: { t1: { path: MACLOG("s-m1"), cwd: MAC, pids: [1] }, t2: { path: MACLOG("s-m2"), cwd: MAC, pids: [2] }, t3: { path: MACLOG("s-m3"), cwd: MAC, pids: [3] } } },
+  };
+  const ag = (address) => ({ app: "claude-code", address, space: "sp1", space_name: "~", title: `Tab ${address}`, tab_name: "1", tab_index: 0, program: { name: "Claude Code" } });
+  const agents = [ag("t1"), ag("t2"), ag("t3"), ag("wsl/t5")];
+  const w = await resumeWorld({ settings: { claude_machine: "wsl" }, files, agents, ready: ["wsl"] });
+  await w.r.resumeTick();
+  // A long wait while the wsl tab stays unidentified; the Mac is judged on every poll meanwhile.
+  for (let i = 0; i < 10; i++) { now += 30_000; await w.r.resumeTick(); }
+  agents.splice(0, agents.length, ag("t1"), ag("t2"), ag("wsl/t5"));
+  files[`:${MAC}/.config/herdr-app/flockbook/cache.json`] = { entries: { t1: { path: MACLOG("s-m1"), cwd: MAC, pids: [1] }, t2: { path: MACLOG("s-m2"), cwd: MAC, pids: [2] } } };
+  now += 30_000; await w.r.resumeTick();
+  eq("per machine: a Mac tab closed on purpose is not offered (wsl's wait is not the Mac's downtime)", w.r.offer(), null);
+  eq("per machine: …and forgotten", Object.keys(w.r.remembered().tabs).sort(), ["s-m1", "s-m2"]);
+}
+{
   // The Mac (no claude_machine): remote tabs are never remembered (the PC that names wsl resumes them, not both).
   const files = { [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: { t1: { path: `${MAC}/.${NAME}/projects/-Users-you/s-mac.jsonl`, cwd: MAC, pids: [1] } } } };
   const agents = [
