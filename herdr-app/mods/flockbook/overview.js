@@ -3,7 +3,7 @@ import { div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { withHover } from "./hover.js";
 import { theme, shared, setShared, home, notify } from "herdr";
-import { spaces, agents } from "./parked.js";
+import { spaces, agents, withSnapshot } from "./parked.js";
 import { spaceTitle } from "./machines.js";
 import { tabLabel, plainLabel, subStatus, SUB_GROUPS, tabAgents, agentName, openTab, showNeeds, showSessions, needing, icon, FADE, watchEdge, noteWindowHeight } from "./state.js";
 import { openMenu, tabItems, suggestBadge } from "./menu.js";
@@ -372,7 +372,13 @@ export class OverviewView {
         .child(opt("status", "Status")).child(opt("space", "Workspace")));
   }
 
-  render(_cx) {
+  // One snapshot of Herdr's agent and space lists per render (parked.js withSnapshot; 11-14 s33: the render read them
+  // dozens of times per card and Herdr cut it off with "interrupted" on a loaded machine).
+  render(cx) {
+    return withSnapshot(() => this.renderBody(cx));
+  }
+
+  renderBody(_cx) {
     const t = theme();
     const by = shared(KEY_GROUP) ?? "status";
     const items = allTabs();

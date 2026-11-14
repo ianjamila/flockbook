@@ -1,10 +1,16 @@
-import { test, beforeEach } from "node:test";
+import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { fake, log, reset } from "./stub/herdr.mjs";
 import { textOf, byId } from "./stub/ui.mjs";
 import { fakeCx } from "./fake-cx.mjs";
 import { agent, space, passBlockGrace } from "./fixtures.mjs";
 import { OverviewView, groups, allTabs, ago, greeting, KEY_GROUP } from "../mods/flockbook/overview.js";
+
+// The "Since you last looked" tests place events minutes ago; just after midnight those fall on yesterday, before the
+// strip's baseline (local midnight), and the tests failed from 00:00 to ~00:10. They run on a clock fixed at today's noon.
+const realNow = Date.now;
+const atNoon = () => { const d = new Date(); d.setHours(12, 0, 0, 0); const t = d.getTime(); Date.now = () => t; };
+afterEach(() => { Date.now = realNow; });
 
 const tab = (id, index, extra = {}) => ({ id, index, name: String(index), named: false, active: false, status: null, panes: 1, zoomed: false, settled: false, settled_at: null, changed_at: null, working_since: null, ...extra });
 
@@ -57,6 +63,7 @@ test("ago and greeting", () => {
 // Owner 11-13 ("hard to read … should be organized better"): the strip groups tabs by what they do now, a card per tab;
 // a click opens an open tab; every group starts folded (Expand all / Collapse all); Copy copies the grouped text and says so.
 test("Since you last looked: groups, cards, click to open, folded at first, Expand/Collapse all, Copy with a notice", async () => {
+  atNoon();
   const { KEY_HIST } = await import("../mods/flockbook/history.js");
   const now = Date.now(), m = 60_000;
   const ev = (addr, label, min, kind, text) => ({ at: now - min * m, addr, label, account: "WORK", kind, text });
@@ -159,6 +166,7 @@ test("Hand-off given: Copy prompt copies the newest reply's re-entry prompt with
 });
 
 test("Hand-off given: the Since you last looked card of a hand-off tab has Copy prompt too; others don't", async () => {
+  atNoon();
   const { KEY_HIST } = await import("../mods/flockbook/history.js");
   const now = Date.now(), m = 60_000;
   fake.shared[KEY_HIST] = { from: now - 600 * m, at: now, last: {

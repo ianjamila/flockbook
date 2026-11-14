@@ -15,6 +15,7 @@ import { TabsView } from "./tabs.js";
 import { SummaryView } from "./summary.js";
 import { SessionsView } from "./sessions.js";
 import { keepSelectionAccent } from "./selection.js";
+import { withSnapshot } from "./parked.js";
 
 const VIEWS = { top: TopView, side: SideView, chat: ChatView, needs: NeedsView, termbar: TermBar, termgrip: TermGrip, termresize: TermResize, overview: OverviewView, menu: MenuView, settings: SettingsView, tabs: TabsView, summary: SummaryView, sessions: SessionsView };
 
@@ -36,7 +37,8 @@ export default class Flockbook extends View {
   async close(cx) { await this.view?.close?.(cx); }
 
   render(cx) {
-    if (this.view) return this.view.render(cx);
+    // Every view draws from one snapshot of Herdr's lists (parked.js withSnapshot; the heavy views also wrap their own).
+    if (this.view) return withSnapshot(() => this.view.render(cx));
     const t = theme();
     return div().size_full().p(12).text_color(t.muted)
       .child(`Flockbook: unknown view "${this.name}". Use one of ${Object.keys(VIEWS).join(", ")}.`);

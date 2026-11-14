@@ -8,7 +8,7 @@
 import { div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
 import { theme, run, openOverlay, props } from "herdr";
-import { spaces } from "./parked.js";
+import { spaces, withSnapshot } from "./parked.js";
 import { spaceTitle } from "./machines.js";
 import { openMenu, tabItems, suggestBadge } from "./menu.js";
 import { watchGrace, spaceTabs, shownScreen, openTab, tabAgents, tabLabel, sessionTitle, subStatus, tabStatus, needReason, keepOrRename, showTab, closeTab, icon, toggleTablist, answerInTerminal, noteWidth, KEY_LIST_W } from "./state.js";
@@ -224,7 +224,9 @@ export class TabsView {
     if (this.part === "list") watchGrace(cx, this);
   }
   async close(_cx) { this.scroll?.release(); this.scroll = null; }
-  render(_cx) {
+  // One snapshot of Herdr's lists per render (parked.js withSnapshot, as the Overview: each row looked them up).
+  render(cx) { return withSnapshot(() => this.renderBody(cx)); }
+  renderBody(_cx) {
     const t = theme();
     return this.part === "head" ? head(t) : list(t, this);
   }

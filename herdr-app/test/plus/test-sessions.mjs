@@ -49,7 +49,7 @@ async function world({ settings = {}, platform = "macos", ready = ["wsl"], homeO
   const sidecar = { cachePath: () => `${MAC}/.config/herdr-app/flockbook/cache.json`, status: async () => null };
   const where = await loadMod("where.js", { herdr, "./config.js": cfg, "./sidecar.js": sidecar });
   const acc = await loadMod("accounts.js", { herdr, "./config.js": cfg, "./where.js": where });
-  const lists = { spaces: () => herdr.spaces(), agents: () => herdr.agents() };
+  const lists = { spaces: () => herdr.spaces(), agents: () => herdr.agents(), withSnapshot: (fn) => fn() };
   const res = await loadMod("resume.js", { herdr, "./accounts.js": acc, "./where.js": where, "./sidecar.js": sidecar, "./parked.js": lists });
   const move = await loadMod("automove.js", { herdr, "./config.js": cfg, "./where.js": where, "./sidecar.js": sidecar, "./state.js": { sessionTopic: (a) => a.title }, "./parked.js": lists });
   const ai = await loadMod("ai.js", { herdr, "./config.js": cfg, "./accounts.js": acc, "./where.js": where, "./state.js": { sessionTopic: (a) => a.title } });

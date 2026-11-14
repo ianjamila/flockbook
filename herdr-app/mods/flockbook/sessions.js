@@ -12,7 +12,7 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex, Input, InputState } from "gpui-base";
 import { theme, props, closeOverlay, shared, setShared, run, notify } from "herdr";
-import { spaces } from "./parked.js";
+import { spaces, withSnapshot } from "./parked.js";
 import { accounts, accountName, sessionOfLog, claudeRun, configDirOf } from "./accounts.js";
 import { claudeMachine, localWindows, connected, machineHome, knownHome, execAt, sameMachine, NEEDS_MACHINE } from "./where.js";
 import { liveSids, claimOpening, releaseOpening, noteOpened, mayBe, placeNow, returnTo, tabCount } from "./resume.js";
@@ -268,7 +268,12 @@ export class SessionsView {
     } finally { this.busy = false; cx?.notify?.(); }
   }
 
-  render(_cx) {
+  // One snapshot of Herdr's lists per render (parked.js withSnapshot, as the Overview and the bars).
+  render(cx) {
+    return withSnapshot(() => this.renderBody(cx));
+  }
+
+  renderBody(_cx) {
     const t = theme(), now = Date.now();
     const stop = (_e, cx) => cx.stop_propagation();
     const link = (id, label, on) => div().id(id).flex_none().text_size(12.5).text_color(t.accent).hover((s) => s.opacity(0.8)).cursor_pointer()

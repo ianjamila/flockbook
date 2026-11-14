@@ -10,6 +10,7 @@ import { askOf, askLine, askDetail, prList, grantAsk, elicitOf } from "./asks.js
 import { waitingFor } from "./history.js";
 import { Cards } from "./cards.js";
 import { startTop, overBar, barOver, barRoom, noteScreenHeight } from "./top.js";
+import { withSnapshot } from "./parked.js";
 
 export class NeedsView {
   constructor(cx) {
@@ -24,7 +25,11 @@ export class NeedsView {
     cx.timer.every(500, (cx) => this.tick(cx));
   }
 
-  tick(cx) {
+  // Every half second, and each render below, read Herdr's lists once (parked.js withSnapshot, as the Overview:
+  // needing() asks for every agent's reason, each a look-up of the whole list).
+  tick(cx) { withSnapshot(() => this.tickBody(cx)); }
+
+  tickBody(cx) {
     const list = needing();
     const cur = list.find((a) => a.address === this.picked) ?? list[0] ?? null;
     this.shown = cur?.address ?? null;
@@ -35,6 +40,10 @@ export class NeedsView {
   // The screen with the bar drawn over it, where presses on the content don't drag the window; or, with
   // the bar outside (props.bar), the content alone, with no stop, so its text can be selected.
   render(cx) {
+    return withSnapshot(() => this.renderBody(cx));
+  }
+
+  renderBody(cx) {
     const t = theme();
     const stop = (_e, cx) => cx.stop_propagation();
     return v_flex().id("needs-screen").relative().size_full().bg(t.background).on_size_change((size) => noteScreenHeight(size, this.barOver))

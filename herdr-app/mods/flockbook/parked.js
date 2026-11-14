@@ -96,8 +96,23 @@ export function parkedAgents(list = herdrAgents(), all = herdrSpaces(), paneList
   return out;
 }
 
+// One render's view of Herdr's lists (11-14 s33, "overview is not working": Herdr cut the Overview's render off with
+// "interrupted" — it asked Herdr for every agent dozens of times per card, each a fresh copy of the whole list). Inside
+// `withSnapshot(fn)` agents() and spaces() are read from Herdr once and reused; nothing changes mid-render, and the
+// snapshot ends with the render. Callers get their own array (a copy), so an in-place sort can't leak to the next.
+let snap = null;
+export function withSnapshot(fn) {
+  if (snap) return fn();
+  snap = {};
+  try { return fn(); } finally { snap = null; }
+}
+
 // Herdr's agents with the parked ones, in space, tab, pane order.
 export function agents() {
+  if (snap) return (snap.agents ??= readAgents()).slice();
+  return readAgents();
+}
+function readAgents() {
   const base = herdrAgents();
   const extra = parkedAgents(base);
   if (!extra.length) return base;
@@ -111,6 +126,10 @@ export function agents() {
 
 // Herdr's spaces with each parked tab's status rolled into its tab and space (and when it changed / works since).
 export function spaces() {
+  if (snap) return (snap.spaces ??= readSpaces()).slice();
+  return readSpaces();
+}
+function readSpaces() {
   const all = herdrSpaces();
   const extra = parkedAgents(herdrAgents(), all);
   if (!extra.length) return all;

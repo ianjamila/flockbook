@@ -3,7 +3,7 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { theme, run, openOverlay, closeOverlay, props } from "herdr";
-import { spaces } from "./parked.js";
+import { spaces, withSnapshot } from "./parked.js";
 import { openMenu, spaceItems } from "./menu.js";
 import { watchGrace, needing, showNeeds, showOverview, showSettings, showSessions, shownScreen, icon, showSpace, toggleSidebar, sidebarShown, peekClosed, PEEK_W, PEEK_GAP, SPRING, tabLabel, subStatus, tabAgents, tabStatus, answerInTerminal, noteWidth, KEY_SIDE_W } from "./state.js";
 import { elicitOf } from "./asks.js";
@@ -69,7 +69,13 @@ export class SideView {
     });
   }
 
-  render(_cx) {
+  // One snapshot of Herdr's agent and space lists per render (parked.js withSnapshot, as the Overview: every tab's
+  // status mark asked Herdr for the whole list again, and a loaded machine cut the render off with "interrupted").
+  render(cx) {
+    return withSnapshot(() => this.renderBody(cx));
+  }
+
+  renderBody(_cx) {
     const t = theme();
     const stop = (_e, cx) => cx.stop_propagation();
     const screen = shownScreen();

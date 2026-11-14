@@ -10,7 +10,7 @@ import { spaceAgents, spaceTabs, activeTab, currentAgent, currentTerminal, tabLa
 import { loadConfig, pollUpdate, updateDot, stepTextSize } from "./config.js";
 import { checkHelperPatch } from "./patchcheck.js";
 import { asksTick, TICK_MS as ASKS_MS } from "./asks.js";
-import { parkedTick, TICK_MS as PARKED_MS } from "./parked.js";
+import { parkedTick, withSnapshot, TICK_MS as PARKED_MS } from "./parked.js";
 import { aboutTick, ABOUT_TICK_MS, requestRewrite, KEY_REDO, KEY_BUSY, lockFree } from "./ai.js";
 import { historyTick, HISTORY_TICK_MS } from "./history.js";
 import { resumeTick, RESUME_TICK_MS } from "./resume.js";
@@ -139,7 +139,7 @@ export function startTop(cx, owner) {
   // The tab menu's "Move to …" (one copy takes it), and a redraw when a "moved here" badge comes or goes.
   cx?.timer?.every(400, (cx) => { if (shared(MOVE_REQUEST)) cx.spawn((cx) => serveMoveRequest(cx)); });
   cx?.timer?.every(15_000, (cx) => {
-    const n = spaceTabs().filter((x) => movedBadge(tabAgents(x.id)[0]?.address)).length;
+    const n = withSnapshot(() => spaceTabs().filter((x) => movedBadge(tabAgents(x.id)[0]?.address)).length);
     if (n || owner.badges) cx.notify();
     owner.badges = n;
   });
@@ -289,5 +289,6 @@ export class TopView {
   constructor(cx) { startTop(cx, this); }
   sync() { syncScreen(this); }
   command(c) { command(c); }
-  render(_cx) { return topBar(theme()); }
+  // One snapshot of Herdr's lists per render (parked.js withSnapshot, as the Overview: each tab pill looked them up).
+  render(_cx) { return withSnapshot(() => topBar(theme())); }
 }
