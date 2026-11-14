@@ -138,7 +138,7 @@ Enter sends); the vertical tab list on the right shows each tab's program, statu
 
 **Side bar: usage and staying awake**
 - At the bottom, the **weekly usage left** for each Claude account and Codex (percent left, a bar, when it
-  resets); the Mac and the PC show the same figures.
+  resets; green from 40% left, amber from 15%, red below); the Mac and the PC show the same figures.
 - **Stay awake while agents work** (Settings → General → This computer, on by default): while an agent on
   this computer works, has CI / a review / a shell running behind a finished turn, or waits on you (under
   3 hours), the computer does not go to sleep on its own; 15 minutes after the work ends it may again. The

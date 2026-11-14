@@ -4,13 +4,14 @@
 // only: no network, no credentials, nothing spent) is asked here every 60 s and on each connected machine every
 // 120 s, and per account the latest week's lowest "left" wins (`newer`). Everything is kept in ONE shared key; render reads it with
 // snapShared and calls no helper or host function (s33: Herdr cuts off a slow render).
-import { shared, setShared, home } from "herdr";
+import { shared, setShared, home, settings } from "herdr";
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import * as sidecar from "./sidecar.js";
 import { knownMachines } from "./machines.js";
 import { accounts } from "./accounts.js";
 import { snapShared } from "./parked.js";
+import { palette } from "./statusline.js";
 
 export const KEY_USAGE = "flockbook.usage";            // { sources: { [machine or ""]: { asked, lines } } }
 const KEY_USAGE_BUSY = "flockbook.usage.busy";         // source -> when its ask began
@@ -19,7 +20,8 @@ export const USAGE_REMOTE_MS = 120_000;                // each connected machine
 // Longer than the slowest ask: a remote read is the platform check + the command, each up to 35 s (s36 review P3).
 const BUSY_MS = 90_000;
 export const STALE_MS = 15 * 60_000;                   // older than this: "as of 2 h ago"
-export const LOW = 15;                                 // under this % left the bar turns the warning colour
+export const LOW = 15;                                 // under this % left: red
+export const WARN = 40;                                // under this % left: amber; from here on green
 const LOCAL = "";
 
 // Codes of a machine's answer that mean "not there": its readings go. Anything else (the link dropped) keeps the last.
@@ -131,7 +133,21 @@ export function figures(row, now = Date.now()) {
   const from = r.machine ? r.machine : "this computer";
   const tip = [who, past ? "the weekly limit has reset since this reading" : `${r.weekly.used}% of the weekly limit used`,
     resets != null ? `${past ? "reset" : "resets"} ${fullClock(resets)}` : null, `read ${ago(age)} on ${from}`].filter(Boolean).join(" · ");
-  return { left, right: `${left}% left`, line, low: !past && left < LOW, tip };
+  return { left, right: `${left}% left`, line, low: !past && left < LOW, level: levelOf(left), tip };
+}
+// "ok" (green) from WARN % left, "warn" (amber) from LOW, "low" (red) below; null without a reading.
+export const levelOf = (left) => (left == null ? null : left < LOW ? "low" : left < WARN ? "warn" : "ok");
+// Owner 11-15 s38: the Flockbook theme is black and white (its warning colour is white too), so the block brings its
+// own colours from the owner's VS Code palette (statusline.js `palette`): bright shades in dark mode, the darker
+// ones in light mode, where the bright ones are too pale on white. Claude's clay and the palette's blue for the names.
+const LEVEL_INDEX = { dark: { ok: 10, warn: 11, low: 9 }, light: { ok: 2, warn: 3, low: 1 } };
+const NAME_COLOUR = { dark: { claude: "#d97757", codex: 12 }, light: { claude: "#c15f3c", codex: 4 } };
+export function usageColours() {
+  const p = palette();
+  const mode = settings()?.dark === false ? "light" : "dark";
+  const pick = (v) => (typeof v === "number" ? p[v] : v);
+  const level = Object.fromEntries(Object.entries(LEVEL_INDEX[mode]).map(([k, i]) => [k, p[i]]));
+  return { level, claude: pick(NAME_COLOUR[mode].claude), codex: pick(NAME_COLOUR[mode].codex) };
 }
 // </usage-pure>
 
@@ -169,6 +185,7 @@ export async function pollUsage(now = Date.now()) {
 export function usageBlock(t, now = Date.now()) {
   const list = accounts();
   const all = rows(snapShared(KEY_USAGE), list, home());
+  const c = usageColours();
   return v_flex().id("usage").flex_none().gap(8).mt(8).pt(10).px(10).border_t(1).border_color(t.border)
     .child(div().text_size(11.5).font_semibold().text_color(t.muted).child("Weekly usage left"))
     .children(all.map((row, i) => {
@@ -176,13 +193,13 @@ export function usageBlock(t, now = Date.now()) {
       const who = row.kind === "codex" ? null : row.email ?? row.name ?? baseName(row.folder);
       return v_flex().id(`usage-${i}`).gap(3).tooltip(f.tip)
         .child(h_flex().gap(6).items_center().min_w(0)
-          .child(div().flex_none().text_size(12).font_semibold().text_color(t.foreground).child(row.kind === "codex" ? "Codex" : "Claude"))
+          .child(div().id(`usage-${i}-name`).flex_none().text_size(12).font_semibold().text_color(row.kind === "codex" ? c.codex : c.claude).child(row.kind === "codex" ? "Codex" : "Claude"))
           .when(Boolean(who), (el) => el.child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(who))))
         .child(h_flex().items_center().text_size(12)
           .child(div().flex_1().text_color(t.muted).child("Weekly"))
-          .child(div().id(`usage-${i}-left`).text_color(t.foreground).child(f.right)))
+          .child(div().id(`usage-${i}-left`).text_color(f.level ? c.level[f.level] : t.foreground).child(f.right)))
         .child(div().id(`usage-${i}-bar`).w_full().h(4).rounded(2).bg(t.border).overflow_hidden()
-          .when(f.left != null, (el) => el.child(div().id(`usage-${i}-fill`).h(4).rounded(2).bg(f.low ? t.blocked : t.accent).w(`${f.left}%`))))
+          .when(f.left != null, (el) => el.child(div().id(`usage-${i}-fill`).h(4).rounded(2).bg(c.level[f.level]).w(`${f.left}%`))))
         .child(div().id(`usage-${i}-line`).text_size(10.5).text_color(t.muted).child(f.line));
     }));
 }

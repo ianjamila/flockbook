@@ -26,6 +26,7 @@ const failure = (code) => answer([{ type: "error", code, message: code }]);
 beforeEach(() => {
   reset();
   fake.props = undefined;
+  fake.settings = { zoom: 1 };                           // dark (some tests switch to light)
   fake.home = "/home/test";
   fake.machines = [{ name: null, layout: "ready" }];
   fake.spaces = [space("sp1", { index: 1, name: "app" })];
@@ -85,20 +86,51 @@ test("percent left, and a bar filled to what is left", () => {
   const el = draw(data({ "": [claude("/home/test/.claude", "me@example.test", 36, NOW - 60_000)] }));
   assert.equal(textOf(byId(el, "usage-0-left")), "36% left");
   assert.equal(byId(el, "usage-0-fill")._a.w, "36%");
-  assert.equal(byId(el, "usage-0-fill")._a.bg, "#accent", "an ordinary bar is the accent colour");
-  const low = draw(data({ "": [claude("/home/test/.claude", "me@example.test", 14, NOW - 60_000)] }));
-  assert.equal(byId(low, "usage-0-fill")._a.bg, "#blocked", "under 15% left the bar turns the theme's warning colour");
-  const edge = draw(data({ "": [claude("/home/test/.claude", "me@example.test", 15, NOW - 60_000)] }));
-  assert.equal(byId(edge, "usage-0-fill")._a.bg, "#accent");
   assert.equal(textOf(byId(el, "usage-0-line")), `resets ${clock(secs(2026, 10, 22, 11, 53))}`);
   assert.equal(clock(secs(2026, 10, 15, 11, 53)), "Sun 11:53");
+});
+
+// Owner 11-15 s38 (screenshot): the Flockbook theme is black and white (its "warning" colour is white too), so a 2%
+// bar looked like a 73% one. The bar and the "% left" take a level colour from the owner's VS Code palette: green from
+// 40% left, amber from 15%, red under 15%; light mode takes the palette's darker shades. The product names are
+// coloured too: Claude in its clay colour, Codex blue.
+test("level colours: green, amber, red by what is left, in dark and light", () => {
+  const at = (left) => draw(data({ "": [claude("/home/test/.claude", "me@example.test", left, NOW - 60_000)] }));
+  const fill = (el) => byId(el, "usage-0-fill")._a.bg;
+  const text = (el) => byId(el, "usage-0-left")._a.text_color;
+  assert.equal(fill(at(73)), "#23d18b");
+  assert.equal(fill(at(40)), "#23d18b", "40% is still green");
+  assert.equal(fill(at(39)), "#f5f543");
+  assert.equal(fill(at(15)), "#f5f543", "15% is still amber");
+  assert.equal(fill(at(14)), "#f14c4c");
+  assert.equal(fill(at(2)), "#f14c4c");
+  assert.equal(text(at(2)), "#f14c4c", "the % left is in the level colour too");
+  assert.equal(text(at(73)), "#23d18b");
+  fake.settings = { zoom: 1, dark: false };
+  assert.equal(fill(at(73)), "#00bc00");
+  assert.equal(fill(at(20)), "#949800");
+  assert.equal(fill(at(2)), "#cd3131");
+});
+
+test("product names are coloured: Claude clay, Codex blue (dark and light)", () => {
+  const d = data({ "": [claude("/home/test/.claude", "me@example.test", 50, NOW - 60_000), codex(70, NOW - 60_000)] });
+  const name = (el, i) => byId(el, `usage-${i}-name`);
+  let el = draw(d);
+  assert.equal(textOf(name(el, 0)), "Claude");
+  assert.equal(name(el, 0)._a.text_color, "#d97757");
+  assert.equal(textOf(name(el, 2)), "Codex");
+  assert.equal(name(el, 2)._a.text_color, "#3b8eea");
+  fake.settings = { zoom: 1, dark: false };
+  el = draw(d);
+  assert.equal(name(el, 0)._a.text_color, "#c15f3c");
+  assert.equal(name(el, 2)._a.text_color, "#0451a5");
 });
 
 test("a reset time already past: 100% left and a line saying so", () => {
   const el = draw(data({ "": [claude("/home/test/.claude", "me@example.test", 3, Date.now() - 7_200_000, Date.now() / 1000 - 600)] }));
   assert.equal(textOf(byId(el, "usage-0-left")), "100% left");
   assert.equal(byId(el, "usage-0-fill")._a.w, "100%");
-  assert.equal(byId(el, "usage-0-fill")._a.bg, "#accent", "100% is not low");
+  assert.equal(byId(el, "usage-0-fill")._a.bg, "#23d18b", "100% is green, not low");
   assert.equal(textOf(byId(el, "usage-0-line")), "reset since the last reading");
 });
 
