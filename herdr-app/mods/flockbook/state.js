@@ -259,12 +259,17 @@ export function overlays(a) {
       out.push({ glyph: ch, group: "merging", word: "merging", tip: "it is merging (you said merge; the merge queue or gate runs)", ...(b?.shells && !handoffOf(a?.address) ? { wait: true } : {}) });
       continue;
     }
-    // ⏳ / 🔍 on a finished turn: the tab-title hook keeps them only while a CI / merge watch or a Codex run goes on
-    // (it re-checks them at every turn end), so they are live work, ahead of a leftover ✅ or answered 🔀 (owner 11-14
-    // 20:00: "⏳✅ … PR #2049" sat in Done while its browser tests ran; its footer and reply did not say CI).
-    const live = (ch === "⏳" || ch === "🔍") && a.status !== "working" && a.status !== "blocked";
+    // ⏳ / 🔍 / a review dot on a finished turn: the tab-title hook keeps them only while a CI / merge watch, a Codex
+    // run or a review agent goes on (it re-checks them at every turn end), so they are live work, ahead of a leftover
+    // ✅ or answered 🔀 (owner 11-14 20:00: "⏳✅ … PR #2049" sat in Done while its browser tests ran; its footer and
+    // reply did not say CI).
+    const live = (ch === "⏳" || o[0] === "review") && a.status !== "working" && a.status !== "blocked";
     out.push({ glyph: ch, group: o[0], word: o[1], tip: o[2], ...(live ? { wait: true } : {}) });
   }
+  // The footer's CI / review wait below names the same wait as the title's ⏳ / 🔍: one symbol in the hint (s29).
+  const drop = (glyph) => { for (let i = out.length - 1; i >= 0; i--) if (out[i].glyph === glyph && !out[i].ask) out.splice(i, 1); };
+  if (b?.ci) drop("⏳");
+  if (b?.review) drop("🔍");
   // Only a background AGENT keeps the tab working (it reports back and the turn goes on); leftover shells alone
   // (a dev server, a forgotten watch) leave it Done with this hint (owner 11-12 16:45; real CI waits carry ⏳).
   // A shell behind a reply that says it waits on CI (asks.js backgroundWork `ci`) is a CI watch: "Waiting on CI",
@@ -277,7 +282,8 @@ export function overlays(a) {
     const p = prOf(a?.address);
     if (p?.state !== "MERGED" && p?.state !== "CLOSED") out.unshift({ glyph: "🔀", group: "merging", word: "merging", tip: "its turn ended while its PR goes through the merge queue (a merge watch runs in the background)", wait: true });
   }
-  if (b) out.push({ glyph: "⚙", group: "background", word: bgWords(b), tip: `its turn ended, but ${bgWords(b)} in the background`, agents: b.agents ?? 0 });
+  // Its shells alone, read as that CI / review watch, are that watch: no "⚙ 1 shell running" next to it (s29).
+  if (b && (b.agents || !(b.ci || b.review))) out.push({ glyph: "⚙", group: "background", word: bgWords(b), tip: `its turn ended, but ${bgWords(b)} in the background`, agents: b.agents ?? 0 });
   // Finished with a hand-off (asks.js handoffGiven), nothing running behind it: the Overview's "Hand-off given".
   if (a && a.status !== "working" && a.status !== "blocked" && !b?.agents && !out.some((o) => o.wait) && handoffOf(a.address)) out.push({ glyph: "🤝", group: "handoff", word: "hand-off given", tip: "it finished and gave a hand-off: start a fresh session with its re-entry prompt (or /clear there and paste it)" });
   return out;
