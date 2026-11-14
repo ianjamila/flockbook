@@ -50,7 +50,7 @@ eq("dance: loop periods at least 100 ms (the API floor)", [R.DANCE.hop.period, R
 // last workspace i visited"): on the Overview the list shows every workspace's tabs, each workspace under its name.
 const R2 = new Function(pure + "; return { listMode, allRows, allHeadText };")();
 eq("mode: Overview → all", R2.listMode("overview"), "all");
-eq("mode: chat / tab / Needs you / none → space", ["chat", "tab", "needs", null, undefined].map(R2.listMode), ["space", "space", "space", "space", "space"]);
+eq("mode: chat / tab / none → space", ["chat", "tab", null, undefined].map(R2.listMode), ["space", "space", "space", "space"]);
 const SPACES = [
   { id: "s1", name: "eaglewatch", active: false, tabs: [{ id: "a", index: 1 }, { id: "b", index: 2, settled: true }, { id: "c", index: 3 }] },
   { id: "s2", name: "~", active: true, tabs: [] },

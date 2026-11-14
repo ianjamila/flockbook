@@ -54,20 +54,24 @@ export function headText(spaceName, n) {
 }
 // What the list shows on `screen` (shownScreen): "all" on the Overview, every workspace's tabs (owner 11-14 s29: "when
 // im in overview, it should show all running sessions in all workspaces … instead of just the last workspace i
-// visited"), else "space", the shown workspace's.
+// visited"), and on Needs you, which spans every workspace too; else "space", the shown workspace's.
 export function listMode(screen) {
-  return screen === "overview" ? "all" : "space";
+  return screen === "overview" || screen === "needs" ? "all" : "space";
 }
 // The rows of the "all" list: per workspace with tabs (in the sidebar's order), a heading { kind: "space", space,
-// text: "eaglewatch · 2" }, then its tabs { kind: "tab", space, tab }; put-away tabs (tab.settle) left out, as in the
-// Overview. `title(space)`: the workspace's name (machines.js spaceTitle, "api on pc-wsl").
-export function allRows(spaceList, title) {
+// text: "eaglewatch · 5 · 2 waiting", open: the tab a click on it shows (the workspace's shown tab, else its first) },
+// then its tabs { kind: "tab", space, tab, waits }; put-away tabs (tab.settle) left out, as in the Overview. Tabs that
+// wait on you (`waits(tab)`: a question, an ask, results to read) lead their workspace's group, each part in tab order.
+// `title(space)`: the workspace's name (machines.js spaceTitle, "api on pc-wsl").
+export function allRows(spaceList, title, waits = () => false) {
   const out = [];
   for (const s of spaceList ?? []) {
     const tabs = (s.tabs ?? []).filter((t) => !t.settled);
     if (!tabs.length) continue;
-    out.push({ kind: "space", space: s, text: `${title(s)} · ${tabs.length}` });
-    for (const tab of tabs) out.push({ kind: "tab", space: s, tab });
+    const marked = tabs.map((tab) => ({ kind: "tab", space: s, tab, waits: Boolean(waits(tab)) }));
+    const n = marked.filter((r) => r.waits).length;
+    out.push({ kind: "space", space: s, open: tabs.find((t) => t.active) ?? tabs[0], text: `${title(s)} · ${tabs.length}${n ? ` · ${n} waiting` : ""}` });
+    out.push(...marked.filter((r) => r.waits), ...marked.filter((r) => !r.waits));
   }
   return out;
 }
@@ -96,6 +100,9 @@ function programMark(a, t, color, dance = null) {
     .child(div().id(`${dance}-hop`).relative().loop("top", DANCE.hop).child(mark));
 }
 
+// A tab that waits on you: a question / ask (needReason, the row's bell) or results / a merge to see (subStatus owner).
+const waitsOnYou = (tab) => { const a = tabAgents(tab.id)[0]; return Boolean((a && needReason(a)) || subStatus(tab)?.owner); };
+
 function head(t) {
   const space = spaces().find((s) => s.active);
   const all = listMode(shownScreen()) === "all";
@@ -115,7 +122,7 @@ function list(t, view) {
   // row is picked, none has ×, the ⌘1–⌘9 hints (they select the shown workspace's tabs) are left out, a click opens the
   // tab in its workspace (as an Overview card does), and rows do not drag (reordering is per workspace).
   const all = listMode(shownScreen()) === "all";
-  const rows = all ? allRows(spaces(), spaceTitle) : null;
+  const rows = all ? allRows(spaces(), spaceTitle, waitsOnYou) : null;
   const tabs = all ? rows.filter((r) => r.kind === "tab").map((r) => r.tab) : spaceTabs();
   // A newly shown tab scrolls into sight (rows already in sight stay put).
   const at = all ? -1 : tabs.findIndex((x) => x.active), shownId = at >= 0 ? tabs[at].id : null;
@@ -182,9 +189,13 @@ function list(t, view) {
     return withHover("vt", el, tab, t, { title: sessionTitle(a) ?? tabLabel(tab), extra: [ss?.tip, parts.key ? `${parts.key} shows this tab` : null], always: true, anchor: "right_center", onOpen: show });   // opens to the LEFT of the row: never over the rows below (owner 11-12)
   };
 
-  // A workspace's heading in the "all" list: its name and tab count, small and muted, like the sidebar's.
-  const spaceHead = (r, i) => div().id(`vspace-${r.space.id}`).w_full().flex_none().px(8).pt(i ? 10 : 4).pb(2).truncate()
-    .text_size(11.5).font_weight(600).text_color(t.dim).child(r.text);
+  // A workspace's heading in the "all" list: its name and tab count (and how many wait on you), small and muted, like
+  // the sidebar's; a click opens the workspace on its shown tab.
+  const spaceHead = (r, i) => div().id(`vspace-${r.space.id}`).w_full().flex_none().px(8).pt(i ? 10 : 4).pb(2).rounded(6).truncate()
+    .text_size(11.5).font_weight(600).text_color(t.dim).cursor_pointer().hover((s) => s.text_color(t.foreground))
+    .tooltip(`Open ${r.text.split(" · ")[0]}`)
+    .on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation?.(); openTab(r.space.id, r.open); })
+    .child(r.text);
   return v_flex().id("tabs-list").size_full().min_h(0).bg(t.chrome).border_l(1).border_color(t.border)
     // The tab list's width, for the terminal window's room (state.termApp).
     .on_size_change((size) => noteWidth(KEY_LIST_W, size))
