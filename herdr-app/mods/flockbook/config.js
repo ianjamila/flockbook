@@ -12,9 +12,9 @@ const KEY_UPDATE_AT = "flockbook.update.at";     // when the mod last asked (ms)
 const KEY_UPDATE_SEEN = "flockbook.update.seen"; // the version whose line was seen in the open sidebar
 // The plus build's workflow switches (pipeline_asks, handoff_marks, worth_considering, auto_move) are off unless
 // config.json turns them on: they read a particular way of working (see the README's "Settings" section).
-export const DEFAULTS = { check_updates: true, status_row: "show", remote_helper: "ask", phone_read_only: false, text_size: "default", auto_move: "off", about_line: "on", about_cap: "200", terminal_size: "default", terminal_px: null, dance: "on",
+export const DEFAULTS = { check_updates: true, status_row: "show", remote_helper: "ask", phone_read_only: false, text_size: "default", auto_move: "off", about_line: "on", about_cap: "200", terminal_size: "default", terminal_px: null, dance: "on", stay_awake: "on",
   pipeline_asks: "off", handoff_marks: "off", worth_considering: "off", accounts: null, projects: null, claude_path: null, claude_machine: null, helper_rebuild: null };
-export const CHOICES = { check_updates: [true, false], status_row: ["show", "hide"], remote_helper: ["ask", "never"], phone_read_only: [false, true], text_size: ["small", "default", "large"], auto_move: ["on", "off"], about_line: ["on", "off"], about_cap: ["100", "200", "400", "none"], terminal_size: ["small", "default", "large", "full", "custom"], dance: ["on", "off"],
+export const CHOICES = { check_updates: [true, false], status_row: ["show", "hide"], remote_helper: ["ask", "never"], phone_read_only: [false, true], text_size: ["small", "default", "large"], auto_move: ["on", "off"], about_line: ["on", "off"], about_cap: ["100", "200", "400", "none"], terminal_size: ["small", "default", "large", "full", "custom"], dance: ["on", "off"], stay_awake: ["on", "off"],
   pipeline_asks: ["on", "off"], handoff_marks: ["on", "off"], worth_considering: ["on", "off"] };
 // Settings that are not one of a few choices: a check instead. terminal_px: the size the terminal window
 // was dragged to, [width, height] in px (terminal_size "custom").
