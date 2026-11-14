@@ -176,7 +176,8 @@ export class Cards {
       if (!card && !r.error) {
         const scr = await hc(["read", address]).catch(() => null);
         const el = scr?.code === 0 ? elicitation(scr.stdout) : null;
-        if (el) card = { kind: "elicitation", server: el.server, text: el.text, request: `elicit:${el.server}:${el.text.slice(0, 80)}` };
+        // The card shows (and a press compares) the whole request, not the 1200-char cut (s28 Codex R1).
+        if (el) card = { kind: "elicitation", server: el.server, text: el.full, request: `elicit:${el.server}:${el.full.length}:${el.full.slice(0, 80)}:${el.full.slice(-80)}` };
         // The sidebar's 🔌 sees it now, not at the next asks tick.
         if (scr?.code === 0) noteElicit(address, el);
       } else if (card) noteElicit(address, null);
@@ -310,7 +311,7 @@ export class Cards {
     e.sending = true; e.note = null; cx.notify?.();
     let note = null;
     const read = async () => { const r = await hc(["read", address]).catch(() => null); return r?.code === 0 ? String(r.stdout ?? "") : null; };
-    const same = (scr) => { const el = scr == null ? null : elicitation(scr); return Boolean(el && el.server === c.server && el.text === c.text); };
+    const same = (scr) => { const el = scr == null ? null : elicitation(scr); return Boolean(el && el.server === c.server && el.full === c.text); };
     const key = async (...k) => (await hc(["keys", address, ...k]).catch(() => null))?.code === 0;
     try {
       let scr = await read();

@@ -209,39 +209,49 @@ export function answered(address) {
 // message under it, maybe form fields, then the Accept / Decline buttons. { server, text } or null. `screen`: hc read.
 const ELICIT = /MCP server\s+[“"]([^”"]*)[”"]?\s*requests your input/;
 const BOX = /^[\s│|╭╮╰╯─┃]+|[\s│|╭╮╰╯─┃]+$/g;
-export function elicitation(screen) {
+// A line made of nothing but the buttons ("❯ Accept    Decline", "  Decline", "[ Accept ]"): a "❯ Accept the risk?"
+// in the server's message is not one.
+const BUTTONS = /^(?:(?:[❯>]\s*)?(?:\d+[.)]\s*)?\[?\s*(?:Accept|Decline|Cancel)\s*\]?\s*)+$/;
+// s28 (Codex R1): the controls are the LAST run of button-only lines under the title (nearest the footer), never an
+// earlier message line that happens to look like one; the run must hold exactly one Accept and one Decline (a
+// button-like message line glued on above them makes two: can't tell). { lines, top, start, end } or null.
+function elicitBox(screen) {
   const lines = String(screen ?? "").split(/\r?\n/);
   let top = -1;
   for (let i = lines.length - 1; i >= 0; i--) if (ELICIT.test(lines[i])) { top = i; break; }
   if (top < 0) return null;
-  // The buttons: the first line under the title that offers Accept (with Decline on it or just below).
-  let btn = -1;
-  for (let i = top + 1; i < Math.min(lines.length, top + 60); i++) {
-    if (/(?:^|[\s❯>│])Accept\b/.test(lines[i]) && lines.slice(i, i + 3).some((x) => /\bDecline\b/.test(x))) { btn = i; break; }
-  }
-  if (btn < 0) return null;
+  const clean = (i) => lines[i].replace(BOX, "").trim();
+  let end = -1;
+  for (let i = Math.min(lines.length, top + 60) - 1; i > top; i--) if (BUTTONS.test(clean(i))) { end = i; break; }
+  if (end < 0) return null;
+  let start = end;
+  while (start - 1 > top && BUTTONS.test(clean(start - 1))) start--;
+  const row = lines.slice(start, end + 1).map((_, k) => clean(start + k)).join(" ");
+  const count = (w) => (row.match(new RegExp(`\\b${w}\\b`, "g")) ?? []).length;
+  if (count("Accept") !== 1 || count("Decline") !== 1) return null;
   // A prompt box drawn after it means the session moved on.
-  if (lines.slice(btn + 1).some((x, k, l) => /^\s*❯/.test(x) && /^\s*─{20,}\s*$/.test(l[k - 1] ?? lines[btn] ?? ""))) return null;
-  const server = ELICIT.exec(lines[top])[1].trim() || "an MCP server";
-  const text = lines.slice(top + 1, btn).map((x) => x.replace(BOX, "").trim()).filter(Boolean).join(" ").replace(/\s+/g, " ");
-  return { server, text: text.slice(0, 1200) };
+  if (lines.slice(end + 1).some((x, k, l) => /^\s*❯/.test(x) && /^\s*─{20,}\s*$/.test(l[k - 1] ?? lines[end] ?? ""))) return null;
+  return { lines, top, start, end, clean };
 }
-// s27: which button of that box the terminal has selected, "accept" | "decline", or null when it can't be told. Only a
-// line made of nothing but the buttons counts (a "❯ Accept …" in the server's message does not), and only the ❯ marker
-// on one of them: the card's Accept / Decline press Enter only on the button they name.
-const BUTTONS = /^(?:(?:[❯>]\s*)?(?:\d+[.)]\s*)?\[?(?:Accept|Decline|Cancel)\]?\s*)+$/;
+// { server, text, full } or null: `full` is the whole request as the screen shows it (what an Accept / Decline press
+// compares, s28 Codex R1: two requests may share their first 1200 characters), `text` its first 1200 for small places.
+export function elicitation(screen) {
+  const b = elicitBox(screen);
+  if (!b) return null;
+  const server = ELICIT.exec(b.lines[b.top])[1].trim() || "an MCP server";
+  const full = b.lines.slice(b.top + 1, b.start).map((x) => x.replace(BOX, "").trim()).filter(Boolean).join(" ").replace(/\s+/g, " ");
+  return { server, text: full.slice(0, 1200), full };
+}
+// s27: which button of that box the terminal has selected, "accept" | "decline", or null when it can't be told: only
+// the ❯ marker on the control rows elicitBox found counts, and only when there is exactly one (s28 Codex R1). The
+// card's Accept / Decline press Enter only on the button they name.
 export function elicitFocus(screen) {
-  if (!elicitation(screen)) return null;
-  const lines = String(screen ?? "").split(/\r?\n/);
-  let top = -1;
-  for (let i = lines.length - 1; i >= 0; i--) if (ELICIT.test(lines[i])) { top = i; break; }
-  for (let i = top + 1; i < Math.min(lines.length, top + 60); i++) {
-    const s = lines[i].replace(BOX, "").trim();
-    if (!s || !BUTTONS.test(s)) continue;
-    const m = /[❯>]\s*(?:\d+[.)]\s*)?\[?(Accept|Decline|Cancel)\b/.exec(s);
-    if (m) return m[1] === "Accept" ? "accept" : m[1] === "Decline" ? "decline" : null;
-  }
-  return null;
+  const b = elicitBox(screen);
+  if (!b) return null;
+  const row = b.lines.slice(b.start, b.end + 1).map((_, k) => b.clean(b.start + k)).join("  ");
+  const marks = [...row.matchAll(/[❯>]\s*(?:\d+[.)]\s*)?\[?\s*(Accept|Decline|Cancel)\b/g)];
+  if (marks.length !== 1 || (row.match(/[❯>]/g) ?? []).length !== 1) return null;
+  return marks[0][1] === "Accept" ? "accept" : marks[0][1] === "Decline" ? "decline" : null;
 }
 // </elicitation>
 // Blocked agents whose screen shows an MCP server's input request (owner 11-12: one click from the sidebar to its
