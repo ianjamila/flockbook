@@ -76,6 +76,15 @@ Enter sends); the vertical tab list on the right shows each tab's program, statu
 - **Resume after a restart**: the Claude sessions that were open when Herdr Core or the Mac restarted are
   offered back (**Resume**, **Resume all**, **Dismiss**); each opens in its workspace and folder, as its
   account, with `claude --resume`. A row being opened says "Opening…".
+- **Resume sessions** (sidebar row, **Resume sessions…** on the Overview, **All sessions…** in the resume offer, or ⌘⇧R): a dialog
+  listing the Claude conversations that are closed, newest first: every account on this computer and on the `claude_machine`,
+  the last 30 days, at most 300 a machine. Each row shows its title, first prompt, folder, account, machine and when it was last
+  active. Type in the search box to filter (every word must match the title, first prompt, folder, account or machine), tick
+  several rows or use **Select all shown** / **Clear**, then **Resume selected (N)**: each opens as its own account with
+  `claude --resume`, in the workspace of the project that holds its folder (the `projects` setting), else that machine's "~"
+  workspace, else a new one there; never on the other machine. A session that is open in a tab is not listed (and is skipped if it
+  opened since); the list is cached, so reopening is instant, and **Refresh** reads the logs again. On Windows it needs
+  `claude_machine`, and says so.
 - An account that ran out of usage shows when it comes back, and its tabs say they are likely paused.
 - Fix: the cards no longer spill off both sides after the window shrinks.
 
@@ -105,7 +114,7 @@ Enter sends); the vertical tab list on the right shows each tab's program, statu
 
 **Keys** (in this build's `keys.json`, installed with the helper)
 - ⌥⌘B shows or hides the tab list; ⌘⇧K keeps the shown tab's topic as its name; ⌘⇧M opens its
-  **Move to …** rows. `--copy-only` keeps your `keys.json`: add these three there by hand if you want them.
+  **Move to …** rows; ⌘⇧R opens **Resume sessions**. `--copy-only` keeps your `keys.json`: add these four there by hand if you want them.
 
 **Workspaces** (off until set up, see Settings)
 - The tab menu's **Move to <workspace>** moves a session's tab without switching your view.
