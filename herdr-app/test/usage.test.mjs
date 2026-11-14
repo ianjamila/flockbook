@@ -10,7 +10,7 @@ import { space } from "./fixtures.mjs";
 import { SideView } from "../mods/flockbook/side.js";
 import { KEY_MACHINES } from "../mods/flockbook/machines.js";
 import { KEY_CONFIG } from "../mods/flockbook/config.js";
-import { KEY_USAGE, pollUsage, figures, rows, merge, readings, clock, until, USAGE_MS, USAGE_REMOTE_MS } from "../mods/flockbook/usage.js";
+import { KEY_USAGE, pollUsage, figures, rows, merge, readings, clock, until, USAGE_URL, USAGE_MS, USAGE_REMOTE_MS } from "../mods/flockbook/usage.js";
 
 const NOW = new Date(2026, 10, 15, 14, 0).getTime();   // Sunday 15 Nov 2026, 14:00 local
 const secs = (y, mo, d, h, mi) => new Date(y, mo, d, h, mi).getTime() / 1000;
@@ -128,6 +128,20 @@ test("product names are coloured: each Claude account its own shade, Codex blue 
   assert.equal(name(el, 0)._a.text_color, "#c15f3c");
   assert.equal(name(el, 1)._a.text_color, "#bc05bc");
   assert.equal(name(el, 2)._a.text_color, "#0451a5");
+});
+
+// Owner 11-15 s38: a click on an account opens its usage page in the browser (Chrome is the Mac's default), a
+// shortcut; without a reading the row still opens it.
+test("a click on an account opens its usage page", () => {
+  const el = draw(data({ "": [claude("/home/test/.claude", "me@example.test", 50, NOW - 60_000), codex(70, NOW - 60_000)] }));
+  const opened = [];
+  const cx = { ...fakeCx(), open_url: (u) => opened.push(u) };
+  for (const i of [0, 1, 2]) byId(el, `usage-${i}`)._h.on_click({}, cx);
+  assert.deepEqual(opened, [USAGE_URL.claude, USAGE_URL.claude, USAGE_URL.codex]);
+  assert.equal(USAGE_URL.claude, "https://claude.ai/settings/usage");
+  assert.equal(USAGE_URL.codex, "https://chatgpt.com/codex/settings/usage");
+  assert.match(byId(el, "usage-0")._a.tooltip, /click to open claude\.ai usage/);
+  assert.match(byId(el, "usage-2")._a.tooltip, /click to open Codex usage/);
 });
 
 test("a reset time already past: 100% left and a line saying so", () => {

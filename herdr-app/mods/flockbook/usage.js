@@ -22,6 +22,9 @@ const BUSY_MS = 90_000;
 export const STALE_MS = 15 * 60_000;                   // older than this: "as of 2 h ago"
 export const LOW = 15;                                 // under this % left: red
 export const WARN = 40;                                // under this % left: amber; from here on green
+// A click on an account opens its usage page (owner 11-15 s38) in the system browser (Chrome on the Mac). claude.ai
+// shows the account signed in to the browser: the URL cannot pick one of two Claude accounts.
+export const USAGE_URL = { claude: "https://claude.ai/settings/usage", codex: "https://chatgpt.com/codex/settings/usage" };
 const LOCAL = "";
 
 // Codes of a machine's answer that mean "not there": its readings go. Anything else (the link dropped) keeps the last.
@@ -204,7 +207,9 @@ export function usageBlock(t, now = Date.now()) {
     .children(all.map((row, i) => {
       const f = figures(row, now);
       const who = row.kind === "codex" ? null : row.email ?? row.name ?? baseName(row.folder);
-      return v_flex().id(`usage-${i}`).gap(3).tooltip(f.tip)
+      const url = row.kind === "codex" ? USAGE_URL.codex : USAGE_URL.claude;
+      const tip = `${f.tip} · click to open ${row.kind === "codex" ? "Codex" : "claude.ai"} usage`;
+      return v_flex().id(`usage-${i}`).gap(3).tooltip(tip).cursor_pointer().on_click((_e, cx) => cx.open_url?.(url))
         .child(h_flex().gap(6).items_center().min_w(0)
           .child(div().id(`usage-${i}-name`).flex_none().text_size(12).font_semibold().text_color(row.kind === "codex" ? c.codex : c.claude(claudeN++)).child(row.kind === "codex" ? "Codex" : "Claude"))
           .when(Boolean(who), (el) => el.child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(who))))
