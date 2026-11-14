@@ -24,7 +24,7 @@ const supabase = [
   "",
   " Esc to cancel · ↑↓ to navigate",
 ].join("\n");
-eq("supabase: server + text", elicitation(supabase), { server: "supabase", text: "This tool performs destructive operations on the database. Run it on project webshop-prod?" });
+eq("supabase: server + text", elicitation(supabase), { server: "supabase", text: "This tool performs destructive operations on the database. Run it on project webshop-prod?", full: "This tool performs destructive operations on the database. Run it on project webshop-prod?" });
 
 const stacked = [
   "╭" + "─".repeat(40) + "╮",
@@ -34,7 +34,7 @@ const stacked = [
   "│   Decline                               │",
   "╰" + "─".repeat(40) + "╯",
 ].join("\n");
-eq("boxed, buttons stacked", elicitation(stacked), { server: "github", text: "Pick a repo" });
+eq("boxed, buttons stacked", elicitation(stacked), { server: "github", text: "Pick a repo", full: "Pick a repo" });
 
 const cut = " MCP server “supa…” requests your input\n Go on?\n ❯ Accept   Decline";
 eq("cut name", elicitation(cut)?.server, "supa…");
@@ -53,4 +53,17 @@ eq("focus: stacked, Decline", elicitFocus(stacked.replace("│ ❯ Accept ", "�
 eq("focus: no marker", elicitFocus(" MCP server “x” requests your input\n Go on?\n Accept   Decline"), null);
 eq("focus: no dialog", elicitFocus("⏺ Done."), null);
 eq("focus: a ❯ in the message is not the selection", elicitFocus(" MCP server “x” requests your input\n ❯ Accept the risk?\n   Accept  ❯ Decline"), "decline");
+// s28 (Codex R1 P1): a message line that looks like a selected button ("❯ Decline") is not the selection; only the
+// control rows nearest the footer count, and two ❯ markers there (or a second Accept / Decline) mean "can't tell".
+const msgDecline = " MCP server “x” requests your input\n Options were:\n ❯ Decline\n\n ❯ Accept    Decline\n\n Esc to cancel";
+eq("focus: a message line '❯ Decline' above the controls → accept", elicitFocus(msgDecline), "accept");
+eq("text keeps that message line", elicitation(msgDecline)?.text, "Options were: ❯ Decline");
+eq("focus: two markers in the control rows → null", elicitFocus(" MCP server “x” requests your input\n Go on?\n ❯ Accept  ❯ Decline"), null);
+const adjacent = "│ MCP server “x” requests your input │\n│ Go on? │\n│ ❯ Decline │\n│   Accept │\n│   Decline │";
+eq("focus: a button-like message line right above stacked buttons → null (two Declines)", elicitFocus(adjacent), null);
+// s28 (Codex R1 P1): the whole request, not a 1200-char cut, is what a press compares.
+const long = "x".repeat(1300);
+const longScreen = (tail) => ` MCP server “supabase” requests your input\n ${long} ${tail}\n ❯ Accept    Decline`;
+eq("full text kept past 1200 chars", elicitation(longScreen("project A"))?.full?.endsWith("project A"), true);
+eq("display text still cut", elicitation(longScreen("project A"))?.text.length <= 1200, true);
 process.exit(bad ? 1 : 0);

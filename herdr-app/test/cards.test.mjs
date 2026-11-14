@@ -374,6 +374,17 @@ test("Accept: a different request on screen now → no key, the new one shown wi
   assert.match(textOf(byId(el, "card-note")), /Not sent: the request on screen changed/);
 });
 
+test("Accept: a changed request that shares its first 1200 characters → no key; the card shows the whole request", async () => {
+  const pre = "y".repeat(1300);
+  const w = elicitWorld([elicitScreen("accept", `${pre} Run it on project webshop-prod?`), elicitScreen("accept", `${pre} Run it on project OTHER-prod?`)]);
+  const cx = fakeCx(); const c = quick(new Cards());
+  await c.poll(cx, "t1", true);
+  assert.match(textOf(byId(c.view("t1", T), "card-elicit")), /webshop-prod\?$/, "the card shows the request in full");
+  byId(c.view("t1", T), "card-elicit-accept")._h.on_click({}, cx); await cx.settle();
+  assert.deepEqual(w.keys, []);
+  assert.match(textOf(byId(c.view("t1", T), "card-note")), /Not sent: the request on screen changed/);
+});
+
 test("Accept: the request gone from the screen → no key", async () => {
   const w = elicitWorld([elicitScreen(), after]);
   const cx = fakeCx(); const c = quick(new Cards());
