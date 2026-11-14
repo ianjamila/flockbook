@@ -178,4 +178,10 @@ eq("still running behind the turn: no hand-off group", O.groups([tab("h", "done"
 BG.h = { shells: 1, agents: 0 };
 eq("hand-off + leftover shell → Done, Hand-off given", O.groups([tab("h", "done")].map((t) => ({ space: { id: "s", name: "S" }, tab: t })), "status").map((x) => [x.title, x.subs.map((y) => y.title)]), [["Done", ["Hand-off given"]]]);
 delete BG.h; delete HO.h;
+// Owner 11-14 20:00: a finished ⏳✅ tab (CI runs, review results wait) is not Done: Waiting on CI in the pipeline section.
+AGENTS.ci = { ...ag("⏳✅ EagleWatch PR #2049 signed-out redirect"), status: "done" };
+eq("owner 11-14: done + ⏳✅ → pipeline, Waiting on CI", O.groups([tab("ci", "done")].map((t) => ({ space: { id: "s", name: "S" }, tab: t })), "status").map((x) => [x.title, x.subs.map((y) => y.title)]), [["CI / Final Review / Merging", ["Waiting on CI"]]]);
+AGENTS.cv = { ...ag("🔍✅ Tools repo move"), status: "idle" };
+eq("idle + 🔍✅ (Codex still running) → pipeline, In review", O.groups([tab("cv", "idle")].map((t) => ({ space: { id: "s", name: "S" }, tab: t })), "status").map((x) => [x.title, x.subs.map((y) => y.title)]), [["CI / Final Review / Merging", ["In review"]]]);
+delete AGENTS.ci; delete AGENTS.cv;
 process.exit(bad ? 1 : 0);

@@ -46,6 +46,14 @@ eq("the release build is running", gh("The release build is running on GitHub no
 eq("GitHub build passed: not waiting", gh("The GitHub build passed; the helper is installed."), false);
 eq("pushed to GitHub: not waiting", gh("Pushed the branch to GitHub and updated the PR body."), false);
 eq("a local build that finished: not waiting", gh("The build finished locally in 40 s; all tests pass."), false);
+// Owner 11-14 20:00 ("this is already in the done tab of the overview when its not yet done"): the #2049 reply said
+// its browser tests (E2E) were running, with no "CI" word in it.
+eq("real 11-14: browser tests are now running", gh("All four round 9 fixes are in, the quick check passed, and they're pushed to the PR (still a draft). The browser tests are now running on the new version (run 43591876704, about 15 minutes). After that I'll ask you for round 10 to review these fixes."), true);
+eq("E2E run still running", gh("The E2E run is still running on #2049."), true);
+eq("e2e tests are running", gh("Pushed; the e2e tests are running now."), true);
+eq("the checks are in progress", gh("The PR checks are in progress; I'll report when they end."), true);
+eq("browser tests passed: not waiting", gh("The browser tests passed on the new version."), false);
+eq("unit tests ran locally: not waiting", gh("The unit tests are done and pass locally."), false);
 eq("GitHub build wait carries ci", backgroundWork(`⏺ Waiting for the GitHub build.\n\n${foot(" · 1 shell")}`), { shells: 1, agents: 0, ci: true });
 
 // Owner 11-12 s14 ("this is waiting on codex recheck not me"): a finished turn whose shell runs a Codex review.
@@ -80,4 +88,29 @@ eq("review wait: no hand-off flag", /🤝/.test(sr?.glyphs ?? ""), false);
 bg = { shells: 1, agents: 0 };
 const s2 = state.subStatus(tab);
 eq("leftover shell only: goes by status (hand-off allowed with shells)", [s2?.key, s2?.background, state.tabStatus(tab)], ["handoff", false, "done"]);
+
+// Owner 11-14 20:00: "⏳✅ EagleWatch PR #2049 …" sat in Done — the title's ✅ outranked its ⏳ and a ✅ only counts
+// while the turn runs. The tab-title hook keeps ⏳ / 🔍 only while a CI watch / Codex run goes on, so on a finished
+// turn they are live work, ahead of a leftover ✅ (whether or not the footer shows the shell or the reply says so).
+for (const b of [null, { shells: 1, agents: 0 }]) {
+  bg = b;
+  agent.title = "⏳✅ EagleWatch PR #2049 signed-out redirect";
+  const sc = state.subStatus(tab);
+  const w = b ? "shell, reply not read as CI" : "no footer read";
+  eq(`title ⏳✅ (${w}): Waiting on CI`, sc?.key, "ci");
+  eq(`title ⏳✅ (${w}): working`, [sc?.background, state.tabStatus(tab)], [true, "working"]);
+  eq(`title ⏳✅ (${w}): no hand-off flag`, /🤝/.test(sc?.glyphs ?? ""), false);
+  agent.title = "🔍✅ Claude-pipeline PR #299 follow-ups";
+  const sv = state.subStatus(tab);
+  eq(`title 🔍✅ (${w}): In review, working`, [sv?.key, sv?.background, state.tabStatus(tab)], ["review", true, "working"]);
+  agent.title = "⏳🔀 Claude-pipeline PR #299 follow-ups";
+  eq(`title ⏳🔀 after "merge" (${w}): Waiting on CI, working`, [state.subStatus(tab)?.key, state.tabStatus(tab)], ["ci", "working"]);
+}
+bg = null;
+agent.title = "✅ Claude-pipeline PR #299 follow-ups";
+eq("title ✅ alone, finished: not working", [state.subStatus(tab)?.key, state.subStatus(tab)?.background, state.tabStatus(tab)], ["handoff", false, "done"]);
+agent.status = "working"; tab.status = "working";
+agent.title = "⏳✅ EagleWatch PR #2049 signed-out redirect";
+eq("title ⏳✅ while the turn runs: no wait flag (the turn itself is the work)", state.subStatus(tab)?.background, false);
+agent.status = "done"; tab.status = "done";
 process.exit(bad ? 1 : 0);
