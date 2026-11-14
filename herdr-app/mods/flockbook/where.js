@@ -8,6 +8,7 @@
 import { exec, home, readTextFile, shared, setShared, window, machines } from "herdr";
 import { setting } from "./config.js";
 import * as sidecar from "./sidecar.js";
+import { expandHome } from "./blocks.js";
 
 // <where-pure>
 // The machine an address is on (null: this computer) and its terminal there.
@@ -88,4 +89,18 @@ export async function remoteEntries(machine) {
 export async function execAt(machine, cmd, args, opts = {}) {
   try { return await exec(cmd, args, machine ? { ...opts, on: machine } : opts); }
   catch (e) { return { code: null, stdout: "", stderr: "", error: String(e?.message ?? e) }; }
+}
+
+// s27 "Copy full prompt": the text of the hand-off file a short re-entry prompt names (blocks.js handoffFile), read on
+// the machine of the tab whose reply named it, "~" being that machine's home. { text } or { problem } in words.
+export async function readFullPrompt(address, file) {
+  const m = machineOf(address);
+  const h = await machineHome(m);
+  const p = expandHome(file, h);
+  if (!p) return { problem: `${m ?? "this computer"} could not be reached` };
+  let text;
+  try { text = await readTextFile(p, m ? { on: m } : undefined); } catch (e) { return { problem: String(e?.message ?? e) }; }
+  if (text == null) return { problem: "no such file" };
+  const t = String(text).trimEnd();
+  return t ? { text: t } : { problem: "the file is empty" };
 }

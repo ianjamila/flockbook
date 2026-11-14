@@ -14,7 +14,8 @@ import { ROW_PAD_Y, BUBBLE_PAD_X, BUBBLE_PAD_Y, BUBBLE_GAP, IMAGES_FS, bubbleWid
   CALL_H, SEP_H, FOOTER_H, STATUS_H, CARD_ROW_H, OTHER_H } from "./metrics.js";
 import { Composer } from "./composer.js";
 import { markdownView, codeBlockAt } from "./mdblocks.js";
-import { reentryPrompt, replyPrompt, askBefore } from "./blocks.js";
+import { reentryPrompt, replyHandoff, handoffFile, askBefore } from "./blocks.js";
+import { readFullPrompt } from "./where.js";
 import { textScale } from "./config.js";
 
 // Herdr's zoom: line heights round in zoomed px (estimate.js lineHeight).
@@ -68,6 +69,9 @@ export function noteSender(from) {
   return name.join(" ") || id || "agent";
 }
 
+const FULL_RETRY_MS = 60_000; // a hand-off file that could not be read is read again this much later
+const PRESS_MS = 1500;       // a press older than this does not say which half of a footer was clicked
+
 export class ChatView {
   constructor(cx) {
     this.scroll = VirtualListScrollHandle.new();
@@ -77,6 +81,11 @@ export class ChatView {
     this.follow = true;          // keep the newest row on screen
     this.open = new Set();       // tool rows that show their calls
     this.copied = null;          // the footer row whose "Copy all" was just clicked (says "Copied" for 2 s)
+    this.copiedFull = null;      // the footer row whose "Copy full prompt" was just clicked
+    this.fullBusy = null;        // the footer row whose full prompt is being read for a click
+    this.fullPrompts = new Map(); // "address\nfile" → { text } | { problem, at } | { pending }: hand-off files read
+    this.wantFull = new Map();   // the same keys → { address, file }: named by a drawn footer, read on the next tick
+    this.pressed = null;         // the last left press on the list: { x, w, at } (which half of a footer line)
     this.granting = null;        // the agent whose ask strip button is sending (Extra round / Merge)
     this.askNotes = new Map();   // address → { text, bad, ask } of its last strip send that did not go out
     this.heights = new WeakMap(); // row → { w, open, k, zoom, h }
@@ -130,6 +139,7 @@ export class ChatView {
     const agent = currentAgent();
     cx.spawn((cx) => this.cards.poll(cx, this.address, wanted(agent, this.feed()?.rows)));
     if (this.wantOlder) { this.wantOlder = false; cx.spawn((cx) => this.loadOlder(cx)); }
+    this.readAhead(cx);
     if (Date.now() - this.lastPoll >= POLL_MS) return this.poll(cx);
   }
 
@@ -206,14 +216,21 @@ export class ChatView {
       case "footer": {
         // A reply that hands over to a fresh session (blocks.js reentryPrompt): "Copy all" beside its time, one click
         // puts the whole prompt on the clipboard (click below; the list gives a whole row, so the line is the button).
-        if (!this.promptBefore(row)) return div().w_full().h(FOOTER_H).pt(2).text_size(11.5).text_color(t.dim).child(row.text || "");
+        // s27: a prompt naming its hand-off file also gets "Copy full prompt" at the right end (the right half of the
+        // line copies the file; click() tells the halves apart).
+        const h = this.handoffBefore(row);
+        if (!h) return div().w_full().h(FOOTER_H).pt(2).text_size(11.5).text_color(t.dim).child(row.text || "");
+        if (h.file && !this.fullPrompts.has(this.fullKey(h.file))) this.wantFull.set(this.fullKey(h.file), { address: this.address, file: h.file });
         const done = this.copied === row.id;
+        const button = (id, on, label) => h_flex().id(id).flex_none().gap(5).items_center().px(8).py(2).rounded(8).border(1)
+          .border_color(on ? t.done : t.border).text_color(on ? t.done : t.foreground)
+          .child(svg(icon(on ? "check" : "copy")).size(12)).child(label);
+        const fullDone = this.copiedFull === row.id, fullBusy = this.fullBusy === row.id;
         return h_flex().w_full().h(FOOTER_H).gap(10).items_center().text_size(11.5).text_color(t.dim).cursor_pointer()
           .child(div().flex_none().child(row.text || ""))
-          .child(h_flex().id(`copy-prompt-${row.id}`).flex_none().gap(5).items_center().px(8).py(2).rounded(8).border(1)
-            .border_color(done ? t.done : t.border).text_color(done ? t.done : t.foreground)
-            .child(svg(icon(done ? "check" : "copy")).size(12))
-            .child(done ? "Copied" : "Copy all"));
+          .child(button(`copy-prompt-${row.id}`, done, done ? "Copied" : "Copy all"))
+          .when(Boolean(h.file), (el) => el.child(div().flex_1())
+            .child(button(`copy-full-${row.id}`, fullDone, fullDone ? "Copied" : fullBusy ? "Copying…" : "Copy full prompt")));
       }
       case "status":
         return h_flex().w_full().h(STATUS_H).items_center().justify_center().text_size(12).text_color(t.muted).child(row.text || "");
@@ -281,7 +298,7 @@ export class ChatView {
   // against the row's box; the row's padding (and the first row's bar) is taken off to get the text's y.
   // Copy message works whatever the selection: a drag across two text views, or a redraw while the agent
   // writes, can leave ⌘C with nothing to copy.
-  rowMenu(key, e) {
+  rowMenu(key, e, cx) {
     const rows = this.feed()?.rows ?? [];
     const i = rows.findIndex((r) => r.id === key);
     const row = rows[i], y0 = e?.local_position?.y;
@@ -293,6 +310,11 @@ export class ChatView {
     const code = at ? codeBlockAt(row.text || "", at.w, at.y - (i === 0 ? barRoom(this.barOver) : 0), textScale(), appZoom()) : null;
     if (code !== null) items.push({ label: "Copy code", act: "copy", args: { text: code } });
     const prompt = row.k === "assistant" ? reentryPrompt(row.text, this.askBefore(rows, i)) : null;
+    // s27: the hand-off file it names, once read (the tick reads it ahead; a menu opened before that starts the read).
+    const file = prompt ? handoffFile(prompt) ?? handoffFile(row.text) : null;
+    const full = file ? this.fullPrompts.get(this.fullKey(file)) : null;
+    if (full?.text) items.push({ label: "Copy full re-entry prompt", act: "copy", args: { text: full.text } });
+    else if (file && !full && cx?.spawn) cx.spawn(() => this.loadFull(this.address, file));
     if (prompt) items.push({ label: "Copy re-entry prompt", act: "copy", args: { text: prompt } });
     items.push({ label: "Copy message", act: "copy", args: { text: row.text || "" } });
     return openMenu(items);
@@ -302,10 +324,71 @@ export class ChatView {
   // The owner's message the reply ending before row `i` answers (blocks.js askBefore).
   askBefore(rows, i) { return askBefore(rows, i); }
 
-  // The re-entry prompt of the reply this footer ends (blocks.js replyPrompt, which the Overview shares).
-  promptBefore(footer) {
+  // The re-entry prompt of the reply this footer ends (blocks.js replyHandoff, which the Overview shares).
+  promptBefore(footer) { return this.handoffBefore(footer)?.prompt ?? null; }
+  // The same with the hand-off file it names: { prompt, file } or null (blocks.js replyHandoff).
+  handoffBefore(footer) {
     const rows = this.feed()?.rows ?? [];
-    return replyPrompt(rows, rows.findIndex((r) => r.id === footer.id));
+    return replyHandoff(rows, rows.findIndex((r) => r.id === footer.id));
+  }
+
+  // s27 "Copy full prompt": hand-off files, read once per chat on the tab's machine (where.js readFullPrompt).
+  fullKey(file, address = this.address) { return `${address}\n${file}`; }
+  async loadFull(address, file) {
+    const key = this.fullKey(file, address);
+    const had = this.fullPrompts.get(key);
+    if (had?.pending) return had.pending;
+    const pending = readFullPrompt(address, file).catch((e) => ({ problem: String(e?.message ?? e) }));
+    this.fullPrompts.set(key, { pending });
+    const r = await pending;
+    this.fullPrompts.set(key, r.text ? { text: r.text } : { problem: r.problem, at: Date.now() });
+    return r;
+  }
+  // From the tick: the newest reply's file and those drawn footers named; a failed read is tried again a minute on.
+  readAhead(cx) {
+    const f = this.feed();
+    const want = new Map(this.wantFull);
+    this.wantFull.clear();
+    const newest = f?.loaded ? replyHandoff(f.rows ?? []) : null;
+    if (newest?.file) want.set(this.fullKey(newest.file), { address: this.address, file: newest.file });
+    for (const [key, w] of want) {
+      const had = this.fullPrompts.get(key);
+      if (had && !(had.problem && Date.now() - had.at >= FULL_RETRY_MS)) continue;
+      cx.spawn(() => this.loadFull(w.address, w.file));
+    }
+  }
+  // Which half of a footer line the click was on: the press the list box saw just before (a list row has no handlers
+  // of its own, RECIPE.md). No press seen: not the right half, so a click never guesses at the file.
+  rightHalf() {
+    const p = this.pressed;
+    this.pressed = null;
+    return Boolean(p && Date.now() - p.at < PRESS_MS && p.w > 0 && p.x >= p.w / 2);
+  }
+  // "Copy full prompt": the hand-off file on the clipboard, a notice, "Copied" for 2 s. Not readable: a warning.
+  async copyFull(row, cx) {
+    const h = this.handoffBefore(row);
+    if (!h?.file) return this.copyPrompt(row, cx);
+    if (typeof cx?.write_to_clipboard !== "function") {
+      notify({ title: "Couldn't copy the full prompt: no clipboard here. Right-click the reply → Copy full re-entry prompt.", level: "warning", timeout: 3000 });
+      return;
+    }
+    const address = this.address;
+    let got = this.fullPrompts.get(this.fullKey(h.file, address));
+    if (!got?.text) {
+      if (this.fullBusy) return;
+      this.fullBusy = row.id; cx.notify?.();
+      try { got = await this.loadFull(address, h.file); } finally { this.fullBusy = null; }
+    }
+    if (!got?.text) {
+      notify({ title: `Couldn't read the full prompt (${h.file}): ${got?.problem ?? "unknown error"}. Copy all copies the short one.`, level: "warning", timeout: 5000 });
+      cx.notify?.();
+      return;
+    }
+    cx.write_to_clipboard(got.text);
+    notify({ title: "Full re-entry prompt copied to the clipboard", level: "info", timeout: 2000 });
+    this.copiedFull = row.id;
+    cx.notify?.();
+    cx.timer?.after?.(2000, (cx2) => { if (this.copiedFull === row.id) { this.copiedFull = null; cx2?.notify?.(); } });
   }
 
   // The ask strip's Extra round / Merge button (owner 11-13: "theres no button here"): the same checked send as Needs
@@ -339,7 +422,16 @@ export class ChatView {
   click(key, cx) {
     const row = this.feed()?.rows.find((r) => r.id === key);
     if (!row) return;
-    if (row.k === "footer") return this.copyPrompt(row, cx);
+    if (row.k === "footer") {
+      const file = this.rightHalf() ? this.handoffBefore(row)?.file : null;
+      if (file) {
+        // Already read (the tick reads ahead): copied in this click. Not yet: read first, as the Overview's copy does.
+        if (this.fullPrompts.get(this.fullKey(file))?.text || typeof cx?.spawn !== "function") { this.copyFull(row, cx); return; }
+        cx.spawn((cx2) => this.copyFull(row, typeof cx2?.write_to_clipboard === "function" ? cx2 : cx));
+        return;
+      }
+      return this.copyPrompt(row, cx);
+    }
     if (row.k === "tools" || (row.k === "user" && row.from != null)) {
       if (this.open.has(row.id)) this.open.delete(row.id); else this.open.add(row.id);
       cx.notify();
@@ -374,7 +466,11 @@ export class ChatView {
     const rows = f.rows, n = rows.length;
     // The first row starts below the bar; the rest scroll up under it (no room when the bar is outside).
     const sizes = rows.map((r, i) => this.height(r) + (i === 0 ? barRoom(this.barOver) : 0));
-    const box = v_flex().relative().flex_1().min_h(0)
+    const box = v_flex().id("chat-list").relative().flex_1().min_h(0)
+      .on_mouse_down("left", (e) => {
+        const w = e?.bounds?.size?.width ?? this.listSize?.w ?? 0;
+        this.pressed = typeof e?.local_position?.x === "number" ? { x: e.local_position.x, w, at: Date.now() } : null;
+      })
       // The list keeps its scroll when its room changes: the status rows, an ask strip or a card under it, or a
       // narrower pane (rows re-wrap taller). While following, that left the newest row half under the reply box
       // (owner 11-13: a footer and its Copy all cut off), so a size change scrolls back to it.
@@ -404,7 +500,7 @@ export class ChatView {
         record("chat.rows", now() - t0, range.end - range.start);
         return out;
       }).track_scroll(this.scroll).on_item_click((key, cx) => this.click(key, cx))
-        .on_item_secondary_click((key, e) => this.rowMenu(key, e)))
+        .on_item_secondary_click((key, e, cx) => this.rowMenu(key, e, cx)))
       .child(Scrollbar.vertical("chat").absolute().inset_0());
     // A round ↓ that fades in while you read older messages and out when you are back at the end.
     if (n) {

@@ -135,14 +135,37 @@ export function askBefore(rows, end) {
 // footer skipped): its last assistant text with one, back to the owner's message. The chat's Copy all and the
 // Overview's "Copy re-entry prompt" (s19) both read it here.
 export function replyPrompt(rows, end = null) {
+  return replyHandoff(rows, end)?.prompt ?? null;
+}
+// The same, with the hand-off file it names (s27, short re-entry prompts): { prompt, file } (file null when none is
+// named, in the prompt or in the reply text around it), or null when the reply has no prompt.
+export function replyHandoff(rows, end = null) {
   let at = end ?? rows.length;
   if (end == null) while (at > 0 && rows[at - 1].k === "footer") at--;
   const ask = askBefore(rows, at);
   for (let j = at - 1; j >= 0; j--) {
     const r = rows[j];
     if (r.k === "footer" || (r.k === "user" && r.from == null)) return null;
-    if (r.k === "assistant") { const p = reentryPrompt(r.text, ask); if (p) return p; }
+    if (r.k === "assistant") {
+      const p = reentryPrompt(r.text, ask);
+      if (p) return { prompt: p, file: handoffFile(p) ?? handoffFile(r.text) };
+    }
   }
   return null;
 }
+
+// s27 (owner 11-14): a short re-entry prompt names the full one's file, `~/claude-notes/handoffs/<topic>.md`
+// (CLAUDE.md "Re-entry prompts"). The first such path in `text`: absolute or from ~, a .md file right in a folder named
+// "handoffs", no ".." on the way; null when there is none. Only such a file is ever read for "Copy full prompt".
+const HANDOFF_FILE = /(?<![\w.~/-])((?:~\/|\/)[^\s`'"<>()[\]*]*?\/handoffs\/[A-Za-z0-9][\w.-]*?\.md)(?=$|[^\w/.-]|\.(?![\w/]))/g;
+export function handoffFile(text) {
+  for (const m of String(text ?? "").matchAll(HANDOFF_FILE)) {
+    const p = m[1];
+    if (p.split("/").some((s) => s === ".." || s === ".")) continue;
+    return p;
+  }
+  return null;
+}
+// `p` with a leading ~ read as `home` (null when it has one and no home is known).
+export const expandHome = (p, home) => (p.startsWith("~/") ? (home ? `${home}${p.slice(1)}` : null) : p);
 

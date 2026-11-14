@@ -11,7 +11,8 @@ import { movedBadge, badgeTip } from "./automove.js";
 import { askOf, nowOf, handoffOf } from "./asks.js";
 import * as sidecar from "./sidecar.js";
 import { emptyFeed, applyFeed } from "./feedstate.js";
-import { replyPrompt } from "./blocks.js";
+import { replyPrompt, replyHandoff } from "./blocks.js";
+import { readFullPrompt } from "./where.js";
 import { aboutOf, aboutMore, cooledAccounts, agentsOn, accountName, clockText, localOffset, autoPausedUntil, resumeAuto } from "./ai.js";
 import { sinceView, copyText, markSeen } from "./history.js";
 import { offer, resumeOne, resumeAll, dismissOffer, opening } from "./resume.js";
@@ -146,6 +147,45 @@ export class OverviewView {
     }
     cx.notify?.();
   }
+  // s27 "Copy full": the hand-off file its newest prompt names (blocks.js replyHandoff), read on the tab's machine.
+  async copyFullHandoff(cx, address) {
+    if (typeof cx?.write_to_clipboard !== "function") { notify({ title: "Couldn't copy: no clipboard here. Open the tab and use Copy full prompt.", level: "warning", timeout: 3000 }); return; }
+    if (this.copyingFull) return;
+    this.copyingFull = address; cx.notify?.();
+    let text = null, problem = null, h = null;
+    try {
+      const f = emptyFeed(address);
+      applyFeed(f, await sidecar.feed(address));
+      if (f.error) problem = `Couldn't read its chat: ${f.error.message || "the helper could not read its chat"}`;
+      else {
+        h = replyHandoff(f.rows);
+        if (!h) problem = "No re-entry prompt in its last reply. Open the tab to see it.";
+        else if (!h.file) problem = "Its re-entry prompt names no full-prompt file (~/claude-notes/handoffs/…). Copy prompt copies it.";
+        else {
+          const r = await readFullPrompt(address, h.file);
+          if (r.text) text = r.text; else problem = `Couldn't read the full prompt (${h.file}): ${r.problem}`;
+        }
+      }
+    } catch (e) { problem = String(e?.message ?? e); } finally { this.copyingFull = null; }
+    if (!text) notify({ title: problem, level: "warning", timeout: 5000 });
+    else {
+      cx.write_to_clipboard(text);
+      notify({ title: "Full re-entry prompt copied to the clipboard", level: "info", timeout: 2000 });
+      this.copiedFull = address;
+      cx.timer?.after?.(2000, (cx2) => { if (this.copiedFull === address) { this.copiedFull = null; cx2?.notify?.(); } });
+    }
+    cx.notify?.();
+  }
+  fullButton(id, address, t) {
+    const busy = this.copyingFull === address, done = this.copiedFull === address;
+    return div().id(id).flex_none().h(22).px(8).flex().items_center().rounded(6).text_size(11.5)
+      .bg(t.chrome).border(1).border_color(t.border).text_color(done ? t.done : t.foreground)
+      .tooltip("Copy the full re-entry prompt (the hand-off file its last reply names) without opening the tab")
+      .when(!busy, (el) => el.hover((s) => s.bg(t.hover)))
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_click((_e, cx) => { cx.stop_propagation?.(); if (!busy) cx.spawn((cx2) => this.copyFullHandoff(cx2, address)); })
+      .child(busy ? "Copying…" : done ? "Copied" : "Copy full");
+  }
   // The small button on a hand-off card (a click on it does not open the tab, as the card's own click does).
   copyButton(id, address, t) {
     const busy = this.copying === address, done = this.copiedHandoff === address;
@@ -179,7 +219,8 @@ export class OverviewView {
           .when(Boolean(moved), (el) => el.child(h_flex().id(`ov-moved-${tab.id}`).flex_none().gap(4).items_center().text_size(11.5).text_color(t.accent)
             .tooltip(badgeTip(moved)).child(svg(icon("moved")).size(11)).child("moved here")))
           .when(Boolean(suggestBadge(a, t, `ov-sg-${tab.id}`)), (el) => el.child(suggestBadge(a, t, `ov-sg-${tab.id}`)))
-          .when(ss?.key === "handoff" && Boolean(a?.address), (el) => el.child(this.copyButton(`ov-copy-${tab.id}`, a.address, t)))
+          .when(ss?.key === "handoff" && Boolean(a?.address), (el) => el.child(this.copyButton(`ov-copy-${tab.id}`, a.address, t))
+            .child(this.fullButton(`ov-full-${tab.id}`, a.address, t)))
           .when(Boolean(when), (el) => el.child(div().flex_none().text_size(11.5).text_color(t.muted).child(when)))
           // The hover box opens from this ⓘ only (owner 11-12: opening on the whole card covered the cards below it,
           // so the next card could not be clicked). A click on it opens the tab, as the card does.
@@ -256,7 +297,7 @@ export class OverviewView {
           .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(g.key === "closed" ? t.muted : t.foreground).child(it.label))
           .when(Boolean(it.account), (el) => el.child(div().id(`${id}-acct`).flex_none().px(5).rounded(4).border(1).border_color(t.border)
             .text_size(10.5).text_color(t.muted).tooltip(accountName(it.account)).child(it.account)))
-          .when(Boolean(open) && handoffOf(it.addr), (el) => el.child(this.copyButton(`${id}-copy`, it.addr, t)))
+          .when(Boolean(open) && handoffOf(it.addr), (el) => el.child(this.copyButton(`${id}-copy`, it.addr, t)).child(this.fullButton(`${id}-full`, it.addr, t)))
           .child(div().flex_none().text_size(11.5).text_color(t.dim).child(ago(it.at, now) === "now" ? "just now" : `${ago(it.at, now)} ago`)))
         .child(div().w_full().whitespace_normal().text_size(12).text_color(tint[g.key]).child(it.now))
         .when(Boolean(it.about), (el) => el.child(div().id(`${id}-about`).w_full().whitespace_normal().text_size(12).line_height("17px")

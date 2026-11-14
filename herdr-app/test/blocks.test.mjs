@@ -138,5 +138,5 @@ test("replyHandoff: the newest reply's prompt and the file it (or its reply) nam
   assert.deepEqual(replyHandoff([r("u", "user", "go"), r("a", "assistant", outside)]), { prompt: "Continue.", file: "~/claude-notes/handoffs/v.md" }, "named in the reply around the prompt");
   assert.deepEqual(replyHandoff([r("u", "user", "go"), r("a", "assistant", "Re-entry prompt:\n\n> Continue.")]), { prompt: "Continue.", file: null });
   assert.equal(replyHandoff([r("u", "user", "go"), r("a", "assistant", "No prompt; ~/claude-notes/handoffs/v.md exists.")]), null, "no prompt, no hand-off");
-  assert.deepEqual(replyHandoff([r("u", "user", "go"), r("a", "assistant", short), r("f", "footer", "1"), r("u2", "user", "x")], 3).file, "~/claude-notes/handoffs/w.md", "an explicit end");
+  assert.deepEqual(replyHandoff([r("u", "user", "go"), r("a", "assistant", short), r("f", "footer", "1"), r("u2", "user", "x")], 2).file, "~/claude-notes/handoffs/w.md", "an explicit end");
 });
