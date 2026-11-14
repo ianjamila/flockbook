@@ -113,6 +113,28 @@ pub const BOX_NOT_EMPTY: &str = "The agent's box has text in it. Clear it in the
 pub fn box_not_empty() -> Done {
     Done::new("box_not_empty", Some(BOX_NOT_EMPTY))
 }
+pub const BOX_STILL_FULL: &str = "The agent's box still has text in it after Flockbook cleared its line. Clear it in the terminal, then send again. Nothing was sent.";
+
+/// What Send anyway's look at the box found (`clear_suggestion`).
+#[derive(Debug, PartialEq)]
+pub enum Over {
+    /// The box does not show that lone "/word": nothing was pressed, `send`'s usual check decides.
+    NotShown,
+    /// The key gate said no before any key: nothing was pressed.
+    Refused,
+    /// The line was cleared, but the box is not down to one row (or the keys or the read failed): nothing is sent.
+    Stuck,
+    /// The box is down to one row: the text may go.
+    Cleared,
+}
+
+/// Send anyway (`send --over-suggestion <word>`): when Claude Code's box shows exactly the lone `word` (most likely
+/// its dim prompt suggestion), Ctrl-E Ctrl-U clears the box's line (a typed "/word" goes; a dim suggestion is not
+/// text and stays), the screen is read again after a pause, and only a box down to one row lets the text go.
+/// `passes`: the key gate, asked right before the keys.
+pub fn clear_suggestion<S: PaneScreen + ?Sized>(_s: &S, _pane_id: &str, _word: &str, _passes: &dyn Fn() -> bool) -> Over {
+    Over::NotShown
+}
 /// Why the gate said no: the agent changed, or it has no identity to check, which no retry fixes.
 pub fn refused(pane: &Pane) -> Done {
     if pane.agent.as_ref().map(KeyGate::has_identity) == Some(true) {
@@ -446,6 +468,63 @@ mod tests {
     }
     fn own(text: &str) -> Vec<QuestionAnswer> {
         vec![QuestionAnswer { picks: vec![], other: Some(text.into()) }, QuestionAnswer::default()]
+    }
+
+    // Send anyway from another machine (report 11-14): the helper where the terminal runs clears Claude's dim
+    // suggestion line itself, then the text goes.
+    mod over_suggestion {
+        use super::super::{clear_suggestion, Over};
+        use herdr_core::fake::FakeScreen;
+        const RULE: &str = "────────────────────────────────────────";
+        fn claude(row: &str) -> String {
+            format!("● Done.\n\n{RULE}\n{row}\n{RULE}\n  ~/proj  ⎇main\n")
+        }
+        fn run(screens: Vec<&str>, word: &str, gate: bool) -> (Over, Vec<String>) {
+            let s = FakeScreen::with_panes(vec![], screens);
+            let o = clear_suggestion(&s, "hc:t1", word, &|| gate);
+            (o, s.sent())
+        }
+        const CLEAR: [&str; 2] = ["ctrl+e", "ctrl+u"];
+
+        #[test]
+        fn clears_then_lets_the_text_go() {
+            let (dim, empty) = (claude("❯\u{a0}/handoff"), claude("❯\u{a0}"));
+            assert_eq!(run(vec![&dim, &dim], "/handoff", true), (Over::Cleared, CLEAR.map(String::from).to_vec()), "dim: stays, one row");
+            assert_eq!(run(vec![&dim, &empty], "/handoff", true), (Over::Cleared, CLEAR.map(String::from).to_vec()), "typed: gone");
+        }
+
+        #[test]
+        fn nothing_pressed_unless_the_box_shows_that_word() {
+            let other = claude("❯\u{a0}/compact");
+            assert_eq!(run(vec![&other], "/handoff", true), (Over::NotShown, vec![]), "another word");
+            let text = claude("❯\u{a0}hello");
+            assert_eq!(run(vec![&text], "/handoff", true), (Over::NotShown, vec![]), "typed text");
+            let listed = format!("  /handoff      Write a hand-off\n{RULE}\n❯\u{a0}/handoff\n{RULE}\n");
+            assert_eq!(run(vec![&listed], "/handoff", true), (Over::NotShown, vec![]), "a command list above: typed");
+            assert_eq!(run(vec!["no box"], "/handoff", true), (Over::NotShown, vec![]));
+        }
+
+        #[test]
+        fn the_gate_comes_first() {
+            let dim = claude("❯\u{a0}/handoff");
+            assert_eq!(run(vec![&dim], "/handoff", false), (Over::Refused, vec![]));
+        }
+
+        #[test]
+        fn a_box_left_with_rows_sends_nothing() {
+            let (dim, two) = (claude("❯\u{a0}/handoff"), claude("❯\u{a0}\n  second line"));
+            assert_eq!(run(vec![&dim, &two], "/handoff", true).0, Over::Stuck);
+            let s = FakeScreen::with_panes(vec![], vec![&dim, &dim]);
+            *s.key_error.borrow_mut() = Some(herdr_core::HerdrError::Protocol("keys failed".into()));
+            assert_eq!(clear_suggestion(&s, "hc:t1", "/handoff", &|| true), Over::Stuck, "the keys failed");
+            let s = FakeScreen::with_panes(vec![], vec![&dim, &dim]);
+            *s.fail_reads.borrow_mut() = 0;
+            let o = clear_suggestion(&s, "hc:t1", "/handoff", &|| {
+                *s.fail_reads.borrow_mut() = 1; // the read after the keys fails
+                true
+            });
+            assert_eq!(o, Over::Stuck, "the read after the clear failed");
+        }
     }
 
     // Issue #11, item 4: the card says so before Send, with the rule `answer` refuses with.

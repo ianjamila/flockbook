@@ -687,6 +687,24 @@ pub fn box_has_text(kind: &str, screen: &str, claude_suggests: bool) -> Option<b
     Some(rows.iter().any(|r| !trim(r).is_empty()))
 }
 
+/// Send anyway (`send --over-suggestion`): Claude Code's box when it holds only a lone "/word" (one row, a command
+/// name and nothing after it) and no command list stands right above the box (a really typed "/…" shows one): that
+/// word. Most likely Claude's dim prompt suggestion. As composer.js `suggestedSlash`.
+pub fn claude_lone_slash(_screen: &str) -> Option<String> {
+    None
+}
+
+/// Whether "/word" is a lone command name: "/" and at least one of A-Z a-z 0-9 _ : . - (composer.js's rule).
+pub fn slash_word(_w: &str) -> bool {
+    false
+}
+
+/// Claude Code's box is down to one row (after Send anyway cleared its line): whatever still shows there is not
+/// typed (its placeholder or a dim suggestion); a typed second row would remain.
+pub fn claude_box_one_row(_screen: &str) -> bool {
+    false
+}
+
 /// Claude Code's box when it is one row starting with "/" (with prompt suggestions on, `box_has_text` counts it as
 /// text, and it may be a dim suggestion): that row, trimmed.
 pub fn claude_slash_row(screen: &str) -> Option<String> {
@@ -899,6 +917,40 @@ mod box_tests {
         assert_eq!(box_has_text_c(&claude("❯ \n  second line")), Some(true), "text on a later row");
         assert_eq!(box_has_text_c(&claude(" Do you want to proceed?\n ❯ 1. Yes")), None, "a dialog: not the box");
         assert_eq!(box_has_text_c("no box here"), None);
+    }
+
+    // Send anyway from another machine (report 11-14): the box held Claude's dim "/handoff" suggestion.
+    #[test]
+    fn claude_lone_slash() {
+        let w = |screen: &str| super::claude_lone_slash(screen);
+        assert_eq!(w(&claude("❯\u{a0}/handoff")).as_deref(), Some("/handoff"));
+        assert_eq!(w(&claude("❯ /review-pr:check")).as_deref(), Some("/review-pr:check"), "plugin names and colons");
+        assert_eq!(w(&claude("❯\u{a0}/handoff now")), None, "a value after it: typed");
+        assert_eq!(w(&claude("❯\u{a0}/handoff\n  more")), None, "a second row: typed");
+        assert_eq!(w(&claude("❯\u{a0}hello")), None);
+        assert_eq!(w(&claude("❯\u{a0}/")), None, "a bare slash is no command");
+        assert_eq!(w(&claude("❯\u{a0}")), None);
+        assert_eq!(w("no box here"), None);
+        // A typed "/…" shows Claude's command list right above the box.
+        let listed = format!("  /handoff      Write a hand-off\n  /help   Get help\n{RULE}\n❯\u{a0}/handoff\n{RULE}\n");
+        assert_eq!(w(&listed), None, "a command list above: typed");
+        let picked = format!("❯ /handoff      Write a hand-off\n\n{RULE}\n❯\u{a0}/handoff\n{RULE}\n");
+        assert_eq!(w(&picked), None, "the list's picked row");
+        let far = format!("  /handoff      Write a hand-off\n\n\n\n{RULE}\n❯\u{a0}/handoff\n{RULE}\n");
+        assert_eq!(w(&far).as_deref(), Some("/handoff"), "chat text higher up is no list");
+        assert!(super::slash_word("/a.b_c-d:e") && !super::slash_word("/") && !super::slash_word("handoff") && !super::slash_word("/a b"));
+        assert!(!super::slash_word("/é"), "ASCII only, as composer.js");
+    }
+
+    #[test]
+    fn claude_box_one_row() {
+        let one = |screen: &str| super::claude_box_one_row(screen);
+        assert!(one(&claude("❯\u{a0}/handoff")), "the dim suggestion stays after the clear");
+        assert!(one(&claude("❯\u{a0}")));
+        assert!(one(&claude("❯\u{a0}Try \"fix typecheck errors\"")));
+        assert!(!one(&claude("❯\u{a0}\n  second line")), "a typed second row");
+        assert!(!one(&claude(" Do you want to proceed?\n ❯ 1. Yes")), "a dialog: no box");
+        assert!(!one("no box here"));
     }
 
     #[test]
