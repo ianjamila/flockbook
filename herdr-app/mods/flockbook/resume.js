@@ -6,7 +6,7 @@
 // back: Resume (one), Resume all, Dismiss. A resume opens a tab in the same workspace and folder, as the same
 // account, running `claude --resume <id>`. A tab closed on purpose (alone, while the rest go on) or a /clear (same
 // process, new conversation) is just forgotten. Nothing runs without a click.
-import { terminals, shared, setShared, readTextFile, appHome, home, run, notify } from "herdr";
+import { terminals, panes, shared, setShared, readTextFile, appHome, home, run, notify } from "herdr";
 import { agents, spaces } from "./parked.js";
 import { accounts, claudeCommand, claudeRun, sessionOfLog } from "./accounts.js";
 import { claudeMachine, localWindows, connected, machineOf, terminalOf, remoteEntries, knownHome, sameMachine } from "./where.js";
@@ -68,6 +68,22 @@ export const opening = (rec, now = Date.now()) => Boolean(rec?.claimAt && now - 
 const handled = () => shared(KEY_HANDLED) ?? {};
 const markHandled = (sids) => setShared(KEY_HANDLED, { ...handled(), ...Object.fromEntries(sids.map((s) => [s, Date.now()])) });
 const dropFromOffer = (sid) => { const o = offer(); if (!o) return; const rest = o.tabs.filter((x) => x.sid !== sid); setShared(KEY_OFFER, rest.length ? { ...o, tabs: rest } : null); };
+// s28 (Codex R1 P2): sessions just opened by either way in (the offer's Resume, the Resume sessions dialog), by
+// "machine\tsid" → at. Its new tab is not identified at once, so for CLAIM_MS neither way opens it again.
+const KEY_OPENED = "flockbook.resume.opened";
+const openedKey = (m, sid) => `${m ?? ""}\t${sid}`;
+const justOpened = (m, sid, now = Date.now()) => { const at = (shared(KEY_OPENED) ?? {})[openedKey(m, sid)]; return Boolean(at && now - at < CLAIM_MS); };
+// Whether `sid` on `machine` is being opened now: an offer row a Resume click claimed, or one either way just opened.
+export function openingNow(machine, sid, now = Date.now()) {
+  const row = offer()?.tabs.find((x) => x.sid === sid && sameMachine(x.machine, machine || null));
+  return Boolean((row && opening(row, now)) || justOpened(machine || null, sid, now));
+}
+// After a tab was opened for `sid`: noted for both ways in, and it leaves the offer (handled, as a Resume click does).
+export function noteOpened(machine, sid, now = Date.now()) {
+  const keep = Object.fromEntries(Object.entries(shared(KEY_OPENED) ?? {}).filter(([, at]) => now - at < CLAIM_MS));
+  setShared(KEY_OPENED, { ...keep, [openedKey(machine || null, sid)]: now });
+  if (offer()?.tabs.some((x) => x.sid === sid)) { markHandled([sid]); dropFromOffer(sid); }
+}
 const patchOffer = (sid, patch) => { const o = offer(); if (!o?.tabs.some((x) => x.sid === sid)) return; setShared(KEY_OFFER, { ...o, tabs: o.tabs.map((x) => (x.sid === sid ? { ...x, ...patch } : x)) }); };
 
 async function helperCache() {
@@ -78,7 +94,8 @@ async function helperCache() {
 // the "claude_machine" while it is connected (s26: the PC resumes its WSL tabs; a computer that doesn't name that
 // machine never does, so two computers never both resume one session). { tabs (by session), sids, pids, looked
 // (machine names looked at, "" = this computer), unknown (a live Claude tab the helper hasn't identified yet),
-// unknownTitles (their titles) }. Process ids are per machine ("wsl:30"), so two machines' never mix.
+// unknownTitles (their titles), unknownTabs ([{ machine ("" = this computer), title, cwd (its pane's folder, or null)
+// }]) }. Process ids are per machine ("wsl:30"), so two machines' never mix.
 async function liveNow(now) {
   const subs = new Set(terminals().filter((t) => t.parent).map((t) => t.address));
   const cm = claudeMachine(), looked = new Set();
@@ -87,13 +104,14 @@ async function liveNow(now) {
   if (remote) looked.add(cm);
   const claudes = agents().filter((a) => a.app === "claude-code" && a.address && !subs.has(a.address) && looked.has(machineOf(a.address) ?? ""));
   const entries = looked.has("") ? (await helperCache())?.entries ?? {} : {};
-  const tabs = {}, sids = new Set(), pids = new Set(), unknownTitles = new Set();
+  const tabs = {}, sids = new Set(), pids = new Set(), unknownTitles = new Set(), unknownTabs = [];
   let unknown = false;
   for (const a of claudes) {
     const m = machineOf(a.address);
     const e = m ? remote[terminalOf(a.address)] : entries[a.address], s = sessionOf(e?.path, accounts(), m ? knownHome(m) : home());
     if (!s) {
       unknown = true; if (plainTitle(a.title)) unknownTitles.add(plainTitle(a.title));
+      unknownTabs.push({ machine: m ?? "", title: plainTitle(a.title), cwd: paneCwd(a.address) });
       // The helper there has no entry for it yet: a status call through this computer's helper makes one.
       if (m) sidecar.status(a.address);
       continue;
@@ -104,15 +122,17 @@ async function liveNow(now) {
     tabs[s.sid] = { sid: s.sid, account: s.account, cwd: e.cwd ?? (m ? knownHome(m) : home()), pids: own, terminal: a.address, space: a.space, spaceName: a.space_name,
       name: ownName(a), title: plainTitle(a.title) || null, at: now, ...(m ? { machine: m } : {}) };
   }
-  return { tabs, sids, pids, looked, unknown, unknownTitles };
+  return { tabs, sids, pids, looked, unknown, unknownTitles, unknownTabs };
 }
+// The folder Herdr shows for a tab's pane, or null.
+const paneCwd = (address) => { try { return panes().find((x) => x.terminal === address)?.cwd || null; } catch { return null; } };
 // The sessions running in a Claude tab now, by machine ("" = this computer), for the Resume sessions dialog (sessions.js):
 // { by: { [machine]: Set of session ids }, looked (machines looked at: a machine missing there can't be told),
-// unknown (a live Claude tab the helper hasn't identified yet), unknownTitles }.
+// unknown (a live Claude tab the helper hasn't identified yet), unknownTitles, unknownTabs }.
 export async function liveSids(now = Date.now()) {
   const live = await liveNow(now), by = {};
   for (const t of Object.values(live.tabs)) (by[t.machine ?? ""] ??= new Set()).add(t.sid);
-  return { by, looked: live.looked, unknown: live.unknown, unknownTitles: live.unknownTitles };
+  return { by, looked: live.looked, unknown: live.unknown, unknownTitles: live.unknownTitles, unknownTabs: live.unknownTabs };
 }
 // A process id as remembered: a bare number on this computer (as before), "machine:pid" on another.
 const pidKey = (m, p) => (m ? `${m}:${p}` : p);
@@ -158,10 +178,11 @@ async function tick(mine) {
     if (x.machine ? x.machine !== cm : !live.looked.has("")) continue;
     if (lookedAt(x, live)) judged[sid] = x; else aside[sid] = x;
   }
+  // Away time noted by a poll that had to wait for an unidentified tab still counts (s28 Codex R1 P2: merged before
+  // the early return below too, so two such polls in a row keep it).
+  for (const [m, ms] of Object.entries(was.awayFor ?? {})) if (m === cm) awayFor[m] = Math.max(awayFor[m] ?? 0, ms);
   // A live Claude tab whose session the helper has not found yet: no decision now (it would look gone).
   if (live.unknown) { setShared(KEY_RESUME, { at: was.at ?? now, polledAt: now, gapMax, away, ...(Object.keys(awayFor).length ? { awayFor } : {}), tabs: { ...aside, ...judged, ...tabs } }); return; }
-  // Away time noted by a poll that had to wait for an unidentified tab still counts.
-  for (const [m, ms] of Object.entries(was.awayFor ?? {})) if (m === cm) awayFor[m] = Math.max(awayFor[m] ?? 0, ms);
   const byMachine = {};
   for (const [sid, x] of Object.entries(judged)) (byMachine[x.machine ?? ""] ??= {})[sid] = x;
   const lost = Object.entries(byMachine).flatMap(([m, group]) => lostSessions(group, { sids, pids }, Math.max(gapMax, awayFor[m] ?? 0)).offer).filter((x) => !keep[x.sid]);
@@ -194,7 +215,7 @@ export async function resumeOne(sid, { quiet = false, made = null } = {}) {
     if (!quiet) notify?.(`${rec.machine ?? "This computer"} isn't connected now, so “${rec.title ?? "that session"}” can't be checked or resumed yet. Try again when it is back.`);
     return false;
   }
-  if (running(rec, live)) { markHandled([sid]); dropFromOffer(sid); return false; }
+  if (running(rec, live) || justOpened(rec.machine ?? null, sid, now)) { markHandled([sid]); dropFromOffer(sid); return false; }
   const sameTitle = Boolean(rec.title) && live.unknownTitles.has(rec.title);
   if (live.unknown && (sameTitle || !(rec.unsureAt && now - rec.unsureAt >= UNSURE_WAIT_MS))) {
     patchOffer(sid, { claimAt: null, unsureAt: rec.unsureAt ?? now });
@@ -215,10 +236,14 @@ export async function resumeOne(sid, { quiet = false, made = null } = {}) {
   const argv = c;
   if (argv) {
     const all = spaces();
+    // s28 (Codex R1 P2): a session of this computer opens in its own workspace, its "~", or the shown workspace when
+    // that is this computer's — never a bare tab.new, which lands in the shown workspace even on another machine.
     const space = all.find((s) => s.id === rec.space && sameMachine(s.machine, rec.machine))
-      ?? (rec.machine ? all.find((s) => s.name === "~" && sameMachine(s.machine, rec.machine)) : null);
-    if (space || !rec.machine) run("tab.new", { ...(space ? { space: space.id } : {}), folder: rec.cwd, argv, ...(rec.name ? { name: rec.name } : {}) });
-    else { run("space.new", { machine: rec.machine, name: "~", folder: rec.cwd, argv, ...(rec.name ? { tab: rec.name } : {}) }); made?.add(rec.machine); }
+      ?? all.find((s) => s.name === "~" && sameMachine(s.machine, rec.machine))
+      ?? (rec.machine ? null : all.find((s) => s.active && !s.machine));
+    if (space) run("tab.new", { space: space.id, folder: rec.cwd, argv, ...(rec.name ? { name: rec.name } : {}) });
+    else { run("space.new", { machine: rec.machine ?? "", name: "~", folder: rec.cwd, argv, ...(rec.name ? { tab: rec.name } : {}) }); made?.add(rec.machine ?? ""); }
+    noteOpened(rec.machine ?? null, sid);
   }
   markHandled([sid]); dropFromOffer(sid);
   return Boolean(argv);
@@ -241,10 +266,10 @@ export async function resumeAll({ wait: pause = sleep } = {}) {
   const made = new Set();
   for (const x of offer()?.tabs ?? []) {
     const m = x.machine ?? null;
-    if (m && made.has(m)) {
+    if (made.has(m ?? "")) {
       const there = () => spaces().some((s) => s.name === "~" && sameMachine(s.machine, m));
       for (let t = 0; !there() && t < NEW_SPACE_WAIT_MS; t += WAIT_STEP_MS) await pause(WAIT_STEP_MS);
-      made.delete(m);
+      made.delete(m ?? "");
     }
     if (await resumeOne(x.sid, { quiet: true, made }) === "wait") wait++;
   }

@@ -15,7 +15,7 @@ import { theme, props, closeOverlay, shared, setShared, run, notify } from "herd
 import { spaces } from "./parked.js";
 import { accounts, accountName, sessionOfLog, claudeRun, configDirOf } from "./accounts.js";
 import { claudeMachine, localWindows, connected, machineHome, knownHome, execAt, sameMachine, NEEDS_MACHINE } from "./where.js";
-import { liveSids, plainTitle } from "./resume.js";
+import { liveSids, plainTitle, openingNow, noteOpened } from "./resume.js";
 import { projects, projectsOn, projectSpace } from "./automove.js";
 import { agoText } from "./ai.js";
 import { sessionsClosed } from "./state.js";
@@ -44,7 +44,7 @@ done | sort -rn | head -n "$max" | while read -r m f; do
   [ -f "$f" ] || continue
   first=$(head -c 65536 "$f")
   last=$(tail -c 262144 "$f")
-  cwd=$(printf '%s\n' "$first" | grep -a -E -o '"cwd":"([^"\\]|\\.)*"' | head -n 1 | cut -c 1-500 | val)
+  cwd=$(printf '%s\n' "$first" | grep -a -E -o '"cwd":"([^"\\]|\\.)*"' | head -n 1 | cut -c 1-4200 | val)
   title=$(printf '%s\n' "$last" | grep -a -E -o '"customTitle":"([^"\\]|\\.)+"' | tail -n 1 | cut -c 1-500 | val)
   [ -n "$title" ] || title=$(printf '%s\n' "$last" | grep -a -E -o '"summary":"([^"\\]|\\.)+"' | tail -n 1 | cut -c 1-500 | val)
   [ -n "$title" ] || title=$(printf '%s\n' "$last" | grep -a -E -o '"(aiTitle|aiGeneratedTitle)":"([^"\\]|\\.)+"' | tail -n 1 | cut -c 1-500 | val)
@@ -60,6 +60,11 @@ export function unJson(raw) {
   if (!s.startsWith("\"")) return "";
   try { const v = JSON.parse(s); return typeof v === "string" ? v : ""; } catch { return s.slice(1).replace(/"$/, ""); }
 }
+// The exact string a JSON literal holds, or "" when it is cut off or bad (s28 Codex R1 P2: a folder is used as it is,
+// never a guess).
+export function unJsonExact(raw) {
+  try { const v = JSON.parse(String(raw ?? "")); return typeof v === "string" ? v : ""; } catch { return ""; }
+}
 const tidy = (s, n) => { const t = String(s ?? "").replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 // The listing script's output as rows { sid, account, machine ("" = this computer), cwd, title (or null), prompt, at (ms) },
 // newest first. A line that is no log of one of the accounts there, or whose log says nothing at all (an empty one), is left out.
@@ -70,7 +75,8 @@ export function parseListing(out, { machine, list, homeDir }) {
     if (p.length < 2) continue;
     const mtime = Number(p[0]), s = sessionOfLog(p[1], list, homeDir);
     if (!s || !Number.isFinite(mtime) || mtime <= 0) continue;
-    const cwd = tidy(unJson(p[2]), 400), title = tidy(unJson(p[3]), 120), prompt = tidy(unJson(p[4]), 160);
+    // The folder is opened as the log names it: exact (no whitespace folded, no cut); a cut-off one is unknown.
+    const cwd = unJsonExact(p[2]), title = tidy(unJson(p[3]), 120), prompt = tidy(unJson(p[4]), 160);
     if (!cwd && !title && !prompt) continue;
     const key = `${s.account}\t${s.sid}`;
     if (seen.has(key)) continue;
@@ -102,8 +108,9 @@ export function configDirs(list, homeDir) {
   return [...new Set(dirs)];
 }
 // Where a session opens: a tab in the workspace of the project that holds its folder (the deepest one) on its machine, else
-// that machine's "~" workspace, else a new workspace on that machine (another machine) / a tab here (this computer).
-// { name, args } for run(); the caller adds argv. `projs`: automove.js projects(); `list`: the workspaces.
+// that machine's "~" workspace, else (this computer) the shown workspace when it is this computer's, else a new
+// workspace on that machine ("" = this computer, s28 Codex R1 P2: a bare tab.new would land in the shown workspace even
+// when that is another machine's). { name, args } for run(); the caller adds argv. `projs`: automove.js projects(); `list`: the workspaces.
 export function placeOf(row, projs, list) {
   const m = row.machine || null, cwd = String(row.cwd ?? "");
   const inside = (f) => Boolean(f) && (cwd === f || cwd.startsWith(`${f}/`));
@@ -111,7 +118,9 @@ export function placeOf(row, projs, list) {
   for (const p of held) { const s = projectSpace(p, list); if (s) return { name: "tab.new", args: { space: s.id, folder: cwd } }; }
   const home = list.find((s) => s.name === "~" && sameMachine(s.machine, m));
   if (home) return { name: "tab.new", args: { space: home.id, folder: cwd } };
-  return m ? { name: "space.new", args: { machine: m, folder: cwd } } : { name: "tab.new", args: { folder: cwd } };
+  const shown = m ? null : list.find((s) => s.active && !s.machine);
+  if (shown) return { name: "tab.new", args: { space: shown.id, folder: cwd } };
+  return { name: "space.new", args: { machine: m ?? "", folder: cwd } };
 }
 // The notice after a resume: "Resumed 3 sessions. Skipped 2: 1 already open, 1 couldn't reach wsl."
 export function resumeNotice({ opened, skipped }) {
@@ -161,7 +170,10 @@ export async function resumeSessions(rows, { wait = pause } = {}) {
     done.add(key);
     if (!live.looked.has(row.machine ?? "")) { skip(row, m ? (connected(m) ? `couldn't reach ${m}` : `${m} isn't connected now`) : "this computer can't run Claude here"); continue; }
     if (live.by[row.machine ?? ""]?.has(row.sid)) { skip(row, "already open"); continue; }
-    if (live.unknown && row.title && live.unknownTitles.has(plainTitle(row.title))) { skip(row, "may be open already"); continue; }
+    if (openingNow(m, row.sid)) { skip(row, "being opened already"); continue; }
+    // s28 (Codex R1 P2): a Claude tab there not identified yet may be this session, whatever its title: one in the same
+    // folder, with its title, or whose folder is unknown blocks it.
+    if ((live.unknownTabs ?? []).some((u) => u.machine === (row.machine ?? "") && (!u.cwd || u.cwd === row.cwd || (Boolean(row.title) && u.title === plainTitle(row.title))))) { skip(row, "may be open already"); continue; }
     if (!row.cwd) { skip(row, "its folder is unknown"); continue; }
     const c = await claudeRun(row.account, ["--resume", row.sid], m);
     if (!c) { skip(row, "its account isn't set any more"); continue; }
@@ -170,6 +182,7 @@ export async function resumeSessions(rows, { wait = pause } = {}) {
     const fresh = place.name === "space.new" && !named.has(m);
     if (fresh) named.add(m);
     run(place.name, { ...place.args, ...(fresh ? { name: "~" } : {}), argv: [c.cmd, ...c.args] });
+    noteOpened(m, row.sid);
     opened++;
     // More picks for that machine still to place: wait for the new "~" workspace to show (not on the last one).
     const more = rows.slice(rows.indexOf(row) + 1).some((r) => (r.machine || null) === m && !done.has(keyOf(r)));
@@ -271,7 +284,7 @@ export class SessionsView {
       .border(1).border_color(on ? t.accent : t.border).bg(on ? t.accent : t.chrome).text_color(t.background).child(on ? "✓" : "");
     const rowEl = (r) => {
       const on = this.picked.has(keyOf(r));
-      const meta = [folderText(r.cwd, knownHome(r.machine || null)), accountName(r.account), r.machine || null].filter(Boolean).join(" · ");
+      const meta = [tidy(folderText(r.cwd, knownHome(r.machine || null)), 200), accountName(r.account), r.machine || null].filter(Boolean).join(" · ");
       return h_flex().id(`ses-row-${r.machine || "here"}-${r.sid}`).w_full().gap(10).px(10).py(7).items_start().rounded(8).cursor_pointer()
         .when(on, (el) => el.bg(t.selected)).when(!on, (el) => el.hover((s) => s.bg(t.hover)))
         .on_click((_e, cx) => { this.toggle(r); cx.notify(); })
@@ -300,7 +313,7 @@ export class SessionsView {
         .child(div().flex_1().text_size(12).text_color(t.muted).child(`${shown.length}${match.length > shown.length ? ` of ${match.length}` : ""} shown · ${picked} selected${hidden > 0 ? ` (${hidden} hidden by the search)` : ""}`)))
       .children(this.errors().map((e, i) => div().id(`ses-err-${i}`).text_size(12).text_color(t.blocked).child(e)))
       .when(Boolean(this.live?.unknown), (el) => el.child(div().id("ses-unknown").text_size(12).text_color(t.muted)
-        .child("A Claude tab isn't identified yet. If it is one of these sessions, it is skipped when its title matches.")))
+        .child("A Claude tab isn't identified yet. A session in its folder or with its title is skipped until it is.")))
       .child(v_flex().id("ses-list").flex_1().min_h(0).overflow_y_scrollbar().gap(2)
         .children(shown.map(rowEl))
         .when(match.length > shown.length, (el) => el.child(div().id("ses-more").p(8).text_size(12).text_color(t.dim).child(`Showing the newest ${SHOW_MAX} of ${match.length}. Type in the search to narrow the list.`)))

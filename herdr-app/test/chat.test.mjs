@@ -615,9 +615,10 @@ test("Copy full prompt: a rewritten file is copied as it is now; a chat change r
   file = "Second version.";
   await press();
   assert.equal(copied, "Second version.", "a press reads the file again");
-  // The menu copies what was read last; a new row in the chat drops it and the tick reads the file again.
+  // The menu copies what was read last; a reply that ends (a new footer) drops it and the tick reads the file again.
   file = "Third version.";
-  v.feed().rows.push({ id: "u2", k: "user", text: "more" });
+  const tcx0 = fakeCx(); v.tick(tcx0); await Promise.all(tcx0.tasks);
+  v.feed().rows.push({ id: "u2", k: "user", text: "more" }, { id: "a2", k: "assistant", text: shortReply }, { id: "f-a2", k: "footer", text: "10:30" });
   const tcx = fakeCx();
   v.tick(tcx); await Promise.all(tcx.tasks);
   lastList._h.on_item_secondary_click("a1", { button: "right", position: { x: 0, y: 4 }, local_position: { x: 50, y: 4 } }, cx);

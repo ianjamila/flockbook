@@ -345,8 +345,13 @@ export class ChatView {
     return r;
   }
   // From the tick: the newest reply's file and those drawn footers named; a failed read is tried again a minute on.
+  // s28 (Codex R1 P2): a reply that ends (a new footer row) may have rewritten a hand-off file read before, so what was
+  // read is dropped then and read again (the right-click menu copies it as read).
   readAhead(cx) {
     const f = this.feed();
+    const lastFooter = f?.rows ? [...f.rows].reverse().find((r) => r.k === "footer")?.id ?? null : null;
+    if (this.fullSig !== undefined && lastFooter !== this.fullSig) for (const [k, v] of [...this.fullPrompts]) if (!v.pending) this.fullPrompts.delete(k);
+    this.fullSig = lastFooter;
     const want = new Map(this.wantFull);
     this.wantFull.clear();
     const newest = f?.loaded ? replyHandoff(f.rows ?? []) : null;
@@ -372,13 +377,12 @@ export class ChatView {
       notify({ title: "Couldn't copy the full prompt: no clipboard here. Right-click the reply → Copy full re-entry prompt.", level: "warning", timeout: 3000 });
       return;
     }
+    // Read again on every press (s28 Codex R1 P2: a newer reply may have rewritten the file since it was read).
     const address = this.address;
-    let got = this.fullPrompts.get(this.fullKey(h.file, address));
-    if (!got?.text) {
-      if (this.fullBusy) return;
-      this.fullBusy = row.id; cx.notify?.();
-      try { got = await this.loadFull(address, h.file); } finally { this.fullBusy = null; }
-    }
+    if (this.fullBusy) return;
+    this.fullBusy = row.id; cx.notify?.();
+    let got;
+    try { got = await this.loadFull(address, h.file); } finally { this.fullBusy = null; }
     if (!got?.text) {
       notify({ title: `Couldn't read the full prompt (${h.file}): ${got?.problem ?? "unknown error"}. Copy all copies the short one.`, level: "warning", timeout: 5000 });
       cx.notify?.();
@@ -425,8 +429,8 @@ export class ChatView {
     if (row.k === "footer") {
       const file = this.rightHalf() ? this.handoffBefore(row)?.file : null;
       if (file) {
-        // Already read (the tick reads ahead): copied in this click. Not yet: read first, as the Overview's copy does.
-        if (this.fullPrompts.get(this.fullKey(file))?.text || typeof cx?.spawn !== "function") { this.copyFull(row, cx); return; }
+        // Read now (never an earlier read: the file may have changed), then copied, as the Overview's copy does.
+        if (typeof cx?.spawn !== "function") { this.copyFull(row, cx); return; }
         cx.spawn((cx2) => this.copyFull(row, typeof cx2?.write_to_clipboard === "function" ? cx2 : cx));
         return;
       }
