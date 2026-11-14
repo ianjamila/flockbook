@@ -356,6 +356,17 @@ export function showSettings() {
 export function settingsClosed(id) {
   if (id && shared(KEY_SETTINGS) === id) setShared(KEY_SETTINGS, null);
 }
+// The Resume sessions dialog (sessions.js): like the settings, one at a time (opening it again replaces the open one).
+export const KEY_SESSIONS = "flockbook.sessions.open";   // the open dialog's overlay id
+export const SESSIONS_W = 820, SESSIONS_H = 0.85;
+export function showSessions() {
+  const open = shared(KEY_SESSIONS);
+  if (open) closeOverlay(open);
+  setShared(KEY_SESSIONS, openOverlay({ mod: "flockbook", props: { view: "sessions" }, kind: "dialog", width: SESSIONS_W, height: SESSIONS_H }));
+}
+export function sessionsClosed(id) {
+  if (id && shared(KEY_SESSIONS) === id) setShared(KEY_SESSIONS, null);
+}
 
 // Opens a tab of any space: that space, that tab, and its screen.
 export function openTab(spaceId, tab) {

@@ -306,7 +306,7 @@ const LISTING = {
     const cfg = path.join(tmp, "cfg"), proj = path.join(cfg, "projects", "-code-webshop"), other = path.join(cfg, "projects", "-code-tools");
     fs.mkdirSync(proj, { recursive: true }); fs.mkdirSync(other, { recursive: true }); fs.mkdirSync(path.join(proj, "sub", "subagents"), { recursive: true });
     const J = (o) => JSON.stringify(o);
-    const age = (f, days) => { const t = new Date(Date.now() - days * 86_400_000); fs.utimesSync(f, t, t); };
+    const age = (f, days) => { const t = new Date(realNow() - days * 86_400_000); fs.utimesSync(f, t, t); };
     const real = realNow;
     const put = (dir, sid, lines, days) => { const f = path.join(dir, `${sid}.jsonl`); fs.writeFileSync(f, lines.join("\n") + "\n"); age(f, days); return f; };
     put(proj, "aaaa-1", [J({ type: "summary", summary: "Old summary", leafUuid: "x" }),

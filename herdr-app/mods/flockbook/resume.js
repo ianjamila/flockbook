@@ -106,6 +106,14 @@ async function liveNow(now) {
   }
   return { tabs, sids, pids, looked, unknown, unknownTitles };
 }
+// The sessions running in a Claude tab now, by machine ("" = this computer), for the Resume sessions dialog (sessions.js):
+// { by: { [machine]: Set of session ids }, looked (machines looked at: a machine missing there can't be told),
+// unknown (a live Claude tab the helper hasn't identified yet), unknownTitles }.
+export async function liveSids(now = Date.now()) {
+  const live = await liveNow(now), by = {};
+  for (const t of Object.values(live.tabs)) (by[t.machine ?? ""] ??= new Set()).add(t.sid);
+  return { by, looked: live.looked, unknown: live.unknown, unknownTitles: live.unknownTitles };
+}
 // A process id as remembered: a bare number on this computer (as before), "machine:pid" on another.
 const pidKey = (m, p) => (m ? `${m}:${p}` : p);
 const running = (rec, live) => live.sids.has(rec.sid) || (rec.pids ?? []).some((p) => live.pids.has(p));
