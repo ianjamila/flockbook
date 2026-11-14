@@ -30,7 +30,8 @@ const cool = ai.coolOf("EWI");
 eq("sign-in pause: the PC's own WSL and Windows tabs, not the Mac's", ai.agentsOn("EWI").map((a) => a.address), ["pc-wsl/t4", "t7"]);
 eq("coolCovers: a Mac tab is not covered by the PC's sign-in", ai.coolCovers(cool, "ians-macbook-pro-2/t2x"), false);
 eq("coolCovers: a WSL tab on the PC is", ai.coolCovers(cool, "pc-wsl/t4"), true);
-eq("the words name this computer", ai.pauseWords("EWI", cool, now), "Work account needs signing in again on this computer (claude auth login)");
+// Owner 11-15: and where to sign in (the claude_machine Claude runs on; changed on purpose).
+eq("the words name this computer", ai.pauseWords("EWI", cool, now), "Work account needs signing in again on this computer (claude auth login in pc-wsl)");
 // On a Mac (not Windows) a machine-named tab is another computer, even one named like claude_machine.
 windows = false;
 eq("off Windows: only bare addresses", ai.agentsOn("EWI").map((a) => a.address), ["t7"]);

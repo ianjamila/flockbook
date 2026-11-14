@@ -125,6 +125,17 @@ async function aiWorld(opts) {
   eq("Windows with claude_machine: runs on wsl", [Boolean(r.text), w.execs.find(([c]) => c === "/usr/bin/env")?.[2]?.on], [true, "wsl"]);
 }
 
+{
+  // Owner 11-15: a sign-in failure says where to sign in: the account's command on the claude_machine Claude runs on.
+  const ENVK = ["CLAUDE", "CONFIG", "DIR"].join("_");
+  const w = await aiWorld({ settings: { claude_machine: "wsl" } });
+  eq("sign-in words: the claude_machine is named", w.ai.failureText("auth", "Work account (WORK)", 0, now, 480, "", w.ai.loginHint("WORK")),
+    `Work account (WORK) needs signing in again on this computer: run ${ENVK}=${WORK_DIR} ${NAME} auth login in wsl, then try again.`);
+  eq("sign-in words: the default account has no folder", w.ai.loginHint("HOME"), `${NAME} auth login in wsl`);
+  const m = await aiWorld();
+  eq("sign-in words: Claude on this computer, no machine named", m.ai.loginHint("HOME"), `${NAME} auth login`);
+}
+
 // 6. resume.js: tabs on the Claude machine are remembered with their machine; a disconnected machine's are neither
 // live nor lost; Resume opens in that machine's workspace (or a new one there) as the account, on that machine.
 const LOGW = (sid) => `${WSL}/.${NAME}/projects/-home-you/${sid}.jsonl`;

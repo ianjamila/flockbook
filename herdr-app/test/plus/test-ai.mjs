@@ -109,7 +109,10 @@ eq("day word: same day", dayWord(now + 3600_000, now, 480), null);
 eq("day key", dayKey(now, 480), "2026-11-12");
 eq("day key after local midnight", dayKey(Date.UTC(2026, 10, 12, 17, 0), 480), "2026-11-13");
 eq("quota words", failureText("quota", "Personal account (HOME)", Date.UTC(2026, 10, 12, 17, 0), now, 480), "Personal account (HOME) is out of its Claude usage until tomorrow 1:00 am.");
-eq("auth words take the account's name", failureText("auth", "Work account (WORK)", 0, now, 480), "Work account (WORK) needs signing in again (claude auth login).");
+// Owner 11-15: the words name this computer, the sign-in command and that a retry works once signed in (changed on purpose).
+eq("auth: the PC's expired login (11-15), even without the command quoted", classifyFailure({ stdout: "Failed to authenticate: this login reached its time limit and cannot be renewed.", code: 1 }).kind, "auth");
+eq("auth words take the account's name", failureText("auth", "Work account (WORK)", 0, now, 480), "Work account (WORK) needs signing in again on this computer: run claude auth login, then try again.");
+eq("auth words take the account's command", failureText("auth", "Work account (WORK)", 0, now, 480, "", "X=1 claude auth login"), "Work account (WORK) needs signing in again on this computer: run X=1 claude auth login, then try again.");
 eq("cap words take the account's name", failureText("cap", "Work account (WORK)", 0, now, 480).startsWith("Work account (WORK) reached"), true);
 eq("unknown account words", failureText("unknown-account", null, 0, now, 480).startsWith("Couldn't tell which Claude account"), true);
 eq("ago", [agoText(now - 30_000, now), agoText(now - 12 * 60_000, now), agoText(now - 3 * 3600_000, now)], ["just now", "12 min ago", "3 h ago"]);

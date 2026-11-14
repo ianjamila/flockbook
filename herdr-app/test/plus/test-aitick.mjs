@@ -157,6 +157,53 @@ async function world({ tabs = [{ address: "t1", title: "Style guide" }], terms =
   eq("pause: newer pause kept", Boolean(w.st.data["flockbook.ai.cool"]?.WORK), true);
 }
 
+// 6. Owner 11-15 (PC, "the summaries still aren't working"): after a sign-in failure the account rested an hour and
+// Summarize / Again / Rewrite answered from the pause without calling — so signing in again changed nothing for up to
+// an hour. A sign-in pause lets a call the owner ASKED for through (one try; a success lifts the pause, a failure renews
+// it); the automatic About lines keep resting. Out of usage still rests every call until its reset. The message names
+// the account's own sign-in command (its config folder) and that a retry works once signed in.
+const ENVK = ["CLAUDE", "CONFIG", "DIR"].join("_"), CLI = ["cl", "aude"].join("");
+const LOGIN = (dir) => `${dir ? `${ENVK}=${dir} ` : ""}${CLI} auth login`;
+const AUTH = (at = now - 1000) => ({ WORK: { until: now + 3600_000, at, kind: "auth", message: "cannot be renewed" } });
+{
+  const w = await world({ store: { "flockbook.ai.cool": AUTH() } });
+  const r = await w.ai.askHaiku("s", "p", 1000, "WORK", "summary");
+  eq("sign-in pause: Summarize still calls", [w.calls, r.text?.startsWith("Line:")], [["WORK"], true]);
+  eq("sign-in pause: a success lifts it", w.st.data["flockbook.ai.cool"]?.WORK ?? null, null);
+}
+{
+  const w = await world({ store: { "flockbook.ai.cool": AUTH() } });
+  const r = await w.ai.askHaiku("s", "p", 1000, "WORK", "about");
+  eq("sign-in pause: the automatic About line still rests", [w.calls, r.paused], [[], true]);
+}
+{
+  const w = await world({ store: { "flockbook.ai.cool": { WORK: { until: now + 3600_000, at: now - 1000, kind: "quota" } } } });
+  const r = await w.ai.askHaiku("s", "p", 1000, "WORK", "summary");
+  eq("usage pause: Summarize still rests (nothing to gain before the reset)", [w.calls, r.kind], [[], "quota"]);
+}
+{
+  const fails = { code: 1, stdout: "Failed to authenticate: this login reached its time limit and cannot be renewed. Run the auth login command to sign in again" };
+  const w = await world({ store: { "flockbook.ai.cool": AUTH(now - 60_000) }, onExec: () => fails });
+  const r = await w.ai.askHaiku("s", "p", 1000, "WORK", "summary");
+  eq("sign-in pause: a failed retry renews the pause", [w.calls, w.st.data["flockbook.ai.cool"]?.WORK?.at], [["WORK"], now]);
+  eq("sign-in words: the account's own command, on this computer, then try again", r.error,
+    `Work account (WORK) needs signing in again on this computer: run ${LOGIN(WORK_DIR)}, then try again.`);
+  const p = await w.ai.askHaiku("s", "p", 1000, "WORK", "about");
+  eq("sign-in words: the paused answer says the same", p.error, r.error);
+}
+{
+  const w = await world({ screens: { t1: screen("WORK") }, store: { "flockbook.ai.cool": AUTH(), "flockbook.ai.accounts": { t1: "WORK" } } });
+  w.ai.requestRewrite("t1");
+  await w.ai.aboutTick({ soon: true });
+  eq("sign-in pause: Rewrite (asked for) calls", w.calls, ["WORK"]);
+  eq("sign-in pause: its success lifts the pause", w.st.data["flockbook.ai.cool"]?.WORK ?? null, null);
+}
+{
+  const w = await world({ screens: { t1: screen("WORK") }, store: { "flockbook.ai.cool": AUTH(), "flockbook.ai.accounts": { t1: "WORK" } } });
+  await w.ai.aboutTick({ soon: true });
+  eq("sign-in pause: the automatic tick does not call", w.calls, []);
+}
+
 // Summarize: the account from the screen it sends; the remembered one never routes.
 {
   const w = await world({ screens: { t1: "⏺ Bash(ls)\n  Do you want to proceed?" }, store: { "flockbook.ai.accounts": { t1: "WORK" } } });

@@ -53,6 +53,11 @@ export function configDirOf(id, list, homeDir) {
   const a = list.find((x) => x.mark === id);
   return a?.config_dir ? expandHome(a.config_dir, homeDir).replace(/\/+$/, "") : null;
 }
+// The command that signs an account in again, as the owner types it (its config folder as set, "~" kept), owner 11-15.
+export function loginCommandOf(id, list) {
+  const a = list.find((x) => x.mark === id);
+  return `${a?.config_dir ? `CLAUDE_CONFIG_DIR=${String(a.config_dir).replace(/\/+$/, "")} ` : ""}claude auth login`;
+}
 // The account a conversation log belongs to: …/<config folder>/projects/<project>/<id>.jsonl, the config folder being
 // an account's config_dir, else the default ~/.claude (the account without config_dir, or the one default account).
 // { sid, account } or null.
@@ -86,6 +91,7 @@ export function claudeArgv(id, args, { list, homeDir, claudePath = null, envPath
 export const accounts = () => accountList(setting("accounts"));
 export const accountName = (id) => nameOf(id, accounts());
 export const accountOf = (screen) => accountOfScreen(screen, accounts());
+export const loginCommand = (id) => loginCommandOf(id, accounts());
 export const claudeCommand = (id, args) => claudeArgv(id, args, { list: accounts(), homeDir: home(), claudePath: setting("claude_path"), envPath: globalThis.process?.env?.PATH ?? "" });
 // The command that runs claude as `id` with `args` where `machine` is (null: this computer): { cmd, args, on }; null for
 // an unknown account; { unreachable: machine } when that machine's home can't be learnt. On another machine the

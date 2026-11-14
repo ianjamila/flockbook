@@ -19,7 +19,7 @@ import { exec, hc, home, appHome, terminals, shared, setShared } from "herdr";
 import { agents, spaces, snapShared } from "./parked.js";
 import { setting } from "./config.js";
 import { sessionTopic } from "./state.js";
-import { accountOf, accountName, claudeRun } from "./accounts.js";
+import { accountOf, accountName, claudeRun, loginCommand } from "./accounts.js";
 import { claudeMachine, localWindows, machineOf, NEEDS_MACHINE } from "./where.js";
 export { accountOf, accountName };
 
@@ -100,7 +100,8 @@ export function classifyFailure({ stdout, stderr, code, error }) {
   const raw = (out || ex || err || `claude exited with ${code}`).slice(0, 300);
   const said = `${out}\n${ex}`;
   if (/(?:weekly|daily|usage|session|5-hour)\s+limit|hit your (?:\w+ )?limit|limit reached|rate.?limit|out of (?:extra )?usage|credit balance is too low/i.test(said)) return { kind: "quota", raw };
-  if (/not logged in|please run \/login|invalid api key|oauth token (?:has )?expired|authentication (?:failed|error)|claude auth login/i.test(said)) return { kind: "auth", raw };
+  // 11-15 (PC): "Failed to authenticate: this login reached its time limit and cannot be renewed. Run `claude auth login` …".
+  if (/not logged in|please run \/login|invalid api key|oauth token (?:has )?expired|authentication (?:failed|error)|failed to authenticate|cannot be renewed|claude auth login/i.test(said)) return { kind: "auth", raw };
   if (/timed? ?out|timeout|ETIMEDOUT|SIGTERM|killed/i.test(ex) || (code == null && !out)) return { kind: "timeout", raw };
   return { kind: "other", raw };
 }
@@ -197,9 +198,11 @@ export function dayKey(now, localOffsetMin) {
   return new Date(now + localOffsetMin * 60_000).toISOString().slice(0, 10);
 }
 // What the owner reads for a failure (Q2): plain words, the cause named. `who`: the account's name (accountName).
-export function failureText(kind, who, until, now, localOffsetMin, raw = "") {
+// `login`: how to sign in again (loginHint), the plain command when not given. Owner 11-15: the sign-in is this computer's
+// (coolCovers) and a Summarize / Again / Rewrite tries again at once (askHaiku), so the words say both.
+export function failureText(kind, who, until, now, localOffsetMin, raw = "", login = "claude auth login") {
   if (kind === "quota") return `${who} is out of its Claude usage until ${clockText(until, now, localOffsetMin)}.`;
-  if (kind === "auth") return `${who} needs signing in again (claude auth login).`;
+  if (kind === "auth") return `${who} needs signing in again on this computer: run ${login}, then try again.`;
   if (kind === "timeout") return "Claude took too long to answer. It tries again in a few minutes.";
   if (kind === "unknown-account") return "Couldn't tell which Claude account this tab uses (its status line isn't on screen), so nothing was sent.";
   if (kind === "cap") return `${who} reached today's About-line limit (Settings → About daily cap).`;
@@ -256,6 +259,12 @@ export function coolOf(account) {
   const c = account ? shared(KEY_COOL)?.[account] : null;
   return c && Date.now() < c.until ? c : null;
 }
+// How to sign `account` in again where Claude runs for this computer: its command (its config folder), plus the
+// "claude_machine" it runs on (the PC: WSL), e.g. "CLAUDE_CONFIG_DIR=~/.claude-work claude auth login in wsl".
+export function loginHint(account) {
+  const m = claudeMachine();
+  return `${loginCommand?.(account) ?? "claude auth login"}${m ? ` in ${m}` : ""}`;
+}
 // Every account on pause now: [{ account, until, kind, message }].
 export function cooledAccounts() {
   const all = shared(KEY_COOL) ?? {}, now = Date.now();
@@ -274,7 +283,7 @@ export function agentsOn(account, cool = coolOf(account)) {
 }
 // What a pause says, for the Overview's banner and a tab's hover: a sign-in is this computer's, usage the account's.
 export function pauseWords(account, cool, now = Date.now()) {
-  return cool.kind === "auth" ? `${accountName(account)} needs signing in again on this computer (claude auth login)`
+  return cool.kind === "auth" ? `${accountName(account)} needs signing in again on this computer (${loginHint(account)})`
     : `${accountName(account)} is out of its Claude usage until ${clockText(cool.until, now, localOffset())}`;
 }
 // Today's calls: { day, [account]: { about, rewrite, summary, ok, fail } }.
@@ -325,7 +334,11 @@ export async function askHaiku(system, prompt, timeout = 60_000, account = null,
   if (argv.unreachable) return { error: `Couldn't reach ${argv.unreachable} to run Claude there. It tries again in a few minutes.`, kind: "unreachable" };
   const who = accountName(account);
   const cool = coolOf(account);
-  if (cool) return { error: failureText(cool.kind, who, cool.until, now, off), kind: cool.kind, until: cool.until, paused: true };
+  // Owner 11-15 (PC: "the summaries still aren't working"): a sign-in pause used to answer every call for an hour, so
+  // signing in again changed nothing until it ran out. A call the owner asked for (Summarize, Again, Rewrite) tries
+  // once: a success lifts the pause (below), a failure renews it. Automatic About lines keep resting; out of usage
+  // rests every call until its reset.
+  if (cool && !(cool.kind === "auth" && purpose !== "about")) return { error: failureText(cool.kind, who, cool.until, now, off, "", loginHint(account)), kind: cool.kind, until: cool.until, paused: true };
   if (purpose === "about" && capLeft(account) <= 0) return { error: failureText("cap", who, 0, now, off), kind: "cap" };
   count(account, purpose);
   let r;
@@ -346,7 +359,7 @@ export async function askHaiku(system, prompt, timeout = 60_000, account = null,
   const f = classifyFailure(r);
   const until = coolUntil(f.kind, f.raw, Date.now(), localOffsetAt);
   if (until) setShared(KEY_COOL, { ...(shared(KEY_COOL) ?? {}), [account]: { until, kind: f.kind, message: f.raw.slice(0, 200), at: Date.now() } });
-  return { error: failureText(f.kind, who, until ?? 0, Date.now(), off, f.raw), kind: f.kind, ...(until ? { until } : {}) };
+  return { error: failureText(f.kind, who, until ?? 0, Date.now(), off, f.raw, loginHint(account)), kind: f.kind, ...(until ? { until } : {}) };
 }
 
 // The tab's screen with `lines` of history, or null.
@@ -446,8 +459,9 @@ export async function aboutTick({ soon = false } = {}) {
       const acct = sendAccount(a.address, screen);
       if (!acct) { fail("unknown-account", failureText("unknown-account", null, 0, Date.now(), localOffset())); if (force) doneRewrite(a.address, gen); continue; }
       const cool = coolOf(acct);
-      if (cool) {
-        if (force || !old?.text) fail(cool.kind, failureText(cool.kind, accountName(acct), cool.until, Date.now(), localOffset()));
+      // A Rewrite the owner asked for tries a sign-in pause once (askHaiku); automatic lines rest.
+      if (cool && !(force && cool.kind === "auth")) {
+        if (force || !old?.text) fail(cool.kind, failureText(cool.kind, accountName(acct), cool.until, Date.now(), localOffset(), "", loginHint(acct)));
         if (force) doneRewrite(a.address, gen);
         continue;
       }
