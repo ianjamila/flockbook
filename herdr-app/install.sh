@@ -101,6 +101,13 @@ copy_only() {
   echo "The helper was kept: the chat works, but the helper fixes newer than your release may not be in it (./install.sh --build-helper adds them)."
 }
 
+# A git checkout has no remote/ (the helpers for Linux machines you reach over SSH): say where they come from.
+remote_hint() {
+  [ -f "$here/fetch-remote-helpers.sh" ] && [ ! -f "$here/remote/SHA256SUMS" ] || return 0
+  echo "No helpers for other machines here (remote/): the chat of a Linux machine you added in Herdr needs one."
+  echo "Get them from a GitHub build first: ./fetch-remote-helpers.sh, then ./install.sh again."
+}
+
 # The plus build, from source: the helper built from this checkout (it embeds this checkout's herdr-app files).
 build_helper() {
   cargo="$(command -v cargo 2>/dev/null || true)"
@@ -154,11 +161,12 @@ if [ -z "$exe" ] || [ ! -x "$exe" ]; then
     echo "In the repo, build one: ./install.sh --build-helper (or by hand: (cd xplat && cargo build --release -p flockbook-modfeed)," >&2
     echo "then run: xplat/target/release/flockbook-modfeed install --helper xplat/target/release/flockbook-modfeed)." >&2
     echo "Or ./install.sh --copy-only to copy the mod over an installed Flockbook and keep its helper." >&2
+    remote_hint >&2
     exit 1
   fi
 fi
 set -- --helper "$exe" "$@"
-if [ -f "$here/remote/SHA256SUMS" ]; then set -- --remote "$here/remote" "$@"; fi
+if [ -f "$here/remote/SHA256SUMS" ]; then set -- --remote "$here/remote" "$@"; else remote_hint; fi
 "$exe" install "$@"
 put_extras
 switch_layout
