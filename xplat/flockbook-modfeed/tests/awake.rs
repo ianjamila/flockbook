@@ -190,6 +190,57 @@ mod mac {
         let _ = theirs.wait();
     }
 
+    /// A record with no start time, or pid 0 / 1, never names a process to stop (s37 review: the guard's own paths).
+    #[test]
+    fn a_record_without_a_start_time_or_with_pid_0_or_1_stops_nothing() {
+        let e = Env::new();
+        let until = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 600;
+        std::fs::create_dir_all(e.state_file().parent().unwrap()).unwrap();
+        // A live caffeinate (the fake), recorded without its start time.
+        let mut theirs = Command::new(e.bin.join("caffeinate")).args(["-i", "-t", "60"]).stdout(Stdio::null()).spawn().unwrap();
+        for rec in [
+            json!({"pid": theirs.id(), "started": "", "until": until}),
+            json!({"pid": theirs.id(), "until": until}),
+            json!({"pid": 0, "started": "", "until": until}),
+            json!({"pid": 1, "started": lstart(1), "until": until}),
+        ] {
+            std::fs::write(e.state_file(), rec.to_string()).unwrap();
+            assert_eq!(result(&e.run(&["awake", "--status"]))["state"], "idle", "{rec}");
+            assert_eq!(result(&e.run(&["awake", "--release"]))["was"], false, "{rec}");
+            assert!(alive(theirs.id()), "{rec}: left alone");
+        }
+        let _ = theirs.kill();
+        let _ = theirs.wait();
+    }
+
+    /// Many renewals in a row leave exactly one holder running (each replaces the one before).
+    #[test]
+    fn repeated_renewals_leave_one_holder() {
+        let e = Env::new();
+        let mut pids = Vec::new();
+        for _ in 0..4 {
+            pids.push(result(&e.run(&["awake", "--for", "30"]))["pid"].as_u64().unwrap() as u32);
+        }
+        let last = *pids.last().unwrap();
+        for p in &pids[..pids.len() - 1] {
+            assert!(gone(*p), "older holder {p} stopped");
+        }
+        assert!(alive(last));
+        e.run(&["awake", "--release"]);
+        assert!(gone(last));
+    }
+
+    /// The cap: 3600 s is allowed, 3601 is not.
+    #[test]
+    fn the_time_is_capped_at_an_hour() {
+        let e = Env::new();
+        let ok = e.run(&["awake", "--for", "3600"]);
+        assert_eq!(result(&ok)["for"], 3600, "{ok:?}");
+        e.run(&["awake", "--release"]);
+        let over = e.run(&["awake", "--for", "3601"]);
+        assert_eq!(over.iter().find(|l| l["type"] == "error").map(|l| l["code"].clone()), Some(json!("usage")), "{over:?}");
+    }
+
     #[test]
     fn a_bad_time_is_refused() {
         let e = Env::new();

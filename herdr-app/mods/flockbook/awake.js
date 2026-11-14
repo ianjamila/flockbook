@@ -18,7 +18,8 @@ import { h_flex } from "gpui-base";
 import * as sidecar from "./sidecar.js";
 import { setting, setSetting } from "./config.js";
 import { snapShared, withSnapshot } from "./parked.js";
-import { subStatus } from "./state.js";
+import { subStatus, tabAgents } from "./state.js";
+import { askOf } from "./asks.js";
 import { allTabs, statusOf } from "./overview.js";
 import { claudeMachine, localWindows } from "./where.js";
 
@@ -37,15 +38,20 @@ const BUSY_MS = 45_000;
 export const isLocal = (space, { windows = false, wsl = null } = {}) => !space?.machine || (windows && Boolean(wsl) && space.machine === wsl);
 
 const EMPTY = { working: 0, ci: 0, review: 0, other: 0, waiting: 0, total: 0 };
+// A tab that waits on the owner: blocked on a permission or question box, or a finished turn whose reply ends asking
+// something (asks.js: a question, an extra round, a migration go, a merge). s37 review: the spec's "waiting for the owner"
+// covers both; the Overview's Needs you lists the same asks.
+export const waitsOnOwner = (tab) => tab.status === "blocked" || tabAgents(tab.id).some((a) => Boolean(askOf(a.address)?.kind));
+
 // What this computer's tabs are doing: { working, ci, review, other, waiting, total, seen }. `items`: the Overview's
-// allTabs(). A tab is counted once: working (its turn runs), background (statusOf says working behind a finished turn:
-// `ci`, `review` or `other` by its sub-status), or blocked on the owner for less than BLOCKED_MAX_MS (`waiting`; since
-// the tab's changed_at, else when it was first seen blocked, kept in `seen`). Everything else is not work.
-export function classify(items, now, { windows = false, wsl = null, seen = {}, sub = subStatus, status = statusOf } = {}) {
+// allTabs(). A tab is counted once: working (its turn runs), waiting on the owner for less than BLOCKED_MAX_MS
+// (`waiting`; since the tab's changed_at, else when it was first seen waiting, kept in `seen`), or background (statusOf
+// says working behind a finished turn: `ci`, `review` or `other` by its sub-status). Everything else is not work.
+export function classify(items, now, { windows = false, wsl = null, seen = {}, sub = subStatus, status = statusOf, waits = waitsOnOwner } = {}) {
   const out = { ...EMPTY, seen: {} };
   for (const { space, tab } of items) {
     if (!isLocal(space, { windows, wsl })) continue;
-    if (tab.status === "blocked") {
+    if (tab.status !== "working" && waits(tab)) {
       const first = seen[tab.id] ?? now;
       out.seen[tab.id] = first;
       const since = Number.isFinite(tab.changed_at) && tab.changed_at > 0 ? tab.changed_at : first;
@@ -76,10 +82,12 @@ export function phrase(w) {
 // What the side bar's line says: { text, kind } or null (nothing to show: an older helper, or a computer that can't).
 // kind: "on" | "grace" | "idle" | "off" | "error".
 export function lineOf(st, on, now) {
-  if (!on) return { text: "Stay awake: off", kind: "off" };
   const s = st ?? {};
+  // A computer that can't hold, or a helper without `awake`: no line, the switch on or off (s37 review).
   if (s.phase === "unsupported" || s.phase === "older") return null;
-  if (s.phase === "error") return { text: `Can't keep awake: ${s.error ?? "the helper failed"}`, kind: "error" };
+  if (!on) return { text: "Stay awake: off", kind: "off" };
+  // A failure says so while its back-off runs or while there is work it could not cover; not for ever after (s37).
+  if (s.phase === "error" && ((s.retryAt && now < s.retryAt) || s.work?.total > 0)) return { text: `Can't keep awake: ${s.error ?? "the helper failed"}`, kind: "error" };
   if (s.work?.total > 0) return { text: `☕ Awake — ${phrase(s.work)}`, kind: "on" };
   const left = s.lastWork ? GRACE_MS - (now - s.lastWork) : 0;
   if (s.holding && left > 0) return { text: `☕ Awake — ${Math.ceil(left / 60_000)} min more`, kind: "grace" };
@@ -98,6 +106,9 @@ const put = (patch) => setShared(KEY_AWAKE, { ...(shared(KEY_AWAKE) ?? {}), ...p
 export async function awakeTick(now = Date.now(), { force = false } = {}) {
   const busy = shared(KEY_BUSY);
   if (!force && busy && now - busy < BUSY_MS) return false;
+  // Another copy of the top bar looked a moment ago: once per AWAKE_MS across every copy (s37 review).
+  const looked = shared(KEY_AWAKE)?.lookedAt;
+  if (!force && looked && now - looked >= 0 && now - looked < AWAKE_MS - 500) return false;
   setShared(KEY_BUSY, now);
   const on = setting("stay_awake") === "on";
   const before = lineOf(shared(KEY_AWAKE), on, now)?.text;
@@ -112,9 +123,12 @@ async function step(now, on) {
   if (!on) {
     // Off: let go at once, and forget the rest.
     if (st.holding) await release();
-    setShared(KEY_AWAKE, { holding: false, work: null, lastWork: null, seen: {}, phase: null });
+    // What the computer can do (unsupported / an older helper) is kept, so the line stays hidden there.
+    const keep = st.phase === "unsupported" || st.phase === "older" ? { phase: st.phase, retryAt: st.retryAt } : { phase: null };
+    setShared(KEY_AWAKE, { holding: false, work: null, lastWork: null, seen: {}, lookedAt: now, ...keep });
     return;
   }
+  st.lookedAt = now;
   const w = withSnapshot(() => classify(allTabs(), now, { windows: localWindows(), wsl: claudeMachine(), seen: st.seen ?? {} }));
   st.work = w;
   st.seen = w.seen;
@@ -127,6 +141,12 @@ async function step(now, on) {
   } else if (st.holding) {
     await release();
     st.holding = false;
+  }
+  // The switch went off while the helper was asked (s37 review): off wins, and the hold just made is let go.
+  if (setting("stay_awake") !== "on") {
+    if (st.holding) await release();
+    setShared(KEY_AWAKE, { ...(shared(KEY_AWAKE) ?? {}), holding: false });
+    return;
   }
   setShared(KEY_AWAKE, st);
 }

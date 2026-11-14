@@ -179,26 +179,55 @@ mod plat {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
+    type Handle = *mut core::ffi::c_void;
     #[link(name = "kernel32")]
     extern "system" {
         fn SetThreadExecutionState(flags: u32) -> u32;
+        fn GetStdHandle(which: u32) -> Handle;
+        fn SetHandleInformation(handle: Handle, mask: u32, flags: u32) -> i32;
     }
     const ES_CONTINUOUS: u32 = 0x8000_0000;
     const ES_SYSTEM_REQUIRED: u32 = 0x0000_0001;
     // No window, and not tied to the helper's console.
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    // STD_INPUT_HANDLE (-10), STD_OUTPUT_HANDLE (-11), STD_ERROR_HANDLE (-12) as DWORDs.
+    const STD_HANDLES: [u32; 3] = [0xFFFF_FFF6, 0xFFFF_FFF5, 0xFFFF_FFF4];
+    const HANDLE_FLAG_INHERIT: u32 = 0x0000_0001;
 
     /// This helper again as `awake-hold`; it ends by itself, so no handle is kept.
     pub fn start(dir: &Path, secs: u64, token: &str, until: u64) -> Result<(u32, String), String> {
         let exe = std::env::current_exe().map_err(|e| format!("cannot find the helper: {e}"))?;
-        // The record first, with this token: the holder ends when it does not find its own token there.
+        // The record first, with this token: the holder ends when it does not find its own token there. The record
+        // before it is put back when the holder cannot start, so the holder already running keeps holding (s37 review).
+        let before = std::fs::read(super::file(dir)).ok();
         let first = Record { pid: 0, started: String::new(), until, token: token.to_string() };
         super::write(dir, &first)?;
-        let child = Command::new(exe).args(["awake-hold", &secs.to_string()]).arg(super::file(dir)).arg(token)
+        // Windows hands every inheritable handle to a child, not only its three std ones: the pipes Herdr reads this
+        // helper's answer from would stay open in the holder, and the caller would wait until the holder ends (minutes).
+        // This helper exits right after, so its own std handles need not be inherited by anything (s37 review P1).
+        for which in STD_HANDLES {
+            // SAFETY: plain Win32 calls on this process's own std handles; a missing or invalid handle just fails.
+            unsafe {
+                let h = GetStdHandle(which);
+                if !h.is_null() && h as isize != -1 {
+                    SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0);
+                }
+            }
+        }
+        let spawned = Command::new(exe).args(["awake-hold", &secs.to_string()]).arg(super::file(dir)).arg(token)
             .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
-            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW).spawn().map_err(|e| format!("cannot start the holder: {e}"))?;
-        Ok((child.id(), String::new()))
+            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW).spawn();
+        match spawned {
+            Ok(child) => Ok((child.id(), String::new())),
+            Err(e) => {
+                match before {
+                    Some(bytes) => { let _ = std::fs::write(super::file(dir), bytes); }
+                    None => { let _ = std::fs::remove_file(super::file(dir)); }
+                }
+                Err(format!("cannot start the holder: {e}"))
+            }
+        }
     }
 
     /// The holder is running (a flockbook-modfeed process with that pid) and the record still has its token.

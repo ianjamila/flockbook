@@ -97,7 +97,7 @@ test("the words: counts merged, grace minutes, nothing to say, and the switch of
   assert.deepEqual(lineOf({ work: { total: 0 }, holding: false }, true, NOW), { text: "Sleep allowed", kind: "idle" });
   assert.equal(lineOf({ phase: "unsupported" }, true, NOW), null);
   assert.equal(lineOf({ phase: "older" }, true, NOW), null);
-  assert.equal(lineOf({ phase: "error", error: "no caffeinate" }, true, NOW).text, "Can't keep awake: no caffeinate");
+  assert.equal(lineOf({ phase: "error", error: "no caffeinate", retryAt: NOW + MIN }, true, NOW).text, "Can't keep awake: no caffeinate");
   assert.equal(lineOf({ holding: true }, false, NOW).kind, "off");
 });
 
@@ -266,4 +266,63 @@ test("the setting is a switch in the settings dialog, default on, in one section
   assert.ok(s && s.title === "Keep this computer awake while agents work");
   assert.deepEqual(s.choices.map((c) => c[0]), ["on", "off"]);
   assert.equal(SECTIONS.filter((sec) => (sec.parts ?? []).some(([, keys]) => keys.includes("stay_awake"))).length, 1);
+});
+
+// ---- s37 review fixes ----
+test("s37: a finished turn that asks the owner something (question, extra round, merge) counts as waiting under 3 h", () => {
+  setTabs([["q", { status: "done", changed_at: NOW - 10 * MIN }], ["m", { status: "done", changed_at: NOW - 10 * MIN }], ["o", { status: "done", changed_at: NOW - BLOCKED_MAX_MS - MIN }]]);
+  fake.shared["flockbook.asks"] = { q: { kind: "question", text: "Which one?" }, m: { kind: "merge", pr: 5 }, o: { kind: "round", pr: 7 } };
+  const w = classify(allTabs(), NOW);
+  assert.equal(w.waiting, 2, "the old ask is past 3 h");
+  assert.equal(w.total, 2);
+});
+
+test("s37: a finished turn with a background shell still running is work (owner 11-15 s36)", () => {
+  setTabs([["sh", { status: "done" }, { title: "✅ Usage review" }]]);
+  fake.shared["flockbook.background"] = { sh: { shells: 1, agents: 0 } };
+  const w = classify(allTabs(), NOW);
+  assert.equal(w.other, 1);
+  assert.equal(lineOf({ work: w }, true, NOW).text, "☕ Awake — background work");
+});
+
+test("s37: off on a computer that cannot hold shows no line; an old error goes once there is nothing to do", () => {
+  assert.equal(lineOf({ phase: "unsupported" }, false, NOW), null);
+  assert.equal(lineOf({ phase: "older" }, false, NOW), null);
+  // The error line shows while the back-off runs or work goes on; after that with no work: the plain idle line.
+  assert.equal(lineOf({ phase: "error", error: "x", retryAt: NOW + MIN, work: { total: 0 } }, true, NOW).kind, "error");
+  assert.equal(lineOf({ phase: "error", error: "x", retryAt: NOW - MIN, work: { working: 1, total: 1 } }, true, NOW).kind, "error");
+  assert.deepEqual(lineOf({ phase: "error", error: "x", retryAt: NOW - MIN, work: { total: 0 } }, true, NOW), { text: "Sleep allowed", kind: "idle" });
+});
+
+test("s37: turning the switch off keeps what the computer can do (an unsupported computer stays quiet)", async () => {
+  helper = () => answer("awake", [{ type: "awake", state: "unsupported", reason: "x" }]);
+  await awakeTick(NOW);
+  assert.equal(fake.shared[KEY_AWAKE].phase, "unsupported");
+  await setStayAwake("off");
+  assert.equal(fake.shared[KEY_AWAKE].phase, "unsupported");
+  assert.equal(lineOf(fake.shared[KEY_AWAKE], false, NOW), null);
+});
+
+test("s37: a second copy's tick right after the first does not look again (once per AWAKE_MS across copies)", async () => {
+  await awakeTick(NOW);
+  const reads = log.exec.length;
+  const n = fake.agentsReads ?? null;
+  await awakeTick(NOW + 1_000);
+  assert.equal(fake.shared[KEY_AWAKE].lookedAt, NOW, "the second tick skipped");
+  assert.equal(log.exec.length, reads);
+  await awakeTick(NOW + AWAKE_MS);
+  assert.equal(fake.shared[KEY_AWAKE].lookedAt, NOW + AWAKE_MS);
+  void n;
+});
+
+test("s37: a tick that was mid-renew when the switch went off does not leave a hold recorded", async () => {
+  let release;
+  helper = (argv) => (argv[1] === "--for" ? new Promise((r) => { release = () => r(holding()); }) : answer("awake", [{ type: "awake", state: "released", was: true }]));
+  const slow = awakeTick(NOW);
+  while (!release) await new Promise((r) => setTimeout(r, 1));
+  fake.shared[KEY_CONFIG] = { file: { stay_awake: "off" } };
+  release();
+  await slow;
+  assert.equal(fake.shared[KEY_AWAKE].holding, false, "off wins");
+  assert.equal(awakeCalls().at(-1), "awake --release", "the hold it just made is let go");
 });
