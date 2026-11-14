@@ -23,7 +23,7 @@ fn protocol_lines() {
     let v = run("/nonexistent.sock", &["version"]);
     // s32: what this build can do beyond its commands, in every header (a helper on another machine is checked by it).
     assert_eq!(v[0], serde_json::json!({"type":"header","protocol":1,"sidecar":"0.1.0","cmd":"version","abilities":["send-over-suggestion","bare-session"]}));
-    assert_eq!(v[1]["commands"], serde_json::json!(["version", "feed", "status", "card", "approve", "answer", "send", "paste-image", "helper", "update-check", "queue", "phone", "commands", "parked", "usage", "send-over-suggestion", "bare-session"]));
+    assert_eq!(v[1]["commands"], serde_json::json!(["version", "feed", "status", "card", "approve", "answer", "send", "paste-image", "helper", "update-check", "queue", "phone", "commands", "parked", "usage", "awake", "send-over-suggestion", "bare-session"]));
     assert_eq!(v.last().unwrap()["type"], "end");
     assert_eq!(v.last().unwrap()["ok"], true);
 

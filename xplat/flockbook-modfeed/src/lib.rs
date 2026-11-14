@@ -1,6 +1,7 @@
 //! The herdr-app mod's sidecar (contract: the mod's docs/protocol.md).
 
 pub mod answered;
+pub mod awake;
 pub mod cards;
 pub mod cli;
 pub mod commands;
