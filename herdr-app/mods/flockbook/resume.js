@@ -111,24 +111,28 @@ async function helperCache() {
 // (machine names looked at, "" = this computer), unknown (a live Claude tab the helper hasn't identified yet),
 // unknownTitles (their titles), unknownTabs ([{ machine ("" = this computer), title, cwd (its pane's folder, or null)
 // }]) }. Process ids are per machine ("wsl:30"), so two machines' never mix.
+const statusAsked = new Map(), STATUS_EVERY_MS = 60_000;
 async function liveNow(now) {
   const subs = new Set(terminals().filter((t) => t.parent).map((t) => t.address));
   const cm = claudeMachine(), looked = new Set();
   if (!localWindows()) looked.add("");
   const remote = cm && connected(cm) ? await remoteEntries(cm) : null;
   if (remote) looked.add(cm);
-  const claudes = agents().filter((a) => a.app === "claude-code" && a.address && !subs.has(a.address) && looked.has(machineOf(a.address) ?? ""));
+  const claudes = agents().filter((a) => a.app === "claude-code" && a.address && looked.has(machineOf(a.address) ?? ""));
   const entries = looked.has("") ? (await helperCache())?.entries ?? {} : {};
   const tabs = {}, sids = new Set(), pids = new Set(), unknownTitles = new Set(), unknownTabs = [];
   let unknown = false;
+  const subLive = [];   // s28 (Fable): sessions in sub-agent tabs, open but never offered (liveSids only)
   for (const a of claudes) {
     const m = machineOf(a.address);
     const e = m ? remote[terminalOf(a.address)] : entries[a.address], s = sessionOf(e?.path, accounts(), m ? knownHome(m) : home());
+    if (subs.has(a.address)) { if (s) subLive.push({ machine: m ?? "", sid: s.sid }); continue; }
     if (!s) {
       unknown = true; if (plainTitle(a.title)) unknownTitles.add(plainTitle(a.title));
       unknownTabs.push({ machine: m ?? "", title: plainTitle(a.title), cwd: paneCwd(a.address) });
-      // The helper there has no entry for it yet: a status call through this computer's helper makes one.
-      if (m) sidecar.status(a.address);
+      // The helper there has no entry for it yet: a status call through this computer's helper makes one (once a
+      // minute at most per tab, s28 Fable: every poll and the dialog's 10 s refresh used to send one).
+      if (m && !(now - (statusAsked.get(a.address) ?? -Infinity) < STATUS_EVERY_MS)) { statusAsked.set(a.address, now); sidecar.status(a.address); }
       continue;
     }
     sids.add(s.sid);
@@ -137,7 +141,7 @@ async function liveNow(now) {
     tabs[s.sid] = { sid: s.sid, account: s.account, cwd: e.cwd ?? (m ? knownHome(m) : home()), pids: own, terminal: a.address, space: a.space, spaceName: a.space_name,
       name: ownName(a), title: plainTitle(a.title) || null, at: now, ...(m ? { machine: m } : {}) };
   }
-  return { tabs, sids, pids, looked, unknown, unknownTitles, unknownTabs };
+  return { tabs, sids, pids, looked, unknown, unknownTitles, unknownTabs, subLive };
 }
 // The folder Herdr shows for a tab's pane, or null.
 const paneCwd = (address) => { try { return panes().find((x) => x.terminal === address)?.cwd || null; } catch { return null; } };
@@ -147,6 +151,7 @@ const paneCwd = (address) => { try { return panes().find((x) => x.terminal === a
 export async function liveSids(now = Date.now()) {
   const live = await liveNow(now), by = {};
   for (const t of Object.values(live.tabs)) (by[t.machine ?? ""] ??= new Set()).add(t.sid);
+  for (const t of live.subLive) (by[t.machine] ??= new Set()).add(t.sid);
   return { by, looked: live.looked, unknown: live.unknown, unknownTitles: live.unknownTitles, unknownTabs: live.unknownTabs };
 }
 // A process id as remembered: a bare number on this computer (as before), "machine:pid" on another.
@@ -231,8 +236,10 @@ export async function resumeOne(sid, { quiet = false, made = null } = {}) {
     return false;
   }
   if (running(rec, live) || justOpened(rec.machine ?? null, sid, now)) { markHandled([sid]); dropFromOffer(sid); return false; }
-  const sameTitle = Boolean(rec.title) && live.unknownTitles.has(rec.title);
-  if (live.unknown && (sameTitle || !(rec.unsureAt && now - rec.unsureAt >= UNSURE_WAIT_MS))) {
+  // Only an unidentified tab on its own machine can be this session (s28 Fable).
+  const unsure = live.unknownTabs.filter((u) => u.machine === (rec.machine ?? ""));
+  const sameTitle = Boolean(rec.title) && unsure.some((u) => u.title === rec.title);
+  if (unsure.length && (sameTitle || !(rec.unsureAt && now - rec.unsureAt >= UNSURE_WAIT_MS))) {
     patchOffer(sid, { claimAt: null, unsureAt: rec.unsureAt ?? now });
     if (!quiet) notify?.(sameTitle
       ? `A Claude tab named “${rec.title}” isn't identified yet — it is probably that session, already open. Not resumed.`

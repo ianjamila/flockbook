@@ -232,10 +232,9 @@ async function resumeWorld(opts) {
   const spaces = [{ id: "sp1", name: "~", machine: null, tabs: [] }];
   const w = await resumeWorld({ settings: { claude_machine: "wsl" }, files, agents, spaces, ready: ["wsl"] });
   w.st.setShared("flockbook.resume.offer", { at: now, tabs: [{ sid: "s-mac", account: "HOME", cwd: MAC, pids: [5], space: "sp1" }] });
-  const n0 = w.runs.length;
+  const n0 = w.runs.length, s0 = w.statuses.length;
   const ok = await w.r.resumeOne("s-mac");
   eq("unidentified wsl tab: a Mac session still resumes", [ok, w.runs.length - n0], [true, 1]);
-  const s0 = w.statuses.length;
   await w.r.resumeTick(); now += 30_000; await w.r.resumeTick();
   eq("status call for an unidentified remote tab: once a minute at most", w.statuses.length - s0, 1);
 }

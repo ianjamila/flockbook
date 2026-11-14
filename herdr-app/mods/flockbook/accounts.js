@@ -57,7 +57,8 @@ export function configDirOf(id, list, homeDir) {
 // an account's config_dir, else the default ~/.claude (the account without config_dir, or the one default account).
 // { sid, account } or null.
 export function sessionOfLog(p, list, homeDir) {
-  const m = /^(.*)\/projects\/[^/]+\/([A-Za-z0-9_-]+)\.jsonl$/.exec(String(p ?? ""));
+  // s28 (Fable): a session id never starts with "-" (it goes after --resume: "--x" would be read as an option).
+  const m = /^(.*)\/projects\/[^/]+\/([A-Za-z0-9_][A-Za-z0-9_-]*)\.jsonl$/.exec(String(p ?? ""));
   if (!m) return null;
   const dir = m[1].replace(/\/+$/, "");
   const own = list.find((a) => a.config_dir && configDirOf(a.mark, list, homeDir) === dir);

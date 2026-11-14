@@ -21,6 +21,8 @@ import { agoText } from "./ai.js";
 import { sessionsClosed } from "./state.js";
 
 export const KEY_LIST = "flockbook.sessions.list";   // { at, days, by: { [machine, "" = this computer]: { rows } | { error } } }
+// s28 (Fable): a log changed this recently may be a conversation running in a terminal Herdr doesn't see (VS Code, …).
+export const RECENT_MS = 5 * 60_000;
 export const LIST_DAYS = 30, LIST_MAX = 300, SHOW_MAX = 200, STALE_MS = 60_000, LIVE_MS = 10_000, LIST_TIMEOUT_MS = 90_000;
 
 // One line per conversation log, tab separated: mtime (epoch seconds), path, then the cwd, the title and the first prompt
@@ -297,6 +299,8 @@ export class SessionsView {
             .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(t.foreground).child(headingOf(r)))
             .child(div().flex_none().text_size(11.5).text_color(t.dim).child(agoText(r.at, now))))
           .when(Boolean(r.title && r.prompt), (el) => el.child(div().truncate().text_size(12).text_color(t.dim).child(r.prompt)))
+          .when(now - r.at < RECENT_MS, (el) => el.child(div().truncate().text_size(11.5).text_color(t.blocked)
+            .child("Changed minutes ago: it may be open in another terminal. Select all leaves it out.")))
           .child(div().truncate().text_size(11.5).text_color(t.muted).child(meta)));
     };
     const empty = this.loading && !c ? "Reading the conversation logs…"
@@ -311,7 +315,7 @@ export class SessionsView {
         .child(link("ses-refresh", "Refresh", (cx) => cx.spawn((cx) => this.load(cx, true)))))
       .child(Input.new(this.search).w_full())
       .child(h_flex().gap(14).items_center()
-        .child(link("ses-all", "Select all shown", () => { for (const r of shown) this.picked.add(keyOf(r)); }))
+        .child(link("ses-all", "Select all shown", () => { for (const r of shown) if (!(now - r.at < RECENT_MS)) this.picked.add(keyOf(r)); }))
         .child(link("ses-clear", "Clear", () => { this.picked.clear(); }))
         .child(div().flex_1().text_size(12).text_color(t.muted).child(`${shown.length}${match.length > shown.length ? ` of ${match.length}` : ""} shown · ${picked} selected${hidden > 0 ? ` (${hidden} hidden by the search)` : ""}`)))
       .children(this.errors().map((e, i) => div().id(`ses-err-${i}`).text_size(12).text_color(t.blocked).child(e)))

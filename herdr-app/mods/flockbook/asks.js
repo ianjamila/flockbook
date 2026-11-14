@@ -219,12 +219,17 @@ const BUTTONS = /^(?:(?:[❯>]\s*)?(?:\d+[.)]\s*)?\[?\s*(?:Accept|Decline|Cancel
 // lines) may follow the controls; anything else there and the controls can't be trusted. { lines, top, start, end }
 // or null.
 const FOOTER = /^$|\besc\b|navigate|\benter\b|\btab\b|to (?:select|confirm|cancel|submit)/i;
+// s28 (Fable): the dialog's title must be on the screen once, alone on its line (box lines aside): a request whose
+// message holds a title-like line could otherwise hide everything above it.
+const TITLE = /^MCP server\s+[“"][^”"]*[”"]?\s*requests your input$/;
+const cleanLine = (x) => String(x ?? "").replace(BOX, "").trim();
 function elicitBox(screen) {
   const lines = String(screen ?? "").split(/\r?\n/);
-  let top = -1;
-  for (let i = lines.length - 1; i >= 0; i--) if (ELICIT.test(lines[i])) { top = i; break; }
-  if (top < 0) return null;
-  const clean = (i) => lines[i].replace(BOX, "").trim();
+  const titles = [];
+  lines.forEach((x, i) => { if (ELICIT.test(x)) titles.push(i); });
+  if (titles.length !== 1 || !TITLE.test(cleanLine(lines[titles[0]]))) return null;
+  const top = titles[0];
+  const clean = (i) => cleanLine(lines[i]);
   let end = -1;
   for (let i = lines.length - 1; i > top; i--) if (BUTTONS.test(clean(i))) { end = i; break; }
   if (end < 0) return null;
@@ -238,14 +243,33 @@ function elicitBox(screen) {
   for (let i = end + 1; i < lines.length; i++) if (!FOOTER.test(clean(i))) return null;
   return { lines, top, start, end, clean };
 }
-// { server, text, full } or null: `full` is the whole request as the screen shows it (what an Accept / Decline press
-// compares, s28 Codex R1: two requests may share their first 1200 characters), `text` its first 1200 for small places.
+// s28 (Fable): the lenient reader the card and the sidebar's 🔌 fall back on when elicitBox can't vouch for the
+// controls: the last title line, then the last line offering Accept (Decline on it or just below), no prompt box after.
+// Such a request is shown, never answered from the card. { lines, top, btn } or null.
+function elicitLoose(screen) {
+  const lines = String(screen ?? "").split(/\r?\n/);
+  let top = -1;
+  for (let i = lines.length - 1; i >= 0; i--) if (ELICIT.test(lines[i])) { top = i; break; }
+  if (top < 0) return null;
+  let btn = -1;
+  for (let i = lines.length - 1; i > top; i--) {
+    if (/(?:^|[\s❯>│[])Accept\b/.test(lines[i]) && lines.slice(i, i + 3).some((x) => /\bDecline\b/.test(x))) { btn = i; break; }
+  }
+  if (btn < 0) return null;
+  if (lines.slice(btn + 1).some((x, k, l) => /^\s*❯/.test(x) && /^\s*─{20,}\s*$/.test(l[k - 1] ?? lines[btn] ?? ""))) return null;
+  return { lines, top, btn };
+}
+// { server, text, full, answerable } or null: `full` is the whole request as the screen shows it (what an Accept /
+// Decline press compares, s28 Codex R1: two requests may share their first 1200 characters), `text` its first 1200
+// for small places, `answerable` whether the card may offer Accept / Decline (elicitBox vouched for the controls).
 export function elicitation(screen) {
   const b = elicitBox(screen);
-  if (!b) return null;
-  const server = ELICIT.exec(b.lines[b.top])[1].trim() || "an MCP server";
-  const full = b.lines.slice(b.top + 1, b.start).map((x) => x.replace(BOX, "").trim()).filter(Boolean).join(" ").replace(/\s+/g, " ");
-  return { server, text: full.slice(0, 1200), full };
+  const l = b ? null : elicitLoose(screen);
+  if (!b && !l) return null;
+  const { lines, top } = b ?? l, stop = b ? b.start : l.btn;
+  const server = ELICIT.exec(lines[top])[1].trim() || "an MCP server";
+  const full = lines.slice(top + 1, stop).map((x) => x.replace(BOX, "").trim()).filter(Boolean).join(" ").replace(/\s+/g, " ");
+  return { server, text: full.slice(0, 1200), full, answerable: Boolean(b) };
 }
 // s27: which button of that box the terminal has selected, "accept" | "decline", or null when it can't be told: only
 // the ❯ marker on the control rows elicitBox found counts, and only when there is exactly one (s28 Codex R1). The

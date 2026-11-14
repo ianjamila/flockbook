@@ -177,7 +177,7 @@ export class Cards {
         const scr = await hc(["read", address]).catch(() => null);
         const el = scr?.code === 0 ? elicitation(scr.stdout) : null;
         // The card shows (and a press compares) the whole request, not the 1200-char cut (s28 Codex R1).
-        if (el) card = { kind: "elicitation", server: el.server, text: el.full, request: `elicit:${el.server}:${el.full.length}:${el.full.slice(0, 80)}:${el.full.slice(-80)}` };
+        if (el) card = { kind: "elicitation", server: el.server, text: el.full, answerable: el.answerable, request: `elicit:${el.server}:${el.full.length}:${el.full.slice(0, 80)}:${el.full.slice(-80)}` };
         // The sidebar's 🔌 sees it now, not at the next asks tick.
         if (scr?.code === 0) noteElicit(address, el);
       } else if (card) noteElicit(address, null);
@@ -307,7 +307,7 @@ export class Cards {
   // the selection down and checks it reached Decline before Enter; when it didn't, Esc (cancel: nothing runs).
   async elicitAnswer(cx, address, accept) {
     const e = this.entry(address), c = e.card;
-    if (e.sending || c?.kind !== "elicitation") return;
+    if (e.sending || c?.kind !== "elicitation" || !c.answerable) return;
     e.sending = true; e.note = null; cx.notify?.();
     let note = null;
     const read = async () => { const r = await hc(["read", address]).catch(() => null); return r?.code === 0 ? String(r.stdout ?? "") : null; };
@@ -394,6 +394,14 @@ export class Cards {
       box.child(head(`MCP server “${c.server}” asks for your input`));
       if (c.text) box.child(div().id(`${id}-elicit`).max_h(220).overflow_y_scrollbar().px(10).py(8).rounded(8).bg(t.background)
         .text_size(13).text_color(t.foreground).child(c.text));
+      if (!c.answerable) {
+        // s28 (Fable): the screen can't vouch for the dialog's buttons (more than one title-like line, or text under them).
+        box.child(h_flex().gap(8).items_center()
+          .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child("Answer it in its terminal: its screen can't be checked well enough for a one-click answer."))
+          .child(button("elicit-terminal", "Answer in terminal", true, toTerminal)));
+        const n0 = tail(); if (n0) box.child(n0);
+        return box;
+      }
       box.child(h_flex().gap(8).items_center()
         .child(button("elicit-accept", e.sending ? "Sending…" : "Accept", true, (cx) => this.elicitAnswer(cx, address, true), e.sending))
         .child(button("elicit-decline", "Decline", false, (cx) => this.elicitAnswer(cx, address, false), e.sending))

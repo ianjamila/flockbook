@@ -71,6 +71,7 @@ export function noteSender(from) {
 
 const FULL_RETRY_MS = 60_000; // a hand-off file that could not be read is read again this much later
 const PRESS_MS = 1500;       // a press older than this does not say which half of a footer was clicked
+const FULL_ZONE_W = 180;     // s28 (Fable): only this much of the footer's right end is "Copy full prompt" (about its button)
 
 export class ChatView {
   constructor(cx) {
@@ -375,7 +376,7 @@ export class ChatView {
   rightHalf() {
     const p = this.pressed;
     this.pressed = null;
-    return Boolean(p && Date.now() - p.at < PRESS_MS && p.w > 0 && p.x >= p.w / 2);
+    return Boolean(p && Date.now() - p.at < PRESS_MS && p.w > 0 && p.x >= Math.max(p.w / 2, p.w - FULL_ZONE_W));
   }
   // "Copy full prompt": the hand-off file on the clipboard, a notice, "Copied" for 2 s. Not readable: a warning.
   async copyFull(row, cx) {

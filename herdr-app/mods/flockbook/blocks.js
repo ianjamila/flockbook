@@ -148,7 +148,8 @@ export function replyHandoff(rows, end = null) {
     if (r.k === "footer" || (r.k === "user" && r.from == null)) return null;
     if (r.k === "assistant") {
       const p = reentryPrompt(r.text, ask);
-      if (p) return { prompt: p, file: handoffFile(p) ?? handoffFile(r.text) };
+      // The prompt's own file; else the reply's, only when it names one file (s28 Fable: with two, which is meant?).
+      if (p) return { prompt: p, file: handoffFile(p) ?? onlyHandoffFile(r.text) };
     }
   }
   return null;
@@ -157,14 +158,22 @@ export function replyHandoff(rows, end = null) {
 // s27 (owner 11-14): a short re-entry prompt names the full one's file, `~/claude-notes/handoffs/<topic>.md`
 // (CLAUDE.md "Re-entry prompts"). The first such path in `text`: absolute or from ~, a .md file right in a folder named
 // "handoffs", no ".." on the way; null when there is none. Only such a file is ever read for "Copy full prompt".
-const HANDOFF_FILE = /(?<![\w.~/-])((?:~\/|\/)[^\s`'"<>()[\]*]*?\/handoffs\/[A-Za-z0-9][\w.-]*?\.md)(?=$|[^\w/.-]|\.(?![\w/]))/g;
+// s28 (Fable): never part of a URL ("https://…", "file:///…": ":" before it) or a "//host/…" network path, no empty
+// segment.
+const HANDOFF_FILE = /(?<![\w.~/:-])((?:~\/|\/)[^\s`'"<>()[\]*]*?\/handoffs\/[A-Za-z0-9][\w.-]*?\.md)(?=$|[^\w/.-]|\.(?![\w/]))/g;
 export function handoffFile(text) {
   for (const m of String(text ?? "").matchAll(HANDOFF_FILE)) {
     const p = m[1];
-    if (p.split("/").some((s) => s === ".." || s === ".")) continue;
+    if (p.startsWith("//") || p.split("/").some((s, i) => s === ".." || s === "." || (i > 0 && s === ""))) continue;
     return p;
   }
   return null;
+}
+// The one hand-off file `text` names (any number of times), or null when it names none or several different ones.
+function onlyHandoffFile(text) {
+  const all = new Set();
+  for (let rest = String(text ?? ""), f; (f = handoffFile(rest)); rest = rest.slice(rest.indexOf(f) + f.length)) all.add(f);
+  return all.size === 1 ? [...all][0] : null;
 }
 // `p` with a leading ~ read as `home` (null when it has one and no home is known).
 export const expandHome = (p, home) => (p.startsWith("~/") ? (home ? `${home}${p.slice(1)}` : null) : p);
