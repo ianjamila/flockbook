@@ -136,6 +136,15 @@ Enter sends); the vertical tab list on the right shows each tab's program, statu
   workspace when its title names the project or its work happens in the project's folder; a tab in the
   wrong workspace gets a "→ project?" badge.
 
+**Side bar: usage and staying awake**
+- At the bottom, the **weekly usage left** for each Claude account and Codex (percent left, a bar, when it
+  resets); the Mac and the PC show the same figures.
+- **Stay awake while agents work** (Settings → General → This computer, on by default): while an agent on
+  this computer works, has CI / a review / a shell running behind a finished turn, or waits on you (under
+  3 hours), the computer does not go to sleep on its own; 15 minutes after the work ends it may again. The
+  screen can still turn off, and closing the lid still sleeps it. The side bar's line says what keeps it
+  awake; a click turns the switch.
+
 **Themes**: VS Code–style colours and a visible selection colour for Flockbook dark and light.
 
 **Helper** (`flockbook-modfeed`, built from this branch by `install.sh --build-helper`)

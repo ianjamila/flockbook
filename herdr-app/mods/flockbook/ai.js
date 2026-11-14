@@ -20,7 +20,7 @@ import { agents, spaces, snapShared } from "./parked.js";
 import { setting } from "./config.js";
 import { sessionTopic } from "./state.js";
 import { accountOf, accountName, claudeRun } from "./accounts.js";
-import { claudeMachine, localWindows, NEEDS_MACHINE } from "./where.js";
+import { claudeMachine, localWindows, machineOf, NEEDS_MACHINE } from "./where.js";
 export { accountOf, accountName };
 
 const FLAGS = ["-p", "--model", "haiku", "--setting-sources", "local", "--strict-mcp-config", "--tools", "", "--disable-slash-commands", "--no-session-persistence"];
@@ -261,10 +261,21 @@ export function cooledAccounts() {
   const all = shared(KEY_COOL) ?? {}, now = Date.now();
   return Object.entries(all).filter(([, c]) => c && now < c.until).map(([account, c]) => ({ account, ...c }));
 }
-// The local tabs (agents) that run as `account`, as remembered.
-export function agentsOn(account) {
+// Whether a tab's terminal runs on this computer: a bare address, or on Windows the WSL machine Claude runs on here.
+export const onThisComputer = (address) => { const m = machineOf(address); return !m || (localWindows() && m === claudeMachine()); };
+// Whether a pause covers a tab. Out of usage is the ACCOUNT's, on every computer. A login that needs signing in again is
+// THIS computer's login (the record was made by a call from here): a tab on another computer runs with that computer's
+// own login (s37: the PC's expired Work login listed a Mac tab as "likely paused"; the Mac's Work login was fine).
+export const coolCovers = (cool, address) => Boolean(cool) && (cool.kind !== "auth" || onThisComputer(address));
+// The tabs (agents) that run as `account` and that its pause covers (`cool`: coolOf(account)), as remembered.
+export function agentsOn(account, cool = coolOf(account)) {
   const known = shared(KEY_ACCOUNTS) ?? {};
-  return agents().filter((a) => known[a.address] === account);
+  return agents().filter((a) => known[a.address] === account && (!cool || coolCovers(cool, a.address)));
+}
+// What a pause says, for the Overview's banner and a tab's hover: a sign-in is this computer's, usage the account's.
+export function pauseWords(account, cool, now = Date.now()) {
+  return cool.kind === "auth" ? `${accountName(account)} needs signing in again on this computer (claude auth login)`
+    : `${accountName(account)} is out of its Claude usage until ${clockText(cool.until, now, localOffset())}`;
 }
 // Today's calls: { day, [account]: { about, rewrite, summary, ok, fail } }.
 export function callsToday() {

@@ -11,7 +11,7 @@ import { v_flex, h_flex, HoverCard } from "gpui-base";
 import { run } from "herdr";
 import { tabLabel, tabAgents, needReason } from "./state.js";
 import { nowOf, askOf, askLine, elicitOf } from "./asks.js";
-import { aboutEntry, isStale, rewriting, accountName, accountFor, agoText, coolOf, clockText, localOffset, aboutSupported } from "./ai.js";
+import { aboutEntry, isStale, rewriting, accountName, accountFor, agoText, coolOf, coolCovers, pauseWords, aboutSupported } from "./ai.js";
 import { act } from "./menu.js";
 import { sessionTopic } from "./state.js";
 
@@ -67,9 +67,11 @@ export function hoverBody(tab, t, { title = null, extra = [], always = false, on
   const nw = nowOf(addr);
   const e = aboutEntry(addr);
   const about = e?.more || e?.text || null;
-  const now = Date.now(), off = localOffset();
+  const now = Date.now();
   const acct = addr ? (e?.account ?? accountFor(addr)) : null;
-  const cool = coolOf(acct);
+  // The account's pause, when it covers this tab (a sign-in is this computer's login: not a tab on another one; s37).
+  const cool0 = coolOf(acct);
+  const cool = coolCovers(cool0, addr) ? cool0 : null;
   const failed = e?.error && (!e.wroteAt || (e.triedAt ?? 0) > e.wroteAt) ? e.error : null;
   const lines = (extra ?? []).filter(Boolean);
   if (!always && !need && !about && !nw && !lines.length && !failed && !cool) return null;
@@ -97,7 +99,7 @@ export function hoverBody(tab, t, { title = null, extra = [], always = false, on
     .when(steps.length > 0, (el) => el.child(section("steps", "Last steps", steps)))
     .when(Boolean(nw?.helpers.length), (el) => el.child(section("helpers", helpersHead(nw.helpers), nw.helpers.map(plainHelper))))
     // The tab's account is out of usage: its own session is likely stopped too (Fable 11-12).
-    .when(Boolean(cool), (el) => el.child(text("cool", `⏸ ${accountName(acct)} is out of its Claude usage until ${clockText(cool.until, now, off)}: this tab is likely paused too.`, t.blocked, 12)))
+    .when(Boolean(cool), (el) => el.child(text("cool", `⏸ ${pauseWords(acct, cool, now)}: this tab is likely paused too.`, t.blocked, 12)))
     .when(Boolean(failed) && !cool, (el) => el.child(text("err", failed, t.muted, 12)))
     .when(Boolean(addr), (el) => el.child(h_flex().id(id("foot")).gap(12).items_center().pt(2).border_t(1).border_color(t.border)
       .child(div().flex_1().min_w(0).whitespace_normal().text_size(11.5).text_color(t.dim).child(busy ? "Rewriting the About line…" : fresh ?? "No About line yet"))

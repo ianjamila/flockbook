@@ -13,7 +13,7 @@ import * as sidecar from "./sidecar.js";
 import { emptyFeed, applyFeed } from "./feedstate.js";
 import { replyPrompt, replyHandoff } from "./blocks.js";
 import { readFullPrompt } from "./where.js";
-import { aboutOf, aboutMore, cooledAccounts, agentsOn, accountName, clockText, localOffset, autoPausedUntil, resumeAuto } from "./ai.js";
+import { aboutOf, aboutMore, cooledAccounts, agentsOn, pauseWords, accountName, clockText, localOffset, autoPausedUntil, resumeAuto } from "./ai.js";
 import { sinceView, copyText, markSeen } from "./history.js";
 import { offer, resumeOne, resumeAll, dismissOffer, opening } from "./resume.js";
 import { statusMark, startTop, overBar, barOver, barRoom, noteScreenHeight } from "./top.js";
@@ -242,13 +242,13 @@ export class OverviewView {
   }
 
   // One line per Claude account that ran out of usage or needs signing in (ai.js KEY_COOL; Q2 + Fable 11-12): when it
-  // comes back and which tabs run as it (they are likely paused too). Not repeated on each card.
+  // comes back and which tabs run as it (they are likely paused too). Not repeated on each card. A sign-in is this
+  // computer's login: it names this computer and lists only the tabs that run here (ai.js coolCovers; s37).
   pauseBanners(t) {
     const now = Date.now();
     return cooledAccounts().map((c) => {
-      const tabs = agentsOn(c.account).map((a) => agentName(a));
-      const what = c.kind === "auth" ? `${accountName(c.account)} needs signing in again (claude auth login)`
-        : `${accountName(c.account)} is out of its Claude usage until ${clockText(c.until, now, localOffset())}`;
+      const tabs = agentsOn(c.account, c).map((a) => agentName(a));
+      const what = pauseWords(c.account, c, now);
       const on = tabs.length ? ` ${tabs.length === 1 ? "Its tab is" : `Its ${tabs.length} tabs are`} likely paused too: ${tabs.join(", ")}.` : "";
       return h_flex().id(`ov-pause-${c.account}`).w_full().gap(10).items_start().px(14).py(10).rounded(10)
         .bg(t.raised).border(1).border_color(t.blocked)
