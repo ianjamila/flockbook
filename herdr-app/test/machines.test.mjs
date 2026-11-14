@@ -24,7 +24,9 @@ beforeEach(() => {
   fake.machines = [{ name: null, layout: "ready" }];
   fake.spaces = [space("sp1", { index: 1, name: "app" }), space("sp2", { index: 2, name: "api", active: false })];
   lsCalls = 0; hcCalls = []; ls = { machines: [] }; hcAnswer = null;
-  fake.exec = (_cmd, args) => {
+  fake.exec = (cmd, args) => {
+    // The side bar's weekly usage (usage.js) asks the helper, not hc: this stub is for hc's calls only.
+    if (cmd !== "hc") return { code: 127, stdout: "", stderr: "no helper in this test" };
     if (args[0] === "machine" && args[1] === "ls") { lsCalls++; return ok(ls); }
     hcCalls.push(args);
     return hcAnswer ? hcAnswer(args) : ok({ ok: true });

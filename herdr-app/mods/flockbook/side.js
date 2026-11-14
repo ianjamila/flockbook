@@ -13,6 +13,7 @@ import { updateLine } from "./settings.js";
 import { updateSeen } from "./config.js";
 import { dragger, dropPlace } from "./drag.js";
 import { machineGroups, machinesTick, machineHeader, machineEmpty, folded, MACHINES_MS } from "./machines.js";
+import { pollUsage, usageBlock, USAGE_MS } from "./usage.js";
 
 // The workspace being dragged up or down (drag.js): one at a time, so the docked and the floating
 // sidebar draw from the same one.
@@ -44,6 +45,9 @@ export class SideView {
     this.copiedLogin = null;
     cx?.spawn?.(async (c2) => { await machinesTick(); c2?.notify?.(); });
     cx?.timer?.every?.(MACHINES_MS, (c2) => c2?.spawn?.(async (c3) => { await machinesTick(); c3?.notify?.(); }));
+    // Weekly usage left (usage.js, owner 11-15 s35): asked now (after the machines are known) and every 60 s; one copy asks for all.
+    cx?.spawn?.(async (c2) => { await machinesTick(); await pollUsage(); c2?.notify?.(); });
+    cx?.timer?.every?.(USAGE_MS, (c2) => c2?.spawn?.(async (c3) => { await pollUsage(); c3?.notify?.(); }));
     if (!this.slid) cx?.timer?.after?.(16, (cx2) => { this.slid = true; cx2?.notify?.(); });
   }
 
@@ -191,6 +195,7 @@ export class SideView {
       .when(Boolean(update), (el) => el.child(div().pb(4).child(update)))
       .child(row("side-sessions", "refresh", "Resume sessions", () => showSessions(), null, false))
       .child(row("side-flockbook", "sliders", "Flockbook", () => showSettings(), null, false))
-      .child(row("side-settings", "gear", "Settings", () => run("app.settings")));
+      .child(row("side-settings", "gear", "Settings", () => run("app.settings")))
+      .child(usageBlock(t));
   }
 }

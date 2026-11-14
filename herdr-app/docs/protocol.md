@@ -51,6 +51,7 @@ does not download; `install-isolated.sh` copies the sidecar in.
 | `send` | `--terminal <addr>` `[--over-suggestion </word>]` `--text <s>` `[--file <path>]…` `[--expect-kind <agent>]` `[--expect-path <log>]` `[--cache <file>]` | `done` (`changed` when the terminal now runs another agent or conversation than the expected one; nothing is sent. `--over-suggestion` (Send anyway; before `--text`, and only read there): after those checks, when Claude Code's box shows exactly that lone "/word" with no command list above it, Ctrl-E Ctrl-U clears its line, the screen is read again, and the text goes only into a box down to one row (else `box_not_empty`, "still has text"); a box showing anything else gets the usual check. A terminal `m/tN` runs it in the helper there. Its message says "new conversation" when the same agent process wrote the expected log, e.g. after `/clear`. With `--cache` the log is looked up again and written to the cache, so the next `feed` reads it) |
 | `queue` | `--terminal <addr>` `[--cache <file>]` (Rust sidecar only; `serve` and other machines) | `queued` |
 | `commands` | `--terminal <addr>` `[--cache <file>]` (Rust sidecar only) | `commands` |
+| `usage` | `[--machine <m>]` `[--cache <file>]` (Rust sidecar only) | `usage` (none, one or several) |
 | `helper install` | `--machine <m> --sha256 <hex> [--cache <file>]` | `installed` |
 | `helper remove` | `--machine <m> [--cache <file>]` | `removed` |
 | `update-check` | `--home <herdr-app home>` `[--dismiss <x.y.z>]` (Rust sidecar only) | `update` |
@@ -169,7 +170,7 @@ Targets: `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `universal-a
 ### `version`
 
 ```json
-{"commands":["version","feed","status","card","approve","answer","send","paste-image","helper","update-check","queue","phone","commands","parked"],"release":"0.9.0","type":"version"}
+{"commands":["version","feed","status","card","approve","answer","send","paste-image","helper","update-check","queue","phone","commands","parked","usage"],"release":"0.9.0","type":"version"}
 ```
 
 `commands`: the commands this sidecar has. The mod hides actions whose command is missing.
@@ -378,6 +379,36 @@ while a Claude Code, Codex or Grok Build agent works. No queue: `agent` is `""` 
 - `items`: oldest first; `null` is a queued message whose text neither the log nor the screen shows.
 - `pullable`: the agent's input box is empty, so the queue can be pulled back now.
 - `pullsAll`: Claude Code (Up takes back every queued message as one text).
+
+### `usage` (`usage`)
+
+How much of the weekly limit is left, per account. Read only: files this computer already has, no network, no
+credentials, nothing spent. One line per account found; an account with no reading has no line (the mod shows "—").
+Only the weekly window is read out (Claude Code's 5-hour limit is gone; Codex's plan has only a weekly one).
+
+- `kind` `claude`: one line per Claude Code config folder. Read from the status line wrapper's saved inputs
+  (`<folder>/<session id>.json`; the folder is the `--dir` of the `flockbook-statusline` command in Claude Code's
+  settings, else `<herdr-app home>/flockbook/statusline`): the newest 300 files by mtime; per config folder the newest
+  file with `rate_limits.seven_day` (the config folder is the part of its `transcript_path` before the last
+  `/projects/`). `at` is that file's mtime. `email`: `oauthAccount.emailAddress` in the folder's own `.claude.json`
+  (the default folder, `.claude` under the home, uses `.claude.json` beside it in the home), else null.
+- `kind` `codex`: `$CODEX_HOME` or `~/.codex`, `sessions/YYYY/MM/DD/rollout-*.jsonl`: the newest day folders (today
+  back 14 days), newest files first (at most 20), the last `rate_limits` (found at any depth) in the newest file that
+  has one, read from the last 256 KB. The weekly window is the `primary` or `secondary` one with `window_minutes`
+  10080. `at` is the line's `timestamp`, else the file's mtime. `plan`: its `plan_type` or null.
+- `weekly`: `used` is the percent used (0..100), `left` is 100 − used rounded, `resets_at` is in seconds (null when
+  unknown). A `resets_at` already past is passed on as it was read: the mod decides what that means.
+- `at` is in milliseconds.
+
+`usage --machine <m>` runs it in the helper on that machine, as the other commands do there (`remote_helper` Never
+gives `remote-off`; a missing, other-version or unsupported helper gives its `remote_helper_*` error; nothing is
+installed and nothing runs there but the helper). Its lines come back as they are; an older helper there that does not
+know `usage` answers with a `usage` error, which the mod skips quietly.
+
+```json
+{"type":"usage","kind":"claude","config":"/Users/me/.claude","email":"me@example.com","weekly":{"left":36,"used":64,"resets_at":1795208400},"at":1763197000000}
+{"type":"usage","kind":"codex","plan":"prolite","weekly":{"left":80,"used":20,"resets_at":1795252974},"at":1763197000000}
+```
 
 ### `parked` (`parked`)
 
