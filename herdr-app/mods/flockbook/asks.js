@@ -214,7 +214,11 @@ const BOX = /^[\s│|╭╮╰╯─┃]+|[\s│|╭╮╰╯─┃]+$/g;
 const BUTTONS = /^(?:(?:[❯>]\s*)?(?:\d+[.)]\s*)?\[?\s*(?:Accept|Decline|Cancel)\s*\]?\s*)+$/;
 // s28 (Codex R1): the controls are the LAST run of button-only lines under the title (nearest the footer), never an
 // earlier message line that happens to look like one; the run must hold exactly one Accept and one Decline (a
-// button-like message line glued on above them makes two: can't tell). { lines, top, start, end } or null.
+// button-like message line glued on above them makes two: can't tell). R2: the whole screen under the title is
+// searched (a long request may run past any fixed window), and only the dialog's footer (key hints, blank or box
+// lines) may follow the controls; anything else there and the controls can't be trusted. { lines, top, start, end }
+// or null.
+const FOOTER = /^$|\besc\b|navigate|\benter\b|\btab\b|to (?:select|confirm|cancel|submit)/i;
 function elicitBox(screen) {
   const lines = String(screen ?? "").split(/\r?\n/);
   let top = -1;
@@ -222,15 +226,16 @@ function elicitBox(screen) {
   if (top < 0) return null;
   const clean = (i) => lines[i].replace(BOX, "").trim();
   let end = -1;
-  for (let i = Math.min(lines.length, top + 60) - 1; i > top; i--) if (BUTTONS.test(clean(i))) { end = i; break; }
+  for (let i = lines.length - 1; i > top; i--) if (BUTTONS.test(clean(i))) { end = i; break; }
   if (end < 0) return null;
   let start = end;
   while (start - 1 > top && BUTTONS.test(clean(start - 1))) start--;
   const row = lines.slice(start, end + 1).map((_, k) => clean(start + k)).join(" ");
   const count = (w) => (row.match(new RegExp(`\\b${w}\\b`, "g")) ?? []).length;
   if (count("Accept") !== 1 || count("Decline") !== 1) return null;
-  // A prompt box drawn after it means the session moved on.
-  if (lines.slice(end + 1).some((x, k, l) => /^\s*❯/.test(x) && /^\s*─{20,}\s*$/.test(l[k - 1] ?? lines[end] ?? ""))) return null;
+  // Under the controls only the dialog's footer: a prompt box drawn after it means the session moved on, other text
+  // that the controls found are not the dialog's.
+  for (let i = end + 1; i < lines.length; i++) if (!FOOTER.test(clean(i))) return null;
   return { lines, top, start, end, clean };
 }
 // { server, text, full } or null: `full` is the whole request as the screen shows it (what an Accept / Decline press

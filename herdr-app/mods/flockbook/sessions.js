@@ -15,7 +15,7 @@ import { theme, props, closeOverlay, shared, setShared, run, notify } from "herd
 import { spaces } from "./parked.js";
 import { accounts, accountName, sessionOfLog, claudeRun, configDirOf } from "./accounts.js";
 import { claudeMachine, localWindows, connected, machineHome, knownHome, execAt, sameMachine, NEEDS_MACHINE } from "./where.js";
-import { liveSids, plainTitle, openingNow, noteOpened } from "./resume.js";
+import { liveSids, claimOpening, releaseOpening, noteOpened } from "./resume.js";
 import { projects, projectsOn, projectSpace } from "./automove.js";
 import { agoText } from "./ai.js";
 import { sessionsClosed } from "./state.js";
@@ -170,14 +170,17 @@ export async function resumeSessions(rows, { wait = pause } = {}) {
     done.add(key);
     if (!live.looked.has(row.machine ?? "")) { skip(row, m ? (connected(m) ? `couldn't reach ${m}` : `${m} isn't connected now`) : "this computer can't run Claude here"); continue; }
     if (live.by[row.machine ?? ""]?.has(row.sid)) { skip(row, "already open"); continue; }
-    if (openingNow(m, row.sid)) { skip(row, "being opened already"); continue; }
-    // s28 (Codex R1 P2): a Claude tab there not identified yet may be this session, whatever its title: one in the same
-    // folder, with its title, or whose folder is unknown blocks it.
-    if ((live.unknownTabs ?? []).some((u) => u.machine === (row.machine ?? "") && (!u.cwd || u.cwd === row.cwd || (Boolean(row.title) && u.title === plainTitle(row.title))))) { skip(row, "may be open already"); continue; }
+    // s28 (Codex R1 + R2 P2): a Claude tab there not identified yet may be this very session (a folder or title that
+    // differs proves nothing: it may have moved, or be named anew), so nothing opens on that machine until it is.
+    if ((live.unknownTabs ?? []).some((u) => u.machine === (row.machine ?? ""))) { skip(row, "may be open already"); continue; }
     if (!row.cwd) { skip(row, "its folder is unknown"); continue; }
+    // Claimed before anything is awaited (R2 P2), so another resume at the same time (a second dialog, the restart
+    // offer) opens nothing more; given up again when this pick can't open.
+    const claim = claimOpening(m, row.sid);
+    if (!claim) { skip(row, "being opened already"); continue; }
     const c = await claudeRun(row.account, ["--resume", row.sid], m);
-    if (!c) { skip(row, "its account isn't set any more"); continue; }
-    if (c.unreachable) { skip(row, `couldn't reach ${c.unreachable}`); continue; }
+    if (!c) { releaseOpening(m, row.sid, claim); skip(row, "its account isn't set any more"); continue; }
+    if (c.unreachable) { releaseOpening(m, row.sid, claim); skip(row, `couldn't reach ${c.unreachable}`); continue; }
     const place = placeOf(row, projs, spaces());
     const fresh = place.name === "space.new" && !named.has(m);
     if (fresh) named.add(m);
@@ -313,7 +316,7 @@ export class SessionsView {
         .child(div().flex_1().text_size(12).text_color(t.muted).child(`${shown.length}${match.length > shown.length ? ` of ${match.length}` : ""} shown · ${picked} selected${hidden > 0 ? ` (${hidden} hidden by the search)` : ""}`)))
       .children(this.errors().map((e, i) => div().id(`ses-err-${i}`).text_size(12).text_color(t.blocked).child(e)))
       .when(Boolean(this.live?.unknown), (el) => el.child(div().id("ses-unknown").text_size(12).text_color(t.muted)
-        .child("A Claude tab isn't identified yet. A session in its folder or with its title is skipped until it is.")))
+        .child("A Claude tab isn't identified yet (a new one is, after its first message). Until then nothing opens on its machine.")))
       .child(v_flex().id("ses-list").flex_1().min_h(0).overflow_y_scrollbar().gap(2)
         .children(shown.map(rowEl))
         .when(match.length > shown.length, (el) => el.child(div().id("ses-more").p(8).text_size(12).text_color(t.dim).child(`Showing the newest ${SHOW_MAX} of ${match.length}. Type in the search to narrow the list.`)))

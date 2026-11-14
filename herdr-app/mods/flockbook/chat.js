@@ -334,14 +334,19 @@ export class ChatView {
 
   // s27 "Copy full prompt": hand-off files, read once per chat on the tab's machine (where.js readFullPrompt).
   fullKey(file, address = this.address) { return `${address}\n${file}`; }
-  async loadFull(address, file) {
+  // `fresh`: never the read already under way (a press, s28 Codex R2: it may have read the file before a rewrite). Each
+  // read is numbered per file; only the newest one started may store its result (an older one finishing late is dropped).
+  async loadFull(address, file, fresh = false) {
     const key = this.fullKey(file, address);
     const had = this.fullPrompts.get(key);
-    if (had?.pending) return had.pending;
+    if (had?.pending && !fresh) return had.pending;
+    this.fullSeq = (this.fullSeq ?? 0) + 1;
+    const seq = this.fullSeq;
+    (this.fullLatest ??= new Map()).set(key, seq);
     const pending = readFullPrompt(address, file).catch((e) => ({ problem: String(e?.message ?? e) }));
     this.fullPrompts.set(key, { pending });
     const r = await pending;
-    this.fullPrompts.set(key, r.text ? { text: r.text } : { problem: r.problem, at: Date.now() });
+    if (this.fullLatest.get(key) === seq) this.fullPrompts.set(key, r.text ? { text: r.text } : { problem: r.problem, at: Date.now() });
     return r;
   }
   // From the tick: the newest reply's file and those drawn footers named; a failed read is tried again a minute on.
@@ -350,7 +355,10 @@ export class ChatView {
   readAhead(cx) {
     const f = this.feed();
     const lastFooter = f?.rows ? [...f.rows].reverse().find((r) => r.k === "footer")?.id ?? null : null;
-    if (this.fullSig !== undefined && lastFooter !== this.fullSig) for (const [k, v] of [...this.fullPrompts]) if (!v.pending) this.fullPrompts.delete(k);
+    if (this.fullSig !== undefined && lastFooter !== this.fullSig) {
+      // Reads still under way read the file before this reply ended: their results are dropped too (R2).
+      for (const k of [...this.fullPrompts.keys()]) { this.fullPrompts.delete(k); this.fullSeq = (this.fullSeq ?? 0) + 1; (this.fullLatest ??= new Map()).set(k, this.fullSeq); }
+    }
     this.fullSig = lastFooter;
     const want = new Map(this.wantFull);
     this.wantFull.clear();
@@ -382,7 +390,7 @@ export class ChatView {
     if (this.fullBusy) return;
     this.fullBusy = row.id; cx.notify?.();
     let got;
-    try { got = await this.loadFull(address, h.file); } finally { this.fullBusy = null; }
+    try { got = await this.loadFull(address, h.file, true); } finally { this.fullBusy = null; }
     if (!got?.text) {
       notify({ title: `Couldn't read the full prompt (${h.file}): ${got?.problem ?? "unknown error"}. Copy all copies the short one.`, level: "warning", timeout: 5000 });
       cx.notify?.();

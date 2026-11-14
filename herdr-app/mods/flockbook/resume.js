@@ -78,6 +78,21 @@ export function openingNow(machine, sid, now = Date.now()) {
   const row = offer()?.tabs.find((x) => x.sid === sid && sameMachine(x.machine, machine || null));
   return Boolean((row && opening(row, now)) || justOpened(machine || null, sid, now));
 }
+// Claims `sid` on `machine` before anything is awaited (s28 Codex R2: the check and the claim in one synchronous step,
+// so two resumes at once can't both pass): a token, or null when it is being opened already.
+export function claimOpening(machine, sid, now = Date.now()) {
+  if (openingNow(machine, sid, now)) return null;
+  const keep = Object.fromEntries(Object.entries(shared(KEY_OPENED) ?? {}).filter(([, at]) => now - at < CLAIM_MS));
+  setShared(KEY_OPENED, { ...keep, [openedKey(machine || null, sid)]: now });
+  return now;
+}
+// Gives a claim up (its pick could not open), unless a newer one took its place.
+export function releaseOpening(machine, sid, token) {
+  const all = { ...(shared(KEY_OPENED) ?? {}) }, k = openedKey(machine || null, sid);
+  if (all[k] !== token) return;
+  delete all[k];
+  setShared(KEY_OPENED, all);
+}
 // After a tab was opened for `sid`: noted for both ways in, and it leaves the offer (handled, as a Resume click does).
 export function noteOpened(machine, sid, now = Date.now()) {
   const keep = Object.fromEntries(Object.entries(shared(KEY_OPENED) ?? {}).filter(([, at]) => now - at < CLAIM_MS));

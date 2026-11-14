@@ -84,7 +84,7 @@ Enter sends); the vertical tab list on the right shows each tab's program, statu
   `claude --resume`, in the workspace of the project that holds its folder (the `projects` setting), else that machine's "~"
   workspace, else (this computer) the workspace shown when it is this computer's, else a new "~" one there; never on the other
   machine. A session that is open in a tab is not listed (and is skipped if it opened since, while the restart offer is opening
-  it, or while a Claude tab in its folder or with its title isn't identified yet); the list is cached, so reopening is instant,
+  it, or while a Claude tab on its machine isn't identified yet); the list is cached, so reopening is instant,
   and **Refresh** reads the logs again. On Windows it needs
   `claude_machine`, and says so.
 - An account that ran out of usage shows when it comes back, and its tabs say they are likely paused.
