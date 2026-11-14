@@ -156,13 +156,24 @@ ASKS.h = { kind: "question", text: "Should I?" };
 eq("question ask → Needs you", O.groups(ON([["h", "done"]]), "status"), []);
 delete ASKS.h;
 
-// A turn that ended with a shell still running: owner 11-11 18:18 said working; owner 11-12 16:45 changed it —
-// leftover shells alone go by status (Done) with the ⚙ hint; a background AGENT still keeps it working.
+// A turn that ended with a shell still running: owner 11-11 18:18 said working; 11-12 16:45 said Done; owner 11-15 s36
+// ("results waiting · 1 shell running" should count as running): working again — except after a hand-off (below).
 AGENTS.k = ag("Doc 201 follow-ups");
 BG.k = { shells: 1, agents: 0 };
 eq("background shell → hint", S.subStatus(tab("k", "done"))?.hint, "⚙ 1 shell running");
-eq("background shell alone → Done, under Running in the background", O.groups(ON([["k", "done"]]), "status").map((x) => [x.title, x.subs.map((y) => y.title)]), [["Done", ["Running in the background"]]]);
-eq("statusOf: shell alone stays done", O.statusOf(tab("k", "done")), "done");
+eq("s36: background shell → Working, under Running in the background", O.groups(ON([["k", "done"]]), "status").map((x) => [x.title, x.subs.map((y) => y.title)]), [["Working", ["Running in the background"]]]);
+eq("s36: statusOf: a shell → working", O.statusOf(tab("k", "done")), "working");
+eq("s36: subStatus.background with a shell", S.subStatus(tab("k", "done"))?.background, true);
+// The owner's case: ✅ results waiting · ⚙ 1 shell running → working (live work wins: not "waiting on you" yet).
+AGENTS.k = ag("✅ Usage panel review");
+eq("s36: ✅ + shell → hint", S.subStatus(tab("k", "done"))?.hint, "✅ results waiting · ⚙ 1 shell running");
+eq("s36: ✅ + shell → Working", O.groups(ON([["k", "done"]]), "status").map((x) => [x.title, x.subs.map((y) => y.title)]), [["Working", ["Running in the background"]]]);
+eq("s36: ✅ + shell → statusOf working", O.statusOf(tab("k", "done")), "working");
+eq("s36: ✅ + shell → not owner yet", S.subStatus(tab("k", "done"))?.owner, false);
+delete BG.k;
+eq("s36: nothing running → ✅ waits on you", S.subStatus(tab("k", "done"))?.owner, true);
+eq("s36: nothing running → done", O.statusOf(tab("k", "done")), "done");
+AGENTS.k = ag("Doc 201 follow-ups");
 BG.k = { shells: 0, agents: 1 };
 eq("background agent → Working", O.groups(ON([["k", "done"]]), "status").map((x) => x.title), ["Working"]);
 eq("statusOf: agent → working", O.statusOf(tab("k", "done")), "working");

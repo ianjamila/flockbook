@@ -270,8 +270,10 @@ export function overlays(a) {
   const drop = (glyph) => { for (let i = out.length - 1; i >= 0; i--) if (out[i].glyph === glyph && !out[i].ask) out.splice(i, 1); };
   if (b?.ci) drop("⏳");
   if (b?.review) drop("🔍");
-  // Only a background AGENT keeps the tab working (it reports back and the turn goes on); leftover shells alone
-  // (a dev server, a forgotten watch) leave it Done with this hint (owner 11-12 16:45; real CI waits carry ⏳).
+  // Work still running behind the finished turn keeps the tab working: a background agent (it reports back and the
+  // turn goes on) or a shell (owner 11-15 s36: "results waiting · 1 shell running" counts as running; it reverses the
+  // 11-12 16:45 "shells alone → Done"). Shells are leftovers when the turn handed itself to the owner (a hand-off, or a
+  // reply that ends with an ask such as "say merge") or when they watch a merge GitHub already finished.
   // A shell behind a reply that says it waits on CI (asks.js backgroundWork `ci`) is a CI watch: "Waiting on CI",
   // working, ahead of the title's ✅ / 🔀 (owner 11-12 16:49: it sat in Done while CI ran).
   if (b?.ci) out.unshift({ glyph: "⏳", group: "ci", word: "waiting on CI", tip: "its turn ended while it waits on CI (a CI watch runs in the background)", wait: true });
@@ -288,10 +290,17 @@ export function overlays(a) {
   if (nw === "review") out.unshift({ glyph: "🔍", group: "reviewwait", word: "waiting on a review", tip: "it waits on a Codex review job", wait: true });
   if (nw === "ci") out.unshift({ glyph: "⏳", group: "ci", word: "waiting on CI", tip: "it waits on CI", wait: true });
   // Its shells alone, read as that CI / review watch, are that watch: no "⚙ 1 shell running" next to it (s29).
-  if (b && (b.agents || !(b.ci || b.review))) out.push({ glyph: "⚙", group: "background", word: bgWords(b), tip: `its turn ended, but ${bgWords(b)} in the background`, agents: b.agents ?? 0 });
+  if (b && (b.agents || !(b.ci || b.review))) out.push({ glyph: "⚙", group: "background", word: bgWords(b), tip: `its turn ended, but ${bgWords(b)} in the background`, agents: b.agents ?? 0, live: (b.agents ?? 0) > 0 || ((b.shells ?? 0) > 0 && !leftoverShells(a, b)) });
   // Finished with a hand-off (asks.js handoffGiven), nothing running behind it: the Overview's "Hand-off given".
   if (a && a.status !== "working" && a.status !== "blocked" && !b?.agents && !out.some((o) => o.wait) && handoffOf(a.address)) out.push({ glyph: "🤝", group: "handoff", word: "hand-off given", tip: "it finished and gave a hand-off: start a fresh session with its re-entry prompt (or /clear there and paste it)" });
   return out;
+}
+// Whether the shells behind a finished turn are leftovers, not work (overlays): the turn was handed to the owner, or
+// the merge they watch is over.
+function leftoverShells(a, b) {
+  if (handoffOf(a?.address) || askOf(a?.address)?.kind) return true;
+  const st = b?.merge ? prOf(a?.address)?.state : null;
+  return st === "MERGED" || st === "CLOSED";
 }
 // The status a tab's mark shows: working while a shell or agent still runs behind a finished turn.
 export const tabStatus = (tab) => {
@@ -309,7 +318,7 @@ export function subStatus(tab) {
   // Owner 11-14 s29 ("Live work wins"): ✅ means results wait for the owner only on a tab with nothing running (its
   // turn over, no live wait, no background agent). On a working tab it is a hint word: the tab sits under what it does
   // now (In review, Agents at work …), or with no other symbol, under its status with no sub-group.
-  const busy = tab.status === "working" || tabAgents(tab.id)[0]?.status === "working" || list.some((o) => o.wait || (o.group === "background" && o.agents > 0));
+  const busy = tab.status === "working" || tabAgents(tab.id)[0]?.status === "working" || list.some((o) => o.wait || (o.group === "background" && o.live));
   const has = (k) => list.some((o) => o.group === k) && !(busy && k === "results");
   const [key, title] = (live && SUB_GROUPS.find(([k]) => k === live.group)) ?? SUB_GROUPS.find(([k]) => has(k))
     ?? (busy && list.every((o) => o.group === "results") ? [null, ""] : [list[0].group, ""]);
@@ -323,7 +332,7 @@ export function subStatus(tab) {
     // The ask's symbol (🔁 🔀 🗄 💬), for labels that show the title's own symbols but not this one.
     askGlyph: list.find((o) => o.ask)?.glyph ?? null,
     // Work still running behind a finished turn: the tab shows as working.
-    background: list.some((o) => (o.group === "background" && o.agents > 0) || o.wait),
+    background: list.some((o) => (o.group === "background" && o.live) || o.wait),
   };
 }
 // A label with the ask's symbol in front when the label doesn't show it yet (`ss`: subStatus): a title's own
