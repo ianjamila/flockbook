@@ -1,8 +1,8 @@
 // Weekly usage left, at the bottom of the side bar (owner 11-15 s35): for each Claude account (the "accounts" setting)
 // and for Codex, how much of the weekly limit is left. The limit belongs to the account, not the computer, so the
-// reading shown is the freshest one from this computer or any connected machine: the helper's `usage` command (files
+// reading shown is the account's figure from this computer or any connected machine: the helper's `usage` command (files
 // only: no network, no credentials, nothing spent) is asked here every 60 s and on each connected machine every
-// 120 s, and the newest reading per account wins. Everything is kept in ONE shared key; render reads it with
+// 120 s, and per account the latest week's lowest "left" wins (`newer`). Everything is kept in ONE shared key; render reads it with
 // snapShared and calls no helper or host function (s33: Herdr cuts off a slow render).
 import { shared, setShared, home } from "herdr";
 import { div } from "gpui-kit";
@@ -35,8 +35,20 @@ export function readings(data) {
 // A folder compared the same way on every machine: "\" as "/", no trailing slash (s36 review: Windows readings).
 const norm = (p) => String(p ?? "").replace(/\\/g, "/").replace(/\/+$/, "");
 const baseName = (p) => norm(p).split("/").pop();
-// Newest `at` wins; a tie goes to this computer.
-const newer = (a, b) => (!a || b.at > a.at || (b.at === a.at && b.machine === LOCAL && a.machine !== LOCAL) ? b : a);
+// Two resets this close (seconds) are the same week; a new week is days later.
+const SAME_WEEK_S = 3600;
+const resetOf = (r) => (Number.isFinite(r.weekly?.resets_at) ? r.weekly.resets_at : null);
+// Which reading is the account's (s38 live: each session re-saves its own last figure, so a newer reading can be an
+// idle session's old one — the PC showed 32% left 52 s after the Mac's 20%). The latest week wins (a reading without a
+// reset time loses to one with); within one week usage only goes up, so the lowest "left" wins; then the newest
+// `at`; a tie goes to this computer.
+const newer = (a, b) => {
+  if (!a) return b;
+  const ra = resetOf(a), rb = resetOf(b);
+  if (ra !== rb && (ra === null || rb === null || Math.abs(ra - rb) > SAME_WEEK_S)) return (rb ?? -Infinity) > (ra ?? -Infinity) ? b : a;
+  if (b.weekly.left !== a.weekly.left) return b.weekly.left < a.weekly.left ? b : a;
+  return b.at > a.at || (b.at === a.at && b.machine === LOCAL && a.machine !== LOCAL) ? b : a;
+};
 // Claude accounts by email (a reading without one by its config folder's name); Codex by kind. { claude: [{ key, email,
 // configs, reading }], codex: reading|null }; each account holds the newest reading and every config folder seen for it.
 export function merge(list) {

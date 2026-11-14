@@ -36,8 +36,45 @@ fn find<'a>(lines: &'a [Value], config: &str) -> &'a Value {
     lines.iter().find(|l| l["kind"] == "claude" && l["config"] == config).unwrap_or_else(|| panic!("no line for {config}: {lines:?}"))
 }
 
+// s38 live: an idle session's status line keeps re-saving the figure from its last reply (58%, 68%, 75%) while the
+// account is at 80%; "newest file wins" made the panel jump between them (Mac 20% left, PC 32% left, 52 s apart).
+// Within one weekly window usage only goes up, so the latest window's highest reading is the account's figure.
 #[test]
-fn claude_newest_file_per_config_wins() {
+fn claude_an_idle_sessions_stale_figure_does_not_win_within_the_same_window() {
+    let t = tempfile::tempdir().unwrap();
+    let (dir, home) = (t.path().join("statusline"), t.path().join("home"));
+    let a = format!("{}/.claude-eaglewatch", home.display());
+    session(&dir, "busy", &a, Some(weekly(80.0, 1_795_208_400)), 1_000);
+    session(&dir, "idle-a", &a, Some(weekly(58.0, 1_795_208_400)), 1_003);
+    session(&dir, "idle-b", &a, Some(weekly(68.0, 1_795_208_400)), 1_002);
+    let lines = usage::claude_lines(&dir, &home);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["weekly"], json!({"left": 20, "used": 80, "resets_at": 1_795_208_400}));
+    assert_eq!(lines[0]["at"], 1_000_000, "at is the chosen reading's own mtime");
+}
+
+#[test]
+fn claude_a_new_window_wins_over_a_higher_figure_from_the_last_one() {
+    let t = tempfile::tempdir().unwrap();
+    let (dir, home) = (t.path().join("statusline"), t.path().join("home"));
+    let a = format!("{}/.claude", home.display());
+    // After the reset an idle session still says 97% of the old week, touched later than the fresh reading.
+    session(&dir, "fresh", &a, Some(weekly(4.0, 1_795_712_400)), 1_000);
+    session(&dir, "idle-old-week", &a, Some(weekly(97.0, 1_795_107_600)), 1_005);
+    // Same window, a few minutes' jitter in resets_at: still the same window, the higher figure wins.
+    session(&dir, "fresh-later", &a, Some(weekly(6.0, 1_795_712_100)), 990);
+    let l = &usage::claude_lines(&dir, &home)[0];
+    assert_eq!(l["weekly"]["used"], 6, "{l:?}");
+    // Equal figures: the newest file of them gives `at`.
+    let t2 = tempfile::tempdir().unwrap();
+    let dir2 = t2.path().join("statusline");
+    session(&dir2, "x", &a, Some(weekly(50.0, 1_795_208_400)), 2_000);
+    session(&dir2, "y", &a, Some(weekly(50.0, 1_795_208_400)), 2_500);
+    assert_eq!(usage::claude_lines(&dir2, &home)[0]["at"], 2_500_000);
+}
+
+#[test]
+fn claude_one_line_per_config_from_its_latest_window() {
     let t = tempfile::tempdir().unwrap();
     let (dir, home) = (t.path().join("statusline"), t.path().join("home"));
     let (a, b) = (format!("{}/.claude", home.display()), format!("{}/.claude-eaglewatch", home.display()));

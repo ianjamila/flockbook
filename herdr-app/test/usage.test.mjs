@@ -47,13 +47,38 @@ test("the freshest reading wins across this computer and a connected machine", (
   }));
   assert.match(textOf(byId(el, "usage-0-left")), /^40% left$/);
   assert.match(byId(el, "usage-0")._a.tooltip, /on pc-wsl/);
-  // The older one is not mixed in; a tie goes to this computer.
-  const tie = draw(data({ "": [claude("/home/test/.claude", "me@example.test", 50, NOW)], "pc-wsl": [claude("/home/x/.claude", "me@example.test", 40, NOW)] }));
-  assert.match(textOf(byId(tie, "usage-0-left")), /^50% left$/);
+  // The older one is not mixed in; the same figure read at the same time: this computer's.
+  const tie = draw(data({ "": [claude("/home/test/.claude", "me@example.test", 40, NOW)], "pc-wsl": [claude("/home/x/.claude", "me@example.test", 40, NOW)] }));
+  assert.match(textOf(byId(tie, "usage-0-left")), /^40% left$/);
   assert.match(byId(tie, "usage-0")._a.tooltip, /on this computer/);
   // Codex: one account, newest wins.
   const cx = draw(data({ "": [codex(70, NOW - 120_000)], "pc-wsl": [codex(65, NOW - 30_000)] }));
   assert.match(textOf(byId(cx, "usage-2-left")), /^65% left$/);
+});
+
+// s38 live: each session re-saves the figure from its own last reply, so a newer reading can be an idle session's
+// old, higher "left" (PC 32% left read 52 s after the Mac's 20%). Within one week usage only goes up: the latest
+// week's lowest "left" wins; a new week wins over the last one's figure; a few minutes' jitter is the same week.
+test("within one week the lowest left wins, whichever machine read it last", () => {
+  const stale = draw(data({
+    "": [claude("/home/test/.claude", "me@example.test", 20, NOW - 60_000), codex(60, NOW - 60_000)],
+    "pc-wsl": [claude("/home/x/.claude", "me@example.test", 32, NOW - 8_000), codex(74, NOW - 5_000)],
+  }));
+  assert.match(textOf(byId(stale, "usage-0-left")), /^20% left$/);
+  assert.match(byId(stale, "usage-0")._a.tooltip, /on this computer/);
+  assert.match(textOf(byId(stale, "usage-2-left")), /^60% left$/);
+  // After the reset: the new week's 96% left wins over an idle session's 3% of the old week, read later.
+  const fresh = draw(data({
+    "": [claude("/home/test/.claude", "me@example.test", 96, NOW - 60_000, secs(2026, 10, 29, 11, 53))],
+    "pc-wsl": [claude("/home/x/.claude", "me@example.test", 3, NOW - 1_000)],
+  }));
+  assert.match(textOf(byId(fresh, "usage-0-left")), /^96% left$/);
+  // resets_at a few minutes apart is the same week.
+  const jitter = draw(data({
+    "": [claude("/home/test/.claude", "me@example.test", 30, NOW - 60_000, secs(2026, 10, 22, 11, 48))],
+    "pc-wsl": [claude("/home/x/.claude", "me@example.test", 45, NOW - 1_000)],
+  }));
+  assert.match(textOf(byId(jitter, "usage-0-left")), /^30% left$/);
 });
 
 test("percent left, and a bar filled to what is left", () => {
@@ -205,6 +230,8 @@ test("polling: a dropped link keeps the last readings; a failed local helper is 
 test("merge: Claude by email, a reading without one by its folder's name", () => {
   const m = merge(readings(data({ "": [claude("/a/.claude", "A@x.test", 10, 1), claude("/b/.claude-w", null, 20, 1)], "pc": [claude("/c/.claude", "a@x.test", 30, 2), claude("/d/.claude-w", null, 40, 3)] })));
   assert.equal(m.claude.length, 2);
-  assert.equal(m.claude.find((x) => x.email).reading.weekly.left, 30);
-  assert.equal(m.claude.find((x) => !x.email).reading.weekly.left, 40);
+  // One account each (same week): the lowest "left" of its readings, not the newest (s38).
+  assert.equal(m.claude.find((x) => x.email).reading.weekly.left, 10);
+  assert.equal(m.claude.find((x) => !x.email).reading.weekly.left, 20);
+  assert.deepEqual([...m.claude.find((x) => x.email).configs].sort(), ["/a/.claude", "/c/.claude"]);
 });

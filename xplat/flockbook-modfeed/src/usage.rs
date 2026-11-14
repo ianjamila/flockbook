@@ -4,7 +4,8 @@
 //! Claude Code: the status line wrapper (`flockbook-statusline`) saves every session's status line input as
 //! `<folder>/<session id>.json` (`status::folder`); its `rate_limits` hold the account's limits, and its
 //! `transcript_path` (`<config folder>/projects/<project>/<session id>.jsonl`) says which account's session it was.
-//! The newest file (mtime) of each config folder is that account's reading.
+//! Every session re-saves its own last figure, so the account's reading is the latest window's highest one
+//! (`account_reading`), not the newest file.
 //!
 //! Codex: the rollouts under `$CODEX_HOME` (else `~/.codex`) `sessions/YYYY/MM/DD/`; the last `rate_limits` in the
 //! newest rollout that has one.
@@ -75,6 +76,31 @@ fn email_of(config: &Path, home: &Path) -> Option<String> {
     (!e.is_empty()).then(|| e.to_string())
 }
 
+/// Two `resets_at` this close (seconds) are the same weekly window (a new window is days later).
+const SAME_WINDOW_SECS: i64 = 3600;
+
+/// One account's figure from all its sessions' readings (`(mtime ms, weekly)`, newest first). Every session re-saves
+/// the figure from its own last reply, so an idle one keeps an old, lower one (s38 live: 58/68/75 next to 80). Within
+/// a window usage only goes up: the latest window (`resets_at`, ± `SAME_WINDOW_SECS`) and in it the highest figure;
+/// among equal figures the newest file. Readings without a `resets_at` count only when none has one.
+fn account_reading(readings: Vec<(i64, Value)>) -> Option<(i64, Value)> {
+    let resets = |w: &Value| w["resets_at"].as_i64();
+    let latest = readings.iter().filter_map(|(_, w)| resets(w)).max();
+    let used = |w: &Value| w["used"].as_f64().unwrap_or(0.0);
+    readings
+        .into_iter()
+        .filter(|(_, w)| match (latest, resets(w)) {
+            (Some(l), Some(r)) => r >= l - SAME_WINDOW_SECS,
+            (Some(_), None) => false,
+            (None, _) => true,
+        })
+        // Newest first, so on equal figures the first (newest) is kept.
+        .fold(None, |best: Option<(i64, Value)>, (at, w)| match &best {
+            Some((_, b)) if used(b) >= used(&w) => best,
+            _ => Some((at, w)),
+        })
+}
+
 /// One `usage` line per Claude config folder with a weekly reading in `dir` (the status line wrapper's folder).
 /// `home`: where the default folder's `.claude.json` is. Sorted by config folder.
 pub fn claude_lines(dir: &Path, home: &Path) -> Vec<Value> {
@@ -88,7 +114,7 @@ pub fn claude_lines(dir: &Path, home: &Path) -> Vec<Value> {
     // Newest first; the name settles equal times.
     files.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
     files.truncate(CLAUDE_FILES);
-    let mut found: BTreeMap<String, (i64, Value)> = BTreeMap::new();
+    let mut read: BTreeMap<String, Vec<(i64, Value)>> = BTreeMap::new();
     for (at, path) in files {
         if std::fs::metadata(&path).map_or(true, |m| m.len() > CLAUDE_FILE_MAX) {
             continue;
@@ -97,10 +123,10 @@ pub fn claude_lines(dir: &Path, home: &Path) -> Vec<Value> {
         let (Some(config), Some(w)) = (v.get("transcript_path").and_then(Value::as_str).and_then(config_of), v.get("rate_limits").and_then(claude_weekly)) else {
             continue;
         };
-        found.entry(config.to_string()).or_insert((at, w));
+        read.entry(config.to_string()).or_default().push((at, w));
     }
-    found
-        .into_iter()
+    read.into_iter()
+        .filter_map(|(config, readings)| Some((config, account_reading(readings)?)))
         .map(|(config, (at, w))| {
             let email = email_of(Path::new(&config), home);
             json!({"type": "usage", "kind": "claude", "config": config, "email": email, "weekly": w, "at": at})

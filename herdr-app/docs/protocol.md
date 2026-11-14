@@ -391,9 +391,10 @@ Only the weekly window is read out (Claude Code's 5-hour limit is gone; Codex's 
 
 - `kind` `claude`: one line per Claude Code config folder. Read from the status line wrapper's saved inputs
   (`<folder>/<session id>.json`; the folder is the `--dir` of the `flockbook-statusline` command in Claude Code's
-  settings, else `<herdr-app home>/flockbook/statusline`): the newest 300 files by mtime; per config folder the newest
-  file with `rate_limits.seven_day` (the config folder is the part of its `transcript_path` before the last
-  `/projects/`). `at` is that file's mtime. `email`: `oauthAccount.emailAddress` in the folder's own `.claude.json`
+  settings, else `<herdr-app home>/flockbook/statusline`): the newest 1000 files by mtime; per config folder, of its files with `rate_limits.seven_day` (the config folder is
+  the part of its `transcript_path` before the last `/projects/`), the latest week's (`resets_at` within an hour of
+  the latest one) highest `used`, the newest file on a tie: every session re-saves the figure from its own last
+  reply, so the newest file can be an idle session's old one. `at` is that file's mtime. `email`: `oauthAccount.emailAddress` in the folder's own `.claude.json`
   (the default folder, `.claude` under the home, uses `.claude.json` beside it in the home), else null.
 - `kind` `codex`: `$CODEX_HOME` or `~/.codex`, `sessions/YYYY/MM/DD/rollout-*.jsonl`: the newest day folders (today
   back 14 days), newest files first (at most 20), the last `rate_limits` (found at any depth) in the newest file that
