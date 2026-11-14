@@ -409,8 +409,8 @@ const LISTING = {
   const sp2 = [{ id: "wsl/sp7", name: "work", machine: "wsl" }, { id: "sp4", name: "misc", machine: null, active: true }];
   eq("place: shown workspace is this computer's → a tab in it, named", w.ses.placeOf({ cwd: "/Users/you/x", machine: "" }, projs, sp2), { name: "tab.new", args: { space: "sp4", folder: "/Users/you/x" } });
 }
-// 15. s28 (Codex R1 P2): a Claude tab not identified yet blocks a resume into its folder (whatever its title), or every
-// resume on its machine when its folder is unknown; the rest open.
+// 15. s28 (Codex R1 + R2 P2): a Claude tab not identified yet may be any session (a folder or title that differs proves
+// nothing): every resume on its machine waits until it is identified; another machine's open.
 {
   const agents = [AGENT("t5", "sp1", "Something else")];
   const files = { [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: {} } };
@@ -421,8 +421,8 @@ const LISTING = {
     { sid: "s3", account: "HOME", machine: "", cwd: "/Users/you/code/webshop", title: null },
     { sid: "s2", account: "WORK", machine: "", cwd: "/Users/you/code/tools", title: "Tools" },
   ]);
-  eq("unidentified tab in that folder: both webshop picks skipped, tools opened", [r.opened, r.skipped.map((s) => [s.row.sid, s.why]), w.runs.map(([, a]) => a.argv.at(-1))],
-    [1, [["s1", "may be open already"], ["s3", "may be open already"]], ["s2"]]);
+  eq("unidentified tab here: every pick here skipped, whatever its folder or title", [r.opened, r.skipped.map((s) => [s.row.sid, s.why]), w.runs.length],
+    [0, [["s1", "may be open already"], ["s3", "may be open already"], ["s2", "may be open already"]], 0]);
 }
 {
   const agents = [AGENT("t5", "sp1", "")];
@@ -430,6 +430,15 @@ const LISTING = {
   const w = await world({ listing: LISTING, agents, files, spaces: [{ id: "sp1", name: "~", machine: null }] });
   const r = await w.ses.resumeSessions([{ sid: "s2", account: "WORK", machine: "", cwd: "/Users/you/code/tools", title: "Tools" }]);
   eq("unidentified tab, folder unknown: every pick on that machine skipped", [r.opened, r.skipped.map((s) => s.why)], [0, ["may be open already"]]);
+}
+{
+  // An unidentified tab on this computer does not hold back wsl's picks.
+  const agents = [AGENT("t5", "sp1", "")];
+  const files = { [`wsl:${WSL}/.cache/flockbook/cache.json`]: { entries: {} }, [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: {} } };
+  const w = await world({ settings: { claude_machine: "wsl" }, listing: LISTING, agents, files, spaces: [{ id: "wsl/sp7", name: "~", machine: "wsl" }] });
+  await w.where.machineHome("wsl");
+  const r = await w.ses.resumeSessions([{ sid: "w1", account: "HOME", machine: "wsl", cwd: "/home/you/n", title: "t" }]);
+  eq("unidentified tab here: a wsl pick opens", [r.opened, w.runs.map(([, a]) => a.argv.at(-1))], [1, ["w1"]]);
 }
 // 16. s28 (Codex R1 P2): the dialog and the restart offer share "being opened" claims: one never opens what the other
 // is opening or just opened.
@@ -447,6 +456,19 @@ const LISTING = {
   const n = w.runs.length;
   await w.res.resumeOne("s2");
   eq("claims: the offer's Resume opens nothing the dialog just opened", [w.runs.length - n, w.res.offer()], [0, null]);
+}
+{
+  // s28 (Codex R2 P2): two resumes at once (two dialogs, a double press) claim before any wait: one tab, not two.
+  const files = { [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: {} } };
+  const w = await world({ listing: LISTING, files, spaces: [{ id: "sp1", name: "~", machine: null }] });
+  const pick = () => [{ sid: "s2", account: "WORK", machine: "", cwd: "/Users/you/code/tools", title: "Tools" }];
+  const [a, b] = await Promise.all([w.ses.resumeSessions(pick()), w.ses.resumeSessions(pick())]);
+  eq("overlap: one tab", [w.runs.length, a.opened + b.opened, [...a.skipped, ...b.skipped].map((s) => s.why)], [1, 1, ["being opened already"]]);
+  // A claim given up (the pick couldn't open) does not hold the session back.
+  const w2 = await world({ listing: LISTING, files, spaces: [{ id: "sp1", name: "~", machine: null }] });
+  await w2.ses.resumeSessions([{ sid: "s2", account: "GONE", machine: "", cwd: "/Users/you/code/tools", title: "Tools" }]);
+  const r2 = await w2.ses.resumeSessions(pick());
+  eq("overlap: a failed pick's claim is released", r2.opened, 1);
 }
 console.log(bad ? `${bad} FAILED` : "all passed");
 process.exit(bad ? 1 : 0);

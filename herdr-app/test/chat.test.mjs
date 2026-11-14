@@ -625,6 +625,26 @@ test("Copy full prompt: a rewritten file is copied as it is now; a chat change r
   assert.equal(log.overlays.at(-1).props.items[0].args.text, "Third version.");
 });
 
+// s28 (Codex R2 P2): a read started before the file was rewritten and finishing after it never wins: a press reads
+// anew (not the read already under way), and the old read's late result is dropped.
+test("Copy full prompt: a slow read of the old file loses to the press's own read", async () => {
+  fake.exec = () => jl(header, logLine("c1"), { type: "splice", at: 0, count: 3 }, user("u1", "go"), asst("a1", shortReply),
+    { type: "row", id: "f-a1", k: "footer", text: "10:04" }, end);
+  let file = "old", slow = null;
+  fake.readText = (p) => { if (!p.endsWith("/handoffs/w.md")) return null; const v = file; if (!slow) return new Promise((ok) => { slow = () => ok(v); }); return v; };
+  const cx = fakeCx(); const v = new ChatView(cx); await cx.settle(); v.width = 900;
+  const root = v.render(cx);
+  const tcx = fakeCx(); v.tick(tcx);          // the tick's read ahead starts, and hangs with "old"
+  file = "new";
+  let copied = null;
+  const c = { ...fakeCx(), write_to_clipboard: (s) => { copied = s; } };
+  pressAt(root, 700); lastList._h.on_item_click("f-a1", c); await Promise.all(c.tasks);
+  assert.equal(copied, "new", "the press read the file itself");
+  slow(); await Promise.all(tcx.tasks);
+  lastList._h.on_item_secondary_click("a1", { button: "right", position: { x: 0, y: 4 }, local_position: { x: 50, y: 4 } }, cx);
+  assert.equal(log.overlays.at(-1).props.items[0].args.text, "new", "the old read's late result was dropped");
+});
+
 test("Copy full prompt on another machine's tab reads the file there, with that machine's home", async () => {
   fake.agents = [agent("wsl/t3", "idle")];
   fake.machines = [{ name: null, layout: "ready" }, { name: "wsl", layout: "ready" }];

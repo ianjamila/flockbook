@@ -66,4 +66,13 @@ const long = "x".repeat(1300);
 const longScreen = (tail) => ` MCP server “supabase” requests your input\n ${long} ${tail}\n ❯ Accept    Decline`;
 eq("full text kept past 1200 chars", elicitation(longScreen("project A"))?.full?.endsWith("project A"), true);
 eq("display text still cut", elicitation(longScreen("project A"))?.text.length <= 1200, true);
+// s28 (Codex R2 P1): a long request (more than 60 lines) whose message holds a button-like line: the real controls
+// below are still found (the whole screen is searched), and controls followed by anything but the dialog's footer
+// (keys hints, blank or box lines) can't be trusted: no answer from the card.
+const longMsg = [" MCP server “x” requests your input", ...Array.from({ length: 30 }, (_, i) => ` line ${i}`), " Accept ❯ Decline",
+  ...Array.from({ length: 40 }, (_, i) => ` more ${i}`), "", " ❯ Accept    Decline", "", " Esc to cancel · ↑↓ to navigate"].join("\n");
+eq("focus: long request, button-like message line → the real controls (accept)", elicitFocus(longMsg), "accept");
+eq("long request: its text runs to the real controls", elicitation(longMsg)?.full.endsWith("more 39"), true);
+eq("controls followed by other text → not trusted", elicitFocus(" MCP server “x” requests your input\n Go?\n ❯ Accept    Decline\n Some other words here"), null);
+eq("…and no card text either", elicitation(" MCP server “x” requests your input\n Go?\n ❯ Accept    Decline\n Some other words here"), null);
 process.exit(bad ? 1 : 0);
