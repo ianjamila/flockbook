@@ -32,6 +32,22 @@ eq("2nd paragraph, wrapped", ciWaiting(`⏺ Pushed the fix.\n\n  Next I'm waitin
 eq("a tool's output below the reply is not the reply", ciWaiting(`⏺ Fixed it.\n\n⏺ Bash(gh pr checks 320)\n  ⎿  waiting for CI to finish\n\n${foot(" · 1 shell")}`), false);
 eq("plain shell: ci absent", backgroundWork(`⏺ Started the dev server.\n\n${foot(" · 1 shell")}`), { shells: 1, agents: 0 });
 
+// Owner 11-14 02:54 ("why are you saying that you are done in overview"): a turn waiting on a GitHub build (a
+// workflow run, Actions) is a CI wait too, not Done.
+const gh = (text) => ciWaiting(`⏺ ${text}\n\n${foot(" · 1 shell")}`);
+eq("real s24: helper build still running on GitHub", gh("The PC helper build is still running on GitHub (fork run 43486805388); I'll stage it when it ends."), true);
+eq("waiting for the GitHub build", gh("Pushed. Waiting for the GitHub build to finish."), true);
+eq("waiting on the GitHub Actions run", gh("Waiting on the GitHub Actions run for the Windows helper."), true);
+eq("waiting for the workflow run", gh("Started the helpers workflow on the fork; waiting for the workflow run."), true);
+eq("the workflow run is in progress", gh("The helpers.yml workflow run is in progress; about 10 minutes left."), true);
+eq("Actions run still running", gh("The Actions run 4348 is still running."), true);
+eq("waiting for the build", gh("Waiting for the build on the fork."), true);
+eq("the release build is running", gh("The release build is running on GitHub now."), true);
+eq("GitHub build passed: not waiting", gh("The GitHub build passed; the helper is installed."), false);
+eq("pushed to GitHub: not waiting", gh("Pushed the branch to GitHub and updated the PR body."), false);
+eq("a local build that finished: not waiting", gh("The build finished locally in 40 s; all tests pass."), false);
+eq("GitHub build wait carries ci", backgroundWork(`⏺ Waiting for the GitHub build.\n\n${foot(" · 1 shell")}`), { shells: 1, agents: 0, ci: true });
+
 // Owner 11-12 s14 ("this is waiting on codex recheck not me"): a finished turn whose shell runs a Codex review.
 const t1h = `⏺ The live resume poll is running (last ran 28 s ago, 11 sessions remembered) and its lock is free. Waiting\n  on the Codex recheck.\n\n✻ Worked for 11m 21s · 1 shell still running\n\n${foot(" · 1 shell")}`;
 eq("Codex recheck wait (t1h): review", backgroundWork(t1h), { shells: 1, agents: 0, review: true });

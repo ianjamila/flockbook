@@ -276,7 +276,10 @@ export function backgroundWork(screen) {
 }
 const REVIEW_WAIT = /\bwait(?:ing)?\s+(?:for|on)\s+(?:the\s+)?(?:Codex|Fable)\b|\b(?:Codex|Fable)\s+(?:review|recheck|round|rerun)\b[^.\n]{0,60}?\b(?:still running|is running|running in the background|in progress)\b/i;
 const MERGE_WAIT = /\b(?:in(?:to)?|through|joins?|joined|entered)\s+(?:GitHub's\s+|the\s+)?(?:merge\s+)?queue\b|\bonce\s+(?:#\d+|it|they|both|the PRs?)\s+(?:merges?|lands?|is merged|are merged)\b|\bmerge queue\b[^.\n]{0,60}?\b(?:now|running|still|in progress|pending)\b|\bwait(?:ing)?\s+(?:for|on)\s+(?:the\s+)?(?:merge|merges)\b|\b(?:both\s+)?merges?\s+once\b|\bmerge (?:job|gate|watch|run)\b[^.\n]{0,60}?\b(?:still running|is running|running|in progress|pending)\b|\bstill merging\b|\bis merging\b/i;
-const CI_WAIT = /\bwait(?:ing)?\s+(?:for|on)\s+(?:the\s+)?CI\b|\bCI\b[^.\n]{0,80}?\b(?:still running|is running|in progress|pending|to finish)\b|\bwhile CI runs\b/i;
+// A GitHub build (Actions, a workflow run, "the build") counts as CI too (owner 11-14 02:54: a tab waiting on "the
+// helper build … on GitHub" sat under Done).
+const CI_THING = String.raw`(?:CI|GitHub(?:\s+Actions)?|Actions|(?:[\w.-]+\s+)?workflow(?:\s+run)?|(?:[\w.-]+\s+)?build)`;
+const CI_WAIT = new RegExp(String.raw`\bwait(?:ing)?\s+(?:for|on)\s+(?:the\s+)?${CI_THING}\b|\b${CI_THING}\b[^.\n]{0,80}?\b(?:still running|is running|in progress|pending|to finish)\b|\bwhile CI runs\b`, "i");
 // The last reply of the turn above the input box (`top`: the box's top rule): its last "⏺ " text that is not a tool
 // call ("⏺ Bash(…)") or a background notice, with its wrapped lines AND its later paragraphs (indented text after
 // blank lines; s13 Codex R1 P2), up to the next unindented line or a tool's ⎿ output. "" when there is none.
