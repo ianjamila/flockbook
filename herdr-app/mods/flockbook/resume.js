@@ -8,7 +8,9 @@
 // process, new conversation) is just forgotten. Nothing runs without a click.
 import { terminals, shared, setShared, readTextFile, appHome, home, run, notify } from "herdr";
 import { agents, spaces } from "./parked.js";
-import { accounts, claudeCommand, sessionOfLog } from "./accounts.js";
+import { accounts, claudeCommand, claudeRun, sessionOfLog } from "./accounts.js";
+import { claudeMachine, localWindows, connected, machineOf, terminalOf, remoteEntries, knownHome, sameMachine } from "./where.js";
+import * as sidecar from "./sidecar.js";
 
 export const KEY_RESUME = "flockbook.resume.v1";   // { at, tabs: { [sid]: rec } }
 export const KEY_OFFER = "flockbook.resume.offer";   // { at, tabs: [rec] } or null
@@ -72,25 +74,43 @@ async function helperCache() {
   try { const t = await readTextFile(`${appHome()}/flockbook/cache.json`); return t ? JSON.parse(t) : null; } catch { return null; }
 }
 
-// The local Claude tabs now: { tabs (by session), sids, pids, unknown (a live Claude tab the helper hasn't identified
-// yet), unknownTitles (their titles) }.
+// The Claude tabs looked at now: this computer's own (not on Windows: no /usr/bin/env to resume them with) and those on
+// the "claude_machine" while it is connected (s26: the PC resumes its WSL tabs; a computer that doesn't name that
+// machine never does, so two computers never both resume one session). { tabs (by session), sids, pids, looked
+// (machine names looked at, "" = this computer), unknown (a live Claude tab the helper hasn't identified yet),
+// unknownTitles (their titles) }. Process ids are per machine ("wsl:30"), so two machines' never mix.
 async function liveNow(now) {
   const subs = new Set(terminals().filter((t) => t.parent).map((t) => t.address));
-  const claudes = agents().filter((a) => a.app === "claude-code" && a.address && !a.address.includes("/") && !subs.has(a.address));
-  const entries = (await helperCache())?.entries ?? {};
+  const cm = claudeMachine(), looked = new Set();
+  if (!localWindows()) looked.add("");
+  const remote = cm && connected(cm) ? await remoteEntries(cm) : null;
+  if (remote) looked.add(cm);
+  const claudes = agents().filter((a) => a.app === "claude-code" && a.address && !subs.has(a.address) && looked.has(machineOf(a.address) ?? ""));
+  const entries = looked.has("") ? (await helperCache())?.entries ?? {} : {};
   const tabs = {}, sids = new Set(), pids = new Set(), unknownTitles = new Set();
   let unknown = false;
   for (const a of claudes) {
-    const e = entries[a.address], s = sessionOf(e?.path);
-    if (!s) { unknown = true; if (plainTitle(a.title)) unknownTitles.add(plainTitle(a.title)); continue; }
+    const m = machineOf(a.address);
+    const e = m ? remote[terminalOf(a.address)] : entries[a.address], s = sessionOf(e?.path, accounts(), m ? knownHome(m) : home());
+    if (!s) {
+      unknown = true; if (plainTitle(a.title)) unknownTitles.add(plainTitle(a.title));
+      // The helper there has no entry for it yet: a status call through this computer's helper makes one.
+      if (m) sidecar.status(a.address);
+      continue;
+    }
     sids.add(s.sid);
-    for (const p of e.pids ?? []) pids.add(p);
-    tabs[s.sid] = { sid: s.sid, account: s.account, cwd: e.cwd ?? home(), pids: e.pids ?? [], terminal: a.address, space: a.space, spaceName: a.space_name,
-      name: ownName(a), title: plainTitle(a.title) || null, at: now };
+    const own = (e.pids ?? []).map((p) => pidKey(m, p));
+    for (const p of own) pids.add(p);
+    tabs[s.sid] = { sid: s.sid, account: s.account, cwd: e.cwd ?? (m ? knownHome(m) : home()), pids: own, terminal: a.address, space: a.space, spaceName: a.space_name,
+      name: ownName(a), title: plainTitle(a.title) || null, at: now, ...(m ? { machine: m } : {}) };
   }
-  return { tabs, sids, pids, unknown, unknownTitles };
+  return { tabs, sids, pids, looked, unknown, unknownTitles };
 }
+// A process id as remembered: a bare number on this computer (as before), "machine:pid" on another.
+const pidKey = (m, p) => (m ? `${m}:${p}` : p);
 const running = (rec, live) => live.sids.has(rec.sid) || (rec.pids ?? []).some((p) => live.pids.has(p));
+// Whether a remembered session's machine was looked at in `live` (this computer: "").
+const lookedAt = (rec, live) => live.looked.has(rec.machine ?? "");
 
 export async function resumeTick() {
   const start = Date.now(), busy = shared(KEY_TICK);
@@ -118,17 +138,33 @@ async function tick(mine) {
   // while a tab was unidentified are not downtime (R2 P2), and a real gap before them still counts (R1 P2).
   const prev = was.polledAt ?? was.at;
   const gapMax = Math.max(was.gapMax ?? 0, prev ? now - prev : 0);
+  // Remembered sessions by where they run (s26): a machine no longer the "claude_machine" (or this computer, when it
+  // can't resume here) → forgotten; one not looked at now (disconnected) → set aside as it is, neither live nor lost;
+  // the rest are judged. How long a machine was away counts as downtime for its sessions when it is back (a WSL
+  // restart takes its core down with it).
+  const cm = claudeMachine(), aside = {}, judged = {}, away = { ...(was.away ?? {}) }, awayFor = {};
+  for (const m of Object.keys(away)) if (m !== cm) delete away[m];
+  if (cm && !live.looked.has(cm)) away[cm] ??= now;
+  else if (cm && away[cm]) { awayFor[cm] = now - away[cm]; delete away[cm]; }
+  for (const [sid, x] of Object.entries(was.tabs ?? {})) {
+    if (x.machine ? x.machine !== cm : !live.looked.has("")) continue;
+    if (lookedAt(x, live)) judged[sid] = x; else aside[sid] = x;
+  }
   // A live Claude tab whose session the helper has not found yet: no decision now (it would look gone).
-  if (live.unknown) { setShared(KEY_RESUME, { at: was.at ?? now, polledAt: now, gapMax, tabs: { ...was.tabs, ...tabs } }); return; }
-  const lost = lostSessions(was.tabs, { sids, pids }, gapMax).offer.filter((x) => !keep[x.sid]);
+  if (live.unknown) { setShared(KEY_RESUME, { at: was.at ?? now, polledAt: now, gapMax, away, ...(Object.keys(awayFor).length ? { awayFor } : {}), tabs: { ...aside, ...judged, ...tabs } }); return; }
+  // Away time noted by a poll that had to wait for an unidentified tab still counts.
+  for (const [m, ms] of Object.entries(was.awayFor ?? {})) if (m === cm) awayFor[m] = Math.max(awayFor[m] ?? 0, ms);
+  const byMachine = {};
+  for (const [sid, x] of Object.entries(judged)) (byMachine[x.machine ?? ""] ??= {})[sid] = x;
+  const lost = Object.entries(byMachine).flatMap(([m, group]) => lostSessions(group, { sids, pids }, Math.max(gapMax, awayFor[m] ?? 0)).offer).filter((x) => !keep[x.sid]);
   if (lost.length) {
     const cur = offer()?.tabs ?? [];
     const add = lost.filter((x) => !cur.some((y) => y.sid === x.sid));
     setShared(KEY_OFFER, { at: now, tabs: [...cur, ...add] });
     if (add.length) notify?.(`${add.length} Claude ${add.length === 1 ? "session was" : "sessions were"} open before the restart. Resume ${add.length === 1 ? "it" : "them"} from the Overview.`);
   }
-  // What is live now is what is remembered; the offered ones live on in the offer.
-  setShared(KEY_RESUME, { at: now, polledAt: now, gapMax: 0, tabs });
+  // What is live now (and what waits for its machine) is what is remembered; the offered ones live on in the offer.
+  setShared(KEY_RESUME, { at: now, polledAt: now, gapMax: 0, away, tabs: { ...aside, ...tabs } });
 }
 
 // Opens a tab that resumes the offered session `sid`; then it leaves the offer. Its row is claimed before anything is
@@ -143,6 +179,12 @@ export async function resumeOne(sid, { quiet = false } = {}) {
   const live = await liveNow(now);
   const rec = offer()?.tabs.find((x) => x.sid === sid);
   if (!rec || rec.claimAt !== now) return false;   // dismissed meanwhile, or another click took it over
+  // Its machine is not connected now: whether it runs there can't be told, so nothing opens (s26).
+  if (!lookedAt(rec, live)) {
+    patchOffer(sid, { claimAt: null });
+    if (!quiet) notify?.(`${rec.machine ?? "This computer"} isn't connected now, so “${rec.title ?? "that session"}” can't be checked or resumed yet. Try again when it is back.`);
+    return false;
+  }
   if (running(rec, live)) { markHandled([sid]); dropFromOffer(sid); return false; }
   const sameTitle = Boolean(rec.title) && live.unknownTitles.has(rec.title);
   if (live.unknown && (sameTitle || !(rec.unsureAt && now - rec.unsureAt >= UNSURE_WAIT_MS))) {
@@ -152,13 +194,31 @@ export async function resumeOne(sid, { quiet = false } = {}) {
       : "A Claude tab isn't identified yet — it could be that session. Click Resume again in half a minute.");
     return "wait";
   }
-  const argv = resumeArgv(rec);
+  // On another machine (s26): resumed there, in its workspace if that is still there, else in a new workspace on that
+  // machine — never on this computer. Its machine away or unreachable: the row stays, for a later click.
+  const c = await resumeCommand(rec);
+  if (c?.unreachable) {
+    patchOffer(sid, { claimAt: null });
+    if (!quiet) notify?.(`Couldn't reach ${c.unreachable} to resume “${rec.title ?? "that session"}”. Try again when it is back.`);
+    return false;
+  }
+  const argv = c;
   if (argv) {
-    const space = spaces().some((s) => s.id === rec.space) ? rec.space : undefined;
-    run("tab.new", { ...(space ? { space } : {}), folder: rec.cwd, argv, ...(rec.name ? { name: rec.name } : {}) });
+    const space = spaces().find((s) => s.id === rec.space && sameMachine(s.machine, rec.machine));
+    if (space || !rec.machine) run("tab.new", { ...(space ? { space: space.id } : {}), folder: rec.cwd, argv, ...(rec.name ? { name: rec.name } : {}) });
+    else run("space.new", { machine: rec.machine, folder: rec.cwd, argv, ...(rec.name ? { tab: rec.name } : {}) });
   }
   markHandled([sid]); dropFromOffer(sid);
   return Boolean(argv);
+}
+// The argv that resumes `rec` where it ran: this computer (resumeArgv), or its machine (claudeRun there); null for an
+// account no longer set; { unreachable } when that machine can't be reached.
+export async function resumeCommand(rec) {
+  if (!rec?.sid) return null;
+  if (!rec.machine) return resumeArgv(rec);
+  const c = await claudeRun(rec.account, ["--resume", rec.sid], rec.machine);
+  if (c?.unreachable) return c;
+  return c?.cmd ? [c.cmd, ...c.args] : null;
 }
 export async function resumeAll() {
   let wait = 0;

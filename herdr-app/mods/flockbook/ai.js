@@ -19,7 +19,8 @@ import { exec, hc, home, appHome, terminals, shared, setShared } from "herdr";
 import { agents, spaces } from "./parked.js";
 import { setting } from "./config.js";
 import { sessionTopic } from "./state.js";
-import { accountOf, accountName, claudeCommand } from "./accounts.js";
+import { accountOf, accountName, claudeRun } from "./accounts.js";
+import { claudeMachine, localWindows, NEEDS_MACHINE } from "./where.js";
 export { accountOf, accountName };
 
 const FLAGS = ["-p", "--model", "haiku", "--setting-sources", "local", "--strict-mcp-config", "--tools", "", "--disable-slash-commands", "--no-session-persistence"];
@@ -303,9 +304,14 @@ function capLeft(account) {
 // "rewrite" (asked for) or "summary". The one gate every call goes through: known account, not on pause, under cap.
 export async function askHaiku(system, prompt, timeout = 60_000, account = null, purpose = "about") {
   const now = Date.now(), off = localOffset();
-  // An account no longer in the "accounts" setting is unknown too (claudeCommand gives null).
-  const argv = account ? claudeCommand(account, [...FLAGS, "--system-prompt", system, prompt]) : null;
+  // Where claude runs: the "claude_machine" (where.js), else this computer — which can't on Windows (no /usr/bin/env).
+  const machine = claudeMachine();
+  if (!machine && localWindows()) return { error: NEEDS_MACHINE, kind: "needs-machine" };
+  // An account no longer in the "accounts" setting is unknown too (claudeRun gives null).
+  const argv = account ? await claudeRun(account, [...FLAGS, "--system-prompt", system, prompt], machine) : null;
   if (!argv) return { error: failureText("unknown-account", null, 0, now, off), kind: "unknown-account" };
+  // That machine is not reachable now (its home can't be learnt): no pause, the next try asks again.
+  if (argv.unreachable) return { error: `Couldn't reach ${argv.unreachable} to run Claude there. It tries again in a few minutes.`, kind: "unreachable" };
   const who = accountName(account);
   const cool = coolOf(account);
   if (cool) return { error: failureText(cool.kind, who, cool.until, now, off), kind: cool.kind, until: cool.until, paused: true };
@@ -313,8 +319,8 @@ export async function askHaiku(system, prompt, timeout = 60_000, account = null,
   count(account, purpose);
   let r;
   try {
-    const [cmd, args] = argv;
-    r = await exec(cmd, args, { cwd: `${appHome()}/flockbook`, timeout });
+    // On another machine it starts in that machine's home (exec `on`); here, in Flockbook's own folder.
+    r = await exec(argv.cmd, argv.args, argv.on ? { on: argv.on, timeout } : { cwd: `${appHome()}/flockbook`, timeout });
   } catch (e) { r = { code: null, stdout: "", stderr: "", error: String(e?.message ?? e) }; }
   const out = String(r.stdout ?? "").trim();
   if (r.code === 0 && out) {

@@ -13,15 +13,18 @@ import { usageLines, cooledAccounts, accountName, clockText, localOffset, autoPa
 import { ghCounts } from "./asks.js";
 import { accounts } from "./accounts.js";
 import { projects } from "./automove.js";
+import { claudeMachine, localWindows, NEEDS_MACHINE } from "./where.js";
 // The accounts in use (the "accounts" setting) and the project workspaces (the "projects" setting), in words.
 export function accountsLine() {
   const list = accounts();
   const which = list.length ? list.map((a) => accountName(a.mark)).join(" · ") : "One account: the default one (~/.claude).";
-  return `${which} The About lines and Summarize run as each tab's own account. Several accounts: list them in config.json ("accounts", see the README); each one's status line must show its mark.`;
+  // Where claude runs for them (s26): the "claude_machine", else this computer — which can't on Windows.
+  const cm = claudeMachine(), where = cm ? ` Claude runs on ${cm} for them (config.json "claude_machine"); the accounts' folders are there.` : localWindows() ? ` ${NEEDS_MACHINE}` : "";
+  return `${which} The About lines and Summarize run as each tab's own account.${where} Several accounts: list them in config.json ("accounts", see the README); each one's status line must show its mark.`;
 }
 export function projectsLine() {
   const list = projects();
-  return list.length ? `Projects: ${list.map((p) => p.name).join(", ")} (config.json "projects").` : "No projects are set yet (config.json \"projects\", see the README), so nothing moves.";
+  return list.length ? `Projects: ${list.map((p) => (p.machine ? `${p.name} on ${p.machine}` : p.name)).join(", ")} (config.json "projects").` : "No projects are set yet (config.json \"projects\", see the README), so nothing moves.";
 }
 // "Today: Work account (WORK): automatic 14 of 200 · Rewrite 2 · Summarize 1 requests (…)", the GitHub checks per hour
 // (s13 F5) and any account on pause (ai.js). Requests, not tokens.

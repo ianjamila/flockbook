@@ -14,21 +14,33 @@ import { spaces, agents } from "./parked.js";
 import * as sidecar from "./sidecar.js";
 import { setting, expandHome } from "./config.js";
 import { sessionTopic } from "./state.js";
+import { machineOf, bareId, sameMachine, knownHome, machineHome, logEntry, execAt, unixAt } from "./where.js";
 
 // The project workspaces, from the "projects" setting (config.json), e.g.
 //   "projects": [{ "workspace": "webshop", "folder": "~/code/webshop", "title": "web\\s*shop" },
 //                { "workspace": "tools", "folder": "~/code/tools", "suggest_only": true }]
 // `title`: a pattern (any case) a session's title matches when it is about that project (none: only its folder
-// counts); `suggest_only`: never moved automatically, only offered (suggestTick). None set: nothing moves.
+// counts); `suggest_only`: never moved automatically, only offered (suggestTick); `machine`: the machine its folder and
+// workspace are on (s26; none = this computer) — only that machine's tabs move there, between its own workspaces.
+// None set: nothing moves.
 // <projects-pure>
-export function projectList(v, homeDir) {
+// `homeOf`: a home folder, or (machine) → that machine's home (null while not known: a "~" folder is then unset, so
+// only the title counts until it is).
+export function projectList(v, homeOf) {
   if (!Array.isArray(v)) return [];
-  return v.map((p) => ({ name: p.workspace, folder: expandHome(String(p.folder), homeDir).replace(/\/+$/, ""),
-    title: p.title ? new RegExp(p.title, "i") : null, suggestOnly: p.suggest_only === true }));
+  return v.map((p) => {
+    const machine = p.machine ?? null, h = typeof homeOf === "function" ? homeOf(machine) : homeOf;
+    const f = String(p.folder), folder = /^~(\/|$)/.test(f) && !h ? null : expandHome(f, h).replace(/\/+$/, "");
+    return { name: p.workspace, folder, title: p.title ? new RegExp(p.title, "i") : null, suggestOnly: p.suggest_only === true, machine };
+  });
 }
+// The projects of one machine (null: this computer).
+export const projectsOn = (list, machine) => list.filter((p) => (p.machine ?? null) === (machine ?? null));
 export const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // </projects-pure>
-export const projects = () => projectList(setting("projects"), home());
+export const projects = () => projectList(setting("projects"), (m) => (m ? knownHome(m) : home()));
+// Learns the home of every machine a project is on (once; where.js remembers it), so their "~" folders resolve.
+async function learnHomes() { for (const m of new Set(projects().map((p) => p.machine).filter(Boolean))) await machineHome(m); }
 export const TICK_MS = 20_000;
 const MIN_AGE_MS = 60_000;          // a new session settles first (the owner may still be typing its first message)
 const RECHECK_MS = 120_000;         // a session with no clear project is looked at again this often
@@ -45,9 +57,9 @@ const file = () => `${appHome()}/flockbook/automove.json`;
 const looked = new Map();           // key → when its log was last scored (this copy only; a rescore is cheap)
 const firstSeen = new Map();        // address → when this copy first saw it (when the core gives no start time)
 
-const isHome = (s) => !s.machine && s.name === "~";
+const isHome = (s) => s.name === "~";
 const keyOf = (t) => `${t.address}@${t.created_ms ?? 0}`;
-export const projectSpace = (p, list = spaces()) => list.find((s) => !s.machine && s.name.toLowerCase() === p.name.toLowerCase()) ?? null;
+export const projectSpace = (p, list = spaces()) => list.find((s) => (s.machine ?? null) === (p.machine ?? null) && s.name.toLowerCase() === p.name.toLowerCase()) ?? null;
 
 // The one project a title names, else null (none, or both).
 export function titleProject(title, list = projects()) {
@@ -91,24 +103,17 @@ async function until(cx, test, ms) {
 }
 const hex = (n) => Array.from({ length: n }, () => Math.floor(Math.random() * 16).toString(16)).join("");
 
-// Lines of the log in each project's folder, and (ALL) lines naming any folder.
-async function scores(address) {
-  let path = null;
-  const read = async () => { try { return JSON.parse(await readTextFile(sidecar.cachePath()) ?? "{}")?.entries?.[address]?.path ?? null; } catch { return null; } };
-  path = await read();
-  if (!path) { await sidecar.status(address); path = await read(); }
+// Lines of the log in each project's folder, and (ALL) lines naming any folder. The log and grep are on the tab's
+// machine (s26: where.js; the helper there keeps its log path); this computer on Windows has no grep → null.
+async function scores(address, projs = projectsOn(projects(), machineOf(address))) {
+  const m = machineOf(address);
+  if (!unixAt(m)) return null;
+  const path = (await logEntry(address))?.path;
   if (!path) return null;
+  const count = async (re) => { const r = await execAt(m, "/usr/bin/grep", ["-c", "-E", re, path]); return parseInt(String(r?.stdout ?? "").trim(), 10) || 0; };
   const out = {};
-  for (const p of projects()) {
-    try {
-      const r = await exec("/usr/bin/grep", ["-c", "-E", `"(cwd|file_path)":"${escapeRe(p.folder)}(/|")`, path]);
-      out[p.name] = parseInt(String(r.stdout).trim(), 10) || 0;
-    } catch { out[p.name] = 0; }
-  }
-  try {
-    const r = await exec("/usr/bin/grep", ["-c", "-E", `"(cwd|file_path)":"/`, path]);
-    out[ALL] = parseInt(String(r.stdout).trim(), 10) || 0;
-  } catch { out[ALL] = 0; }
+  for (const p of projs) out[p.name] = p.folder ? await count(`"(cwd|file_path)":"${escapeRe(p.folder)}(/|")`) : 0;
+  out[ALL] = await count(`"(cwd|file_path)":"/`);
   return out;
 }
 
@@ -124,7 +129,8 @@ export async function moveTerminal(cx, address, target) {
 async function parkAndAdopt(cx, address, target) {
   run("terminal.park", { terminal: address });
   if (!(await until(cx, () => !panes().some((p) => p.terminal === address), 8000))) return false;
-  const r = await hc(["label", address, `herdr.space=${target.id}`, `herdr.tab=tb${hex(32)}`]);
+    // Labels on a machine name its space without the "machine/" its id carries here (herdr.d.ts).
+  const r = await hc(["label", address, `herdr.space=${bareId(target.id)}`, `herdr.tab=tb${hex(32)}`]);
   const there = () => panes().find((p) => p.terminal === address && spaces().find((s) => s.id === target.id)?.tabs.some((t) => t.id === p.tab));
   if (r.code !== 0 || !(await until(cx, () => Boolean(there()), 8000))) {
     // Not adopted: never leave it without a pane (it would vanish from every screen).
@@ -142,6 +148,7 @@ export async function autoMoveTick(cx) {
   const now = Date.now(), at = shared(KEY_AT);
   if (at && now - at < TICK_MS - 2000) return;
   setShared(KEY_AT, now);
+  await learnHomes();
   const done = { ...(await loadDone()) };
   let changed = false;
   const all = spaces(), byAddr = new Map(terminals().map((t) => [t.address, t]));
@@ -149,6 +156,9 @@ export async function autoMoveTick(cx) {
   for (const a of agents()) {
     const t = byAddr.get(a.address);
     if (!t || t.parent) continue;
+    // Only towards its own machine's projects (a Mac tab never goes to a WSL workspace, nor the other way).
+    const mine = projectsOn(projects(), machineOf(a.address));
+    if (!mine.length) continue;
     const k = keyOf(t);
     if (done[k] || shared(KEY_MOVING)?.[a.address]) continue;
     // Seen outside "~": the owner's choice from now on (also when they later drag it into "~").
@@ -157,12 +167,12 @@ export async function autoMoveTick(cx) {
     if (!tab || tab.panes !== 1 || (space.active && tab.active)) continue;
     if (!firstSeen.has(a.address)) firstSeen.set(a.address, now);
     if (now - (t.created_ms ?? firstSeen.get(a.address)) < MIN_AGE_MS) continue;
-    let p = titleProject(sessionTopic(a)), why = p ? "its title names it" : null;
+    let p = titleProject(sessionTopic(a), mine), why = p ? "its title names it" : null;
     if (!p) {
       if (now - (looked.get(k) ?? 0) < RECHECK_MS) continue;
       looked.set(k, now);
-      const s = await scores(a.address);
-      p = s ? logProject(s) : null;
+      const s = await scores(a.address, mine);
+      p = s ? logProject(s, mine) : null;
       why = p ? "its work is in that folder" : null;
     }
     const target = p && !p.suggestOnly && projectSpace(p);
@@ -185,7 +195,8 @@ export async function autoMoveTick(cx) {
 // The suggestion for one tab: { space, name, why } or null. `s`: its log scores (or null); `here`: its space;
 // `entry`: its automove record; `list`: spaces.
 export function suggestion(s, topic, here, entry, list, projs = projects()) {
-  if (!here || here.machine || entry?.manual) return null;
+  if (!here || entry?.manual) return null;
+  projs = projs.filter((p) => (p.machine ?? null) === (here.machine ?? null));
   const inProject = projs.some((p) => p.name.toLowerCase() === here.name.toLowerCase());
   let p = s ? logProject(s, projs) : null, why = p ? `its work is in the ${p.name} folder` : null;
   if (!p && !inProject) { p = titleProject(topic, projs); why = p ? "its title names it" : null; }
@@ -203,11 +214,13 @@ export async function suggestTick() {
   setShared("flockbook.move.suggest.at", now);
   // No project workspaces set (the "projects" setting): nothing to suggest, and no log is read.
   if (!projects().length) { if (Object.keys(shared(KEY_SUGGEST) ?? {}).length) setShared(KEY_SUGGEST, {}); return; }
+  await learnHomes();
   const done = await loadDone(), all = spaces(), byAddr = new Map(terminals().map((t) => [t.address, t]));
   const out = {};
   for (const a of agents()) {
     const t = byAddr.get(a.address);
-    if (!t || t.parent || a.address.includes("/")) continue;
+    // A tab on a machine with no project (the Mac's view of PC tabs, say) is not read at all.
+    if (!t || t.parent || !projectsOn(projects(), machineOf(a.address)).length) continue;
     const here = all.find((x) => x.id === a.space), tab = here?.tabs.find((x) => x.id === a.tab);
     if (!tab || (tab.panes ?? 1) !== 1) continue;
     const k = keyOf(t);
@@ -229,14 +242,14 @@ export async function keepHere(address, name) {
 }
 export const suggestTip = (sg) => `This tab may belong in ${sg.name}: ${sg.why}. Right-click it to move it, or to keep it here.`;
 
-// Where the tab menu may move a tab: every other workspace on this computer (projects first). Only a tab with one
+// Where the tab menu may move a tab: every other workspace on its own machine (projects first). Only a tab with one
 // pane and an agent in it, and not a sub-agent: a park ends a plain shell (tested 2026-11-11).
 export function moveTargets(tab, agent) {
   if (!tab || !agent || (tab.panes ?? 1) !== 1) return [];
   if (terminals().find((t) => t.address === agent.address)?.parent) return [];
-  const projs = projects();
+  const projs = projectsOn(projects(), machineOf(agent.address));
   const proj = (s) => (projs.some((p) => p.name.toLowerCase() === s.name.toLowerCase()) ? 0 : 1);
-  return spaces().filter((s) => !s.machine && s.id !== agent.space).sort((a, b) => proj(a) - proj(b) || a.index - b.index);
+  return spaces().filter((s) => sameMachine(s.machine, machineOf(agent.address)) && s.id !== agent.space).sort((a, b) => proj(a) - proj(b) || a.index - b.index);
 }
 // The tab menu asks; the top bar moves (serveMoveRequest).
 export function requestMove(address, space) { setShared(KEY_REQUEST, { address, space, at: Date.now() }); }

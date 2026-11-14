@@ -13,7 +13,7 @@ const KEY_UPDATE_SEEN = "flockbook.update.seen"; // the version whose line was s
 // The plus build's workflow switches (pipeline_asks, handoff_marks, worth_considering, auto_move) are off unless
 // config.json turns them on: they read a particular way of working (see the README's "Settings" section).
 export const DEFAULTS = { check_updates: true, status_row: "show", remote_helper: "ask", phone_read_only: false, text_size: "default", auto_move: "off", about_line: "on", about_cap: "200", terminal_size: "default", terminal_px: null, dance: "on",
-  pipeline_asks: "off", handoff_marks: "off", worth_considering: "off", accounts: null, projects: null, claude_path: null, helper_rebuild: null };
+  pipeline_asks: "off", handoff_marks: "off", worth_considering: "off", accounts: null, projects: null, claude_path: null, claude_machine: null, helper_rebuild: null };
 export const CHOICES = { check_updates: [true, false], status_row: ["show", "hide"], remote_helper: ["ask", "never"], phone_read_only: [false, true], text_size: ["small", "default", "large"], auto_move: ["on", "off"], about_line: ["on", "off"], about_cap: ["100", "200", "400", "none"], terminal_size: ["small", "default", "large", "full", "custom"], dance: ["on", "off"],
   pipeline_asks: ["on", "off"], handoff_marks: ["on", "off"], worth_considering: ["on", "off"] };
 // Settings that are not one of a few choices: a check instead. terminal_px: the size the terminal window
@@ -21,9 +21,12 @@ export const CHOICES = { check_updates: [true, false], status_row: ["show", "hid
 // accounts: the Claude Code accounts the tabs run as, when there is more than one ([{ mark, name, config_dir }]: `mark`
 // is the word the account's status line shows, like "| WORK …"; `config_dir` its CLAUDE_CONFIG_DIR, none = the
 // default ~/.claude). projects: workspaces a session started in "~" may move to ([{ workspace, folder, title,
-// suggest_only }]: `title` a pattern its title matches). claude_path: the claude program, when it is not found on
-// the usual places. helper_rebuild: the command patchcheck.js shows to rebuild the patched helper.
+// suggest_only, machine }]: `title` a pattern its title matches; `machine` the machine its folder and workspace are on,
+// none = this computer). claude_path: the claude program on this computer, when it is not found on the usual places.
+// claude_machine: the machine the About lines, Summarize and Resume run claude on (where.js; none = this computer). helper_rebuild: the command patchcheck.js shows to rebuild the patched helper.
 const text = (v, max) => typeof v === "string" && v.trim().length > 0 && v.length <= max;
+// A machine name as `hc machine ls` shows it ("wsl", "pc-wsl").
+const machineName = (v) => typeof v === "string" && /^[\w.@-]{1,64}$/.test(v);
 const pattern = (v) => { if (v == null) return true; if (!text(v, 200)) return false; try { new RegExp(v, "i"); return true; } catch { return false; } };
 export const VALID = {
   terminal_px: (v) => Array.isArray(v) && v.length === 2 && v.every((n) => Number.isInteger(n) && n >= 100 && n <= 20000),
@@ -31,8 +34,9 @@ export const VALID = {
     && v.every((a) => a && typeof a === "object" && typeof a.mark === "string" && /^[\w.@-]{1,24}$/.test(a.mark) && text(a.name, 60) && (a.config_dir == null || text(a.config_dir, 300)))
     && new Set(v.map((a) => a.mark)).size === v.length && v.filter((a) => a.config_dir == null).length <= 1,
   projects: (v) => Array.isArray(v) && v.length <= 16
-    && v.every((p) => p && typeof p === "object" && text(p.workspace, 60) && text(p.folder, 300) && pattern(p.title) && (p.suggest_only == null || typeof p.suggest_only === "boolean")),
+    && v.every((p) => p && typeof p === "object" && text(p.workspace, 60) && text(p.folder, 300) && pattern(p.title) && (p.suggest_only == null || typeof p.suggest_only === "boolean") && (p.machine == null || machineName(p.machine))),
   claude_path: (v) => text(v, 300),
+  claude_machine: (v) => machineName(v),
   helper_rebuild: (v) => text(v, 300),
 };
 // "~/x" → "<home>/x"; anything else as it is.

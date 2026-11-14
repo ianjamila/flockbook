@@ -37,8 +37,10 @@ export async function realConfig(file = {}) {
   return { cfg, st, set: (k, v) => { const c = st.data["flockbook.config"]; c.file[k] = v; } };
 }
 // The real accounts.js reading `settings` (through the real config.js) and running as `herdr` (home() is read from it).
+// The real where.js too (s26: which machine claude runs on), over the same `herdr` (no machines unless it has some).
 export async function realAccounts(herdr, settings = {}) {
   const { cfg, set } = await realConfig(settings);
-  const acc = await loadMod("accounts.js", { herdr, "./config.js": cfg });
-  return { acc, cfg, set };
+  const where = await loadMod("where.js", { herdr: { machines: () => [], window: () => ({ platform: "macos" }), ...herdr }, "./config.js": cfg });
+  const acc = await loadMod("accounts.js", { herdr, "./config.js": cfg, "./where.js": where });
+  return { acc, cfg, set, where };
 }

@@ -191,7 +191,15 @@ Two lists are set in `config.json` by hand (the dialog shows what is in use):
 - `projects`: the workspaces sessions may move to. `title` is a pattern (any case) the session title matches;
   `suggest_only` only offers the move. Create the workspaces in Herdr with the same names.
 - `claude_path`: only if `claude` is not in `~/.local/bin`, `~/.npm-global/bin`, `~/.claude/local`,
-  `/opt/homebrew/bin` or `/usr/local/bin`.
+  `/opt/homebrew/bin` or `/usr/local/bin` (on this computer; not used for `claude_machine`).
+- `claude_machine`: run the About lines, Summarize and Resume's `claude` on another machine (its name from Add
+  machine, e.g. `"wsl"`). Needed on Windows, where Flockbook can't run `claude` itself; set it to the WSL machine
+  that holds your Claude accounts. The `accounts`' `config_dir`s are then folders on that machine (`~` is its
+  home), and Resume offers that machine's sessions after a restart (only the computer that names it does, so two
+  computers never both resume one session).
+- A project may say `"machine": "wsl"`: its `folder` and workspace are on that machine, and only that machine's
+  tabs move there (from its own `~` workspace). On a Windows PC with WSL, for example:
+  `{ "workspace": "webshop", "folder": "~/code/webshop", "title": "web\\s*shop", "machine": "wsl" }`.
 - `helper_rebuild`: the command the "patched helper replaced" notice shows (default: `./install.sh --build-helper`).
 
 The About lines and Summarize run `claude -p --model haiku` with the tab's screen as the prompt (no tools, no

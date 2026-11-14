@@ -23,6 +23,7 @@ New files:
 
 | File | What it does |
 |---|---|
+| `where.js` | Which machine a tab is on (`wsl/t3`), a machine's home (asked once), the helper's cache entry there, and the `claude_machine` setting: the About lines, Summarize and Resume run `claude` on that machine (Windows can't run it itself); projects with a `machine` move only that machine's tabs, between its own workspaces (s26). |
 | `accounts.js` | The Claude Code accounts tabs run as (`accounts` setting): which one a screen shows, its name, its config folder, the `claude` command for it (finds `claude` in the usual folders, or `claude_path`). |
 | `ai.js` | About lines and the Haiku calls behind them and Summarize: one call gate (known account, not paused, under the daily cap), usage-limit pauses with the reset time read in any time zone, per-account counts. One day rule for every time shown (`dayWord`/`clockText`): "tomorrow 1:00 am", "yesterday 9:10 pm", a weekday within 6 days, else the date; `history.js whenText` uses it too. |
 | `asks.js` | Reads each agent's screen every 15 s (this Mac's and other machines', e.g. `pc-wsl/t3`): replies that end asking you something, review-pipeline asks (setting), hand-offs (setting), background shells/agents, CI and review waits, MCP input requests, the "Now:" line, merged-PR checks via `gh` (setting). |

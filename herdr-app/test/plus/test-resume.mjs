@@ -15,7 +15,7 @@ const HOME_CFG = [HOME, DOT + NAME].join("/"), WORK_CFG = HOME + WORK_DIR.slice(
 const VAR = CFG_ENV, BIN = [HOME, DOT + "npm-global", "bin", NAME].join("/");
 const TWO = [{ mark: "WORK", name: "Work account", config_dir: WORK_DIR }, { mark: "HOME", name: "Personal account" }];
 // resume.js over the real accounts.js (reading the "accounts" and "claude_path" settings through the real config.js).
-const loadResume = async (fakes, settings = { accounts: TWO, claude_path: BIN }) => loadMod("resume.js", { ...fakes, "./accounts.js": (await realAccounts(fakes.herdr, settings)).acc });
+const loadResume = async (fakes, settings = { accounts: TWO, claude_path: BIN }) => { const ra = await realAccounts(fakes.herdr, settings); return loadMod("resume.js", { ...fakes, "./accounts.js": ra.acc, "./where.js": ra.where }); };
 const log = (dir, sid) => `${dir}/projects/-Users-you/${sid}.jsonl`;
 
 const st = fakeShared(), runs = [], notes = [];

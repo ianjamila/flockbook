@@ -4,9 +4,11 @@
 // `mark` is the word the account's Claude Code status line shows ("you:~/x | WORK …"), so a tab's screen says which
 // account it runs as; `config_dir` is that account's CLAUDE_CONFIG_DIR (none: the default ~/.claude). Without the
 // setting there is one account, the default one, and no status line is needed to tell it.
-// The About lines, "Summarize this tab" and Resume run `claude` as the tab's own account (ai.js, resume.js).
+// The About lines, "Summarize this tab" and Resume run `claude` as the tab's own account (ai.js, resume.js), on this
+// computer or on the "claude_machine" (where.js), where the config folders are under that machine's home.
 import { home } from "herdr";
 import { setting, expandHome } from "./config.js";
+import { machineHome, REMOTE_PATH } from "./where.js";
 
 export const DEFAULT_ACCOUNT = "default";
 const RULE_LINE = /^\s*─{20,}\s*$/;
@@ -84,3 +86,15 @@ export const accounts = () => accountList(setting("accounts"));
 export const accountName = (id) => nameOf(id, accounts());
 export const accountOf = (screen) => accountOfScreen(screen, accounts());
 export const claudeCommand = (id, args) => claudeArgv(id, args, { list: accounts(), homeDir: home(), claudePath: setting("claude_path"), envPath: globalThis.process?.env?.PATH ?? "" });
+// The command that runs claude as `id` with `args` where `machine` is (null: this computer): { cmd, args, on }; null for
+// an unknown account; { unreachable: machine } when that machine's home can't be learnt. On another machine the
+// config folders are under its home, PATH is its usual folders, and claude_path (this computer's) is not used.
+export async function claudeRun(id, args, machine = null) {
+  const list = accounts();
+  if (!accountIds(list).includes(id)) return null;
+  if (!machine) { const c = claudeCommand(id, args); return c ? { cmd: c[0], args: c[1], on: null } : null; }
+  const h = await machineHome(machine);
+  if (!h) return { unreachable: machine };
+  const c = claudeArgv(id, args, { list, homeDir: h, claudePath: null, envPath: REMOTE_PATH });
+  return c ? { cmd: c[0], args: c[1], on: machine } : null;
+}
