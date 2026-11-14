@@ -8,7 +8,7 @@ import { shared, setShared, hc } from "herdr";
 import { agents } from "./parked.js";
 import { icon, openTerminal, KEY_TERM } from "./state.js";
 import * as sidecar from "./sidecar.js";
-import { elicitation, elicitFocus, noteElicit } from "./asks.js";
+import { elicitation, elicitFocus, noteElicit, captureElicit } from "./asks.js";
 
 export const CARD_MS = 1500;
 // An answer's "another agent is in this pane": the sidecar's check before each key failed, and for a question that
@@ -180,6 +180,8 @@ export class Cards {
         if (el) card = { kind: "elicitation", server: el.server, text: el.full, answerable: el.answerable, request: `elicit:${el.server}:${el.full.length}:${el.full.slice(0, 80)}:${el.full.slice(-80)}` };
         // The sidebar's 🔌 sees it now, not at the next asks tick.
         if (scr?.code === 0) noteElicit(address, el);
+        // The first real one is saved for the layout check (s29), read only.
+        if (scr?.code === 0) void captureElicit(address, scr.stdout);
       } else if (card) noteElicit(address, null);
       // The screen shows one question at a time; keep the full set read with "Show all".
       if (card && e.card && card.request === e.card.request && card.unread > 0 && !e.card.unread) card = e.card;

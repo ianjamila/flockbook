@@ -282,7 +282,29 @@ export function elicitFocus(screen) {
   if (marks.length !== 1 || (row.match(/[❯>]/g) ?? []).length !== 1) return null;
   return marks[0][1] === "Accept" ? "accept" : marks[0][1] === "Decline" ? "decline" : null;
 }
+// Whether the dialog's title stands alone on a line of `screen` (box lines aside): a real request, not a chat line
+// quoting the title (s29: what the one-time capture below waits for, even when neither reader can read the rest).
+export function elicitTitled(screen) {
+  return String(screen ?? "").split(/\r?\n/).some((x) => TITLE.test(cleanLine(x)));
+}
 // </elicitation>
+// s29 (owner 11-14 "Yes, save the first one"): no real MCP input request had been seen, so elicitBox follows a modelled
+// layout. The first one any tab shows is saved, once, as its screen text with what the readers made of it, so the
+// model can be checked. Only read, never answered; a file already there (another view's, an earlier run's) is kept.
+export const elicitCapturePath = () => `${appHome()}/flockbook/elicit-capture.txt`;
+let elicitCaptured = false;
+export async function captureElicit(address, screen) {
+  if (elicitCaptured || !elicitTitled(screen)) return false;
+  elicitCaptured = true;
+  try {
+    if ((await readTextFile(elicitCapturePath())) !== null) return false;
+    const el = elicitation(screen);
+    const read = el ? `server “${el.server}”, ${el.answerable ? "answerable (elicitBox)" : "shown only (loose reader)"}, selection ${elicitFocus(screen) ?? "unknown"}` : "NOT read (neither reader matched)";
+    const head = [`# Flockbook: the first MCP input request seen (${new Date().toISOString()})`, `# Tab ${address}; read as: ${read}`, "# The screen as hc read returned it:", ""].join("\n");
+    await writeTextFile(elicitCapturePath(), `${head}${String(screen)}\n`, null);
+    return true;
+  } catch { return false; }
+}
 // Blocked agents whose screen shows an MCP server's input request (owner 11-12: one click from the sidebar to its
 // terminal): read by the tick (blocked agents only) and by a chat or Needs you card read, which sees it sooner.
 export const KEY_ELICIT = "flockbook.elicit";   // { [address]: { server, text } }
@@ -519,11 +541,12 @@ async function tickOnce() {
     const remote = a.address.includes("/");
     // Blocked: only whether it is an MCP server's input request (the sidebar's 🔌).
     if (a.status === "blocked") {
-      try { const r = await hc(["read", a.address]); const el = r.code === 0 ? elicitation(r.stdout) : null; if (el) elicit[a.address] = el; const n = r.code === 0 ? nowDoing(r.stdout) : null; if (n) now[a.address] = n; } catch { /* gone meanwhile */ }
+      try { const r = await hc(["read", a.address]); const el = r.code === 0 ? elicitation(r.stdout) : null; if (el) elicit[a.address] = el; const n = r.code === 0 ? nowDoing(r.stdout) : null; if (n) now[a.address] = n; if (r.code === 0) await captureElicit(a.address, r.stdout); } catch { /* gone meanwhile */ }
       continue;
     }
     try {
       const r = await hc(["read", a.address]);
+      if (r.code === 0) await captureElicit(a.address, r.stdout);
       const ask = r.code === 0 ? pendingAsk(r.stdout, opts) : null;
       if (ask) out[a.address] = ask;
       const b = r.code === 0 && a.status !== "working" ? backgroundWork(r.stdout) : null;
