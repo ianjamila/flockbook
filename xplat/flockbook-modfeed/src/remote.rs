@@ -464,18 +464,32 @@ fn checked_first(cmd: &str, args: &[String]) -> Option<&'static [&'static str]> 
 /// into the suggestion, then the answer came back as an error). So the helper there is asked first with `version`
 /// (nothing else runs there): another version, or one without an ability in `needs`, gets the install card and
 /// nothing is done (s34: approve, answer and every send too, `checked_first`).
-/// None: go on (it has them, or the ask failed: the real run then says why, as before).
+/// None: go on (it has them).
+/// s36 (owner 11-15, "fail fast"): an ask that fails or runs out of time stops here too, with "<machine> did not
+/// answer", and nothing runs there (before, the command went on and could wait out a second timeout); no helper
+/// there gets the install card at once, without trying the command.
 fn lacks(client: &HcClient, cmd: &str, machine: &str, needs: &[&str], memo: &mut Memo) -> Option<String> {
+    let silent = |why: String| {
+        let f = fail("remote_failed", format!("{machine} did not answer{why}. Nothing was sent there; try again."));
+        Some(error_lines(cmd, f, json!({})))
+    };
     let argv: Vec<String> = ["sh", "-c", &forward_script(false), "sh", "version"].iter().map(|a| a.to_string()).collect();
-    let ran = exec(client, machine, Run::Argv(&argv)).ok()?;
+    let ran = match exec(client, machine, Run::Argv(&argv)) {
+        Ok(r) => r,
+        Err(f) if f.message.starts_with(&format!("{machine} did not answer")) => return silent(format!(" in {EXEC_TIMEOUT_S} s")),
+        Err(f) => return silent(format!(" ({})", f.message)),
+    };
     if ran.no_program || matches!(ran.code, Some(126 | 127)) {
-        return None;
+        memo.missing.insert(machine.into(), now_s());
+        memo.save();
+        return Some(with_install(client, cmd, machine, missing(machine), json!({}), memo));
     }
     let text = String::from_utf8_lossy(&ran.stdout).to_string();
-    let h: Value = text.lines().next().and_then(|l| serde_json::from_str(l).ok())?;
-    if h.get("type").and_then(Value::as_str) != Some("header") {
-        return None;
-    }
+    let header = text.lines().next().and_then(|l| serde_json::from_str::<Value>(l).ok()).filter(|h| h.get("type").and_then(Value::as_str) == Some("header"));
+    let Some(h) = header else {
+        let why = if ran.stderr.is_empty() { format!(" (its helper gave exit {})", ran.code.map_or("?".into(), |c| c.to_string())) } else { format!(" (its helper said: {})", ran.stderr) };
+        return silent(why);
+    };
     if let Some(stop) = outdated(client, cmd, machine, &h, memo) {
         return Some(stop);
     }

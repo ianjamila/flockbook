@@ -295,6 +295,65 @@ fn approve_answer_and_send_to_another_version_there_run_nothing() {
     assert_eq!(calls_there(&w), vec!["card"]);
 }
 
+// s36 (owner 11-15: "fail fast"): when the version ask itself fails or runs out of time, nothing runs there and the
+// answer says so at once. Before, the command went on and could wait another 30 s for the same silent machine.
+const ACTS: [&[&str]; 4] = [
+    &["approve", "--terminal", "box/t3", "--request", "r1", "--allow"],
+    &["card", "--terminal", "box/t3", "--all"],
+    &["answer", "--terminal", "box/t3", "--request", "r1", "--answers", "[[\"Yes\"]]"],
+    &["send", "--terminal", "box/t3", "--text", "hi"],
+];
+
+#[test]
+fn a_version_ask_that_times_out_runs_nothing_there_and_says_so() {
+    let w = world();
+    older_there(&w, "");
+    w.here.state.lock().unwrap().version_timed_out = true;
+    for args in ACTS {
+        let before = w.here.calls("machine.exec").len();
+        let e = w.error(args);
+        assert_eq!(e["code"], "remote_failed", "{args:?}: {e}");
+        let m = e["message"].as_str().unwrap();
+        assert!(m.contains("box did not answer") && m.contains("Nothing was"), "{args:?}: {m}");
+        let ran: Vec<Value> = w.here.calls("machine.exec")[before..].to_vec();
+        assert!(ran.last().unwrap()["argv"].as_array().unwrap().last().unwrap() == "version", "{args:?}: the ask was the last call there: {ran:?}");
+        assert!(calls_there(&w).is_empty(), "{args:?}: nothing ran there");
+    }
+    // A read is not checked first, so it still goes (and says on its own if the machine is silent).
+    let ok = w.run(&["card", "--terminal", "box/t3"]);
+    assert_eq!(ok.last().unwrap()["ok"], true, "{ok:?}");
+}
+
+#[test]
+fn a_version_ask_that_fails_runs_nothing_there_and_says_so() {
+    let w = world();
+    // A helper there that answers the ask with no header (it crashed): exit 3, a line on stderr.
+    std::fs::create_dir_all(w.installed().parent().unwrap()).unwrap();
+    std::fs::write(w.installed(), "#!/bin/sh\necho \"$1\" >> \"$HOME/calls\"\necho 'boom' >&2\nexit 3\n").unwrap();
+    std::fs::set_permissions(w.installed(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    for args in ACTS {
+        let _ = std::fs::remove_file(w.home.join("calls"));
+        let e = w.error(args);
+        assert_eq!(e["code"], "remote_failed", "{args:?}: {e}");
+        let m = e["message"].as_str().unwrap();
+        assert!(m.contains("box did not answer") && m.contains("boom") && m.contains("Nothing was"), "{args:?}: {m}");
+        assert_eq!(calls_there(&w), vec!["version"], "{args:?}: only the ask ran there");
+    }
+}
+
+#[test]
+fn a_version_ask_with_no_helper_there_offers_the_install_at_once() {
+    let w = world();
+    for args in ACTS {
+        let before = w.here.calls("machine.exec").len();
+        let e = w.error(args);
+        assert_eq!(e["code"], "remote_helper_missing", "{args:?}: {e}");
+        assert_eq!(e["install"]["machine"], "box", "{args:?}: {e}");
+        let ran = w.here.calls("machine.exec").len() - before;
+        assert!(ran <= 2, "{args:?}: the platform and the ask only, the command is not tried again: {ran}");
+    }
+}
+
 #[test]
 fn a_platform_without_a_helper_is_unsupported() {
     let w = world();

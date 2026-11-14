@@ -87,7 +87,9 @@ The helper there must be this same version (`protocol` and `sidecar` both). `app
 `card --all` (it walks the picker's tabs with keys) there first ask the helper there for `version` (nothing else
 runs): one of another version answers `remote_helper_outdated` with `remote` and `install` (null when this Flockbook
 has nothing to put there), and nothing is done there (a read, `card` `feed` `status` `queue`, runs and its own header
-says it). Every build says 0.1.0, so a `send --over-suggestion` (Send anyway) also
+says it). When that ask itself fails or runs out of time (30 s), the command stops at once with
+`remote_failed` ("<machine> did not answer … Nothing was sent there") and nothing runs there; when there is no helper
+there, `remote_helper_missing` with `install` at once (s36, fail fast). Every build says 0.1.0, so a `send --over-suggestion` (Send anyway) also
 needs the `send-over-suggestion` ability: one that lacks it (an older build) answers `remote_helper_outdated` with
 `remote.missing` and nothing is sent. Other commands run on any build of this version (an older one does less: without `bare-session`,
 Resume reads a new tab by its command line). It is never put on
