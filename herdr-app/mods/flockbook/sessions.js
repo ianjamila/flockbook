@@ -15,7 +15,7 @@ import { theme, props, closeOverlay, shared, setShared, run, notify } from "herd
 import { spaces } from "./parked.js";
 import { accounts, accountName, sessionOfLog, claudeRun, configDirOf } from "./accounts.js";
 import { claudeMachine, localWindows, connected, machineHome, knownHome, execAt, sameMachine, NEEDS_MACHINE } from "./where.js";
-import { liveSids, claimOpening, releaseOpening, noteOpened, mayBe, placeNow, returnTo } from "./resume.js";
+import { liveSids, claimOpening, releaseOpening, noteOpened, mayBe, placeNow, returnTo, tabCount } from "./resume.js";
 import { projects, projectsOn, projectSpace } from "./automove.js";
 import { agoText } from "./ai.js";
 import { sessionsClosed } from "./state.js";
@@ -164,7 +164,7 @@ const WAIT_STEP_MS = 150, NEW_SPACE_WAIT_MS = 3000;
 const pause = (ms) => new Promise((res) => (typeof setTimeout === "function" ? setTimeout(res, ms) : res()));
 // s31 (from herdr-sessions, owner 11-14): once the picks show, the workspace and tab shown before are shown again.
 export async function resumeSessions(rows, { wait = pause } = {}) {
-  const was = placeNow(spaces()), before = spaces().reduce((n, s) => n + (s.tabs?.length ?? 0), 0);
+  const was = placeNow(spaces()), before = tabCount();
   const skipped = [], live = await liveSids(), projs = projects(), done = new Set(), named = new Set();
   let opened = 0;
   const skip = (row, why) => skipped.push({ row, why });
@@ -177,7 +177,7 @@ export async function resumeSessions(rows, { wait = pause } = {}) {
     // s28 (Codex R1 + R2 P2): a Claude tab there not identified yet may be this very session (a folder or title that
     // differs proves nothing: it may have moved, or be named anew), so it doesn't open until that tab is identified.
     // s31: only when that tab's command line says it may hold it (resume.js mayBe; a plain `claude` holds none).
-    if ((live.unknownTabs ?? []).some((u) => u.machine === (row.machine ?? "") && mayBe(row, u.could))) { skip(row, "may be open already"); continue; }
+    if ((live.unknownTabs ?? []).some((u) => u.machine === (row.machine ?? "") && mayBe(row, u.could, u.address))) { skip(row, "may be open already"); continue; }
     if (!row.cwd) { skip(row, "its folder is unknown"); continue; }
     // Claimed before anything is awaited (R2 P2), so another resume at the same time (a second dialog, the restart
     // offer) opens nothing more; given up again when this pick can't open.

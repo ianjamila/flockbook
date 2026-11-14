@@ -137,6 +137,10 @@ await r.resumeOne("s-21");
 eq("s31: unidentified tab, command line unknown: a click 30 s later still waits (no timer)", runs.length, 0);
 // s31: its command line says it is a new conversation (plain `claude`): it can't be this session → opens at once.
 terms = [{ address: "t9", foreground: { argv: [BIN, "--model", "haiku"], cwd: HOME, pid: 90 } }];
+// (review P2) only once the helper has looked at this very process: no entry yet → still waits.
+await r.resumeOne("s-21");
+eq("s31: plain claude, but the helper hasn't looked at it yet → still waits", runs.length, 0);
+cache.entries = { t9: { kind: "claude", cwd: HOME, pids: [90] } };
 await r.resumeOne("s-21");
 eq("s31: unidentified tab running plain claude: opens at once", runs.length, 1);
 eq("unidentified tab: then leaves the offer", r.offer(), null);
@@ -291,13 +295,18 @@ eq("sessionOfEntry: nothing", r.sessionOfEntry(null), null);
   cache.entries = { t70: { kind: "claude", cwd: HOME, pids: [700], sid: N70, config: WORK_CFG }, t71: { kind: "claude", cwd: HOME, pids: [701], path: log(WORK_CFG, N71) } };
   now += 30_000;
   await r.resumeTick();
-  eq("s31 tick: a log-less new tab is remembered by its pid file's id", Object.keys(r.remembered().tabs).sort(), [N70, N71]);
-  eq("s31 tick: its account from the config folder", r.remembered().tabs[N70].account, "WORK");
+  eq("s31 tick (review P2): a log-less new tab is open but not remembered (nothing to resume yet)", Object.keys(r.remembered().tabs).sort(), [N71]);
   const L = await r.liveSids();
   eq("s31 liveSids: it counts as open, nothing unidentified", [[...(L.by[""] ?? [])].sort(), L.unknown], [[N70, N71], false]);
+  // Its first message writes the log: remembered from then on, as its account.
+  cache.entries.t70 = { kind: "claude", cwd: HOME, pids: [700], path: log(WORK_CFG, N70) };
+  now += 30_000;
+  await r.resumeTick();
+  eq("s31 tick: remembered once its log exists", Object.keys(r.remembered().tabs).sort(), [N70, N71]);
+  eq("s31 tick: its account from the config folder", r.remembered().tabs[N70].account, "WORK");
   // Both vanish (a restart) while a brand-new plain `claude` tab is open and not identified: offered anyway — a new
   // conversation can't be one of them, so it holds nothing back.
-  live = [agent("t72", null, "sp1")]; cache.entries = {};
+  live = [agent("t72", null, "sp1")]; cache.entries = { t72: { kind: "claude", cwd: HOME, pids: [720] } };
   terms = [{ address: "t72", foreground: { argv: ["claude"], cwd: HOME, pid: 720 } }];
   now += 30_000;
   await r.resumeTick();
@@ -316,6 +325,37 @@ eq("sessionOfEntry: nothing", r.sessionOfEntry(null), null);
   eq("s31 resume: a --continue in another folder holds nothing", runs.map(([, a]) => a.argv.at(-1)), [N71, N70]);
   r.dismissOffer(); terms = []; live = []; cache.entries = {};
 }
+{
+  // Review P2 scenario A: the helper's cache is missing (every tab unidentified) — a plain `claude` command line proves
+  // nothing then, so a restart is not declared and nothing opens twice.
+  const A1 = "a1a1a1a1-0000-4000-8000-0000000000a1", A2 = "a2a2a2a2-0000-4000-8000-0000000000a2";
+  st.setShared(MEM, { at: now, tabs: { [A1]: { ...rec(A1, 1101), terminal: "t91" }, [A2]: { ...rec(A2, 1102), terminal: "t92" } } });
+  live = [agent("t91", null, "sp1"), agent("t92", null, "sp1")]; cache.entries = {};
+  terms = [{ address: "t91", foreground: { argv: ["claude"], cwd: HOME, pid: 1101 } }, { address: "t92", foreground: { argv: ["claude"], cwd: HOME, pid: 1102 } }];
+  now += 30_000;
+  await r.resumeTick();
+  eq("review P2-A: no cache → no restart offer", r.offer(), null);
+  // Scenario B: the helper looked (same process) but the tab where a session was remembered ran /clear with an older
+  // helper (no id): the remembered session is "cleared" (its process lives), never offered as lost.
+  cache.entries = { t91: { kind: "claude", cwd: HOME, pids: [1101] }, t92: { kind: "claude", cwd: HOME, pids: [1102] } };
+  now += 30_000;
+  await r.resumeTick();
+  eq("review P2-B: same processes, no id → not offered", r.offer(), null);
+  // The address rule: an offered session remembered in tab t93, now unidentified there with a plain launch line, waits.
+  st.setShared(OFFER, { at: now, tabs: [{ ...rec(A1, 1201), terminal: "t93" }] });
+  live = [agent("t93", null, "sp1")]; cache.entries = { t93: { kind: "claude", cwd: HOME, pids: [1301] } };
+  terms = [{ address: "t93", foreground: { argv: ["claude"], cwd: HOME, pid: 1301 } }];
+  runs.length = 0;
+  await r.resumeOne(A1);
+  eq("review P2: unidentified tab where the session was remembered → waits", runs.length, 0);
+  r.dismissOffer(); terms = []; live = []; cache.entries = {}; st.setShared(MEM, { at: now, tabs: {} });
+}
+eq("unknownCould: no cache entry → any", r.unknownCould(null, { argv: ["claude"], pid: 5 }, "/w"), { any: true });
+eq("unknownCould: an entry for another process → any", r.unknownCould({ pids: [6] }, { argv: ["claude"], pid: 5 }, "/w"), { any: true });
+eq("unknownCould: the helper looked at this process → its command line", r.unknownCould({ pids: [5, 4] }, { argv: ["claude"], pid: 5 }, "/w"), { none: true });
+eq("unknownCould: no foreground → any", r.unknownCould({ pids: [5] }, null, "/w"), { any: true });
+eq("mayBe: remembered in this very tab → may be, whatever the command line", r.mayBe({ sid: "a", terminal: "t5" }, { none: true }, "t5"), true);
+eq("mayBe: /private/tmp is /tmp (review P3)", r.mayBe({ sid: "a", cwd: "/private/tmp/x" }, { cwd: "/tmp/x" }), true);
 {
   // s31: an unidentified tab on this computer is looked up through the helper (once a minute at most), so a new tab is
   // identified at once — before, only another machine's tabs were asked about.

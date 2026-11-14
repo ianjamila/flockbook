@@ -439,8 +439,9 @@ const LISTING = {
     { sid: S2, account: "WORK", machine: "", cwd: "/Users/you/code/tools", title: "Tools" },
   ];
   const files = { [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: {} } };
+  const looked = { [`:${MAC}/.config/herdr-app/flockbook/cache.json`]: { entries: { t5: { kind: "claude", cwd: "/Users/you", pids: [55] } } } };
   const mk = async (argv, cwd = "/Users/you/code/webshop") => {
-    const w = await world({ listing: LISTING, agents: [AGENT("t5", "sp1", "")], files, spaces: [{ id: "sp1", name: "~", machine: null, tabs: [] }] });
+    const w = await world({ listing: LISTING, agents: [AGENT("t5", "sp1", "")], files: looked, spaces: [{ id: "sp1", name: "~", machine: null, tabs: [] }] });
     w.herdr.termsNow = () => [{ address: "t5", foreground: { argv, cwd, pid: 55 } }];
     return w;
   };
@@ -456,6 +457,11 @@ const LISTING = {
   w = await mk(["claude"]);
   const L = await w.res.liveSids();
   eq("s31: a tab that can only be new is not 'unidentified' (no banner)", L.unknown, false);
+  // Review P2: the helper hasn't looked at that tab yet (no cache entry) → its command line proves nothing.
+  const w2 = await world({ listing: LISTING, agents: [AGENT("t5", "sp1", "")], files, spaces: [{ id: "sp1", name: "~", machine: null, tabs: [] }] });
+  w2.herdr.termsNow = () => [{ address: "t5", foreground: { argv: ["claude"], cwd: "/Users/you", pid: 55 } }];
+  const r2 = await w2.ses.resumeSessions(picks);
+  eq("review P2: not looked at yet → every pick here waits", [r2.opened, r2.skipped.length], [0, 2]);
 }
 // s31 (from herdr-sessions, owner 11-14): after Resume selected, the workspace and tab shown before are shown again.
 {
