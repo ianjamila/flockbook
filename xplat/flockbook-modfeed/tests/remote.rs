@@ -473,3 +473,48 @@ fn send_with_a_file_puts_it_there_first() {
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0]["text"], "look at '/remote/tmp/shot one.png'", "the text names the copy there");
 }
+
+/// `usage --machine box`: the helper there reads its own home (here: a Codex rollout under box's `.codex`) and its
+/// lines come back as they are. Nothing is installed by it.
+#[test]
+fn usage_on_another_machine_runs_the_helper_there() {
+    let w = world();
+    let day = w.home.join(".codex/sessions").join(chrono::Local::now().date_naive().format("%Y/%m/%d").to_string());
+    std::fs::create_dir_all(&day).unwrap();
+    let rl = json!({"timestamp": "2026-11-15T01:00:00.000Z", "payload": {"rate_limits": {"plan_type": "prolite",
+        "primary": {"used_percent": 20.0, "window_minutes": 10080, "resets_at": 1_795_252_974}}}});
+    std::fs::write(day.join("rollout-a.jsonl"), format!("{rl}\n")).unwrap();
+    // Missing there: the install card's data, and nothing was put there.
+    let e = w.error(&["usage", "--machine", "box"]);
+    assert_eq!(e["code"], "remote_helper_missing", "{e}");
+    assert!(!w.installed().exists(), "usage installs nothing");
+    w.install_by_hand();
+    let v = w.run(&["usage", "--machine", "box", "--home", "/nonexistent-home"]);
+    assert_eq!(v[0]["type"], "header");
+    assert_eq!(v[0]["cmd"], "usage");
+    let l = v.iter().find(|l| l["type"] == "usage").unwrap_or_else(|| panic!("a usage line: {v:?}"));
+    assert_eq!(l["kind"], "codex");
+    assert_eq!(l["plan"], "prolite");
+    assert_eq!(l["weekly"], json!({"left": 80, "used": 20, "resets_at": 1_795_252_974}));
+    assert_eq!(v.last().unwrap()["ok"], true);
+    let exec = w.here.calls("machine.exec");
+    let last = exec.last().unwrap();
+    assert_eq!(last["on"], "box");
+    assert!(last.get("line").is_none(), "argv, no shell line");
+    assert_eq!(last["argv"][4], "usage");
+    assert_eq!(last["argv"].as_array().unwrap().len(), 5, "no value goes there: {last}");
+    assert!(w.here.keys().is_empty() && w.there.keys().is_empty());
+}
+
+/// Never stops `usage --machine` before anything runs there.
+#[test]
+fn usage_on_another_machine_follows_never() {
+    let w = world();
+    w.install_by_hand();
+    let app = w.home.parent().unwrap().join("app");
+    std::fs::create_dir_all(app.join("flockbook")).unwrap();
+    std::fs::write(app.join("flockbook/config.json"), r#"{"remote_helper":"never"}"#).unwrap();
+    let e = w.error(&["usage", "--machine", "box", "--home", app.to_str().unwrap()]);
+    assert_eq!(e["code"], "remote-off");
+    assert!(w.here.calls("machine.exec").is_empty(), "nothing ran there");
+}

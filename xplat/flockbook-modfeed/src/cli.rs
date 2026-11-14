@@ -14,6 +14,7 @@
 //!                            (--over-suggestion: Send anyway; the box's line is cleared first when it shows only that /word)
 //!   flockbook-modfeed helper install --machine <m> --sha256 <hex>   (the helper on another machine; after the user's yes)
 //!   flockbook-modfeed helper remove --machine <m>
+//!   flockbook-modfeed usage [--machine <m>]   (the weekly limit left per account: `usage` lines; read only; --machine: the helper there)
 //!   flockbook-modfeed update-check --home <herdr-app home> [--dismiss <version>]   (a newer release? once a day)
 //!
 //! Every command takes `--home <herdr-app home>` (the mod passes it): its flockbook/config.json has the
@@ -22,7 +23,7 @@
 //! A terminal `m/tN` on another machine: the command runs there, in the helper there (`remote`). Rust only.
 
 use crate::protocol::{JsonLines, ABILITIES, PROTOCOL_VERSION, SIDECAR_VERSION};
-use crate::{cards, config, feed, locate, paste, phone, queue, remote, status, update};
+use crate::{cards, config, feed, locate, paste, phone, queue, remote, status, update, usage};
 use herdr_core::hc::{HcClient, HcSession};
 use herdr_core::PaneScreen;
 use herdr_core::resolver::SessionResolver;
@@ -62,7 +63,7 @@ pub fn run(argv: &[String]) -> String {
     match cmd.as_str() {
         "version" => {
             // The commands, then what this build can do beyond them (review P3: from ABILITIES, so a new one is listed).
-            let mut commands: Vec<&str> = vec!["version", "feed", "status", "card", "approve", "answer", "send", "paste-image", "helper", "update-check", "queue", "phone", "commands", "parked"];
+            let mut commands: Vec<&str> = vec!["version", "feed", "status", "card", "approve", "answer", "send", "paste-image", "helper", "update-check", "queue", "phone", "commands", "parked", "usage"];
             commands.extend(ABILITIES);
             r.out.emit_value(json!({"type": "version", "commands": commands, "release": update::release()}));
             r.finish(true)
@@ -104,6 +105,29 @@ pub fn run(argv: &[String]) -> String {
                 }
                 Err(e) => r.fail("write", &format!("cannot save the image: {e}")),
             }
+        }
+        "usage" => {
+            // The weekly limit left per account, from files only. On another machine: the helper there reads its own.
+            if let Some(machine) = opt("--machine") {
+                if machine.is_empty() || machine.starts_with('-') {
+                    return r.fail("usage", "usage --machine needs a machine name");
+                }
+                if config::load(config::dir(home().as_deref()).as_deref()).remote_never {
+                    return r.fail("remote-off", config::REMOTE_OFF);
+                }
+                let session = HcSession::resolve_env();
+                if !session.is_available() {
+                    return r.fail("no-core", "herdr-core is not running");
+                }
+                let client = HcClient::new(session, 8, 22);
+                let cache = opt("--cache").map(PathBuf::from);
+                return remote::forward(&client, &cmd, &[], &machine, "", cache.as_deref());
+            }
+            let dir = config::dir(home().as_deref());
+            for line in usage::lines(&herdr_core::hc::session::process_env(), dir.as_deref(), usage::today()) {
+                r.out.emit_value(line);
+            }
+            r.finish(true)
         }
         "update-check" => {
             let dir = config::dir(home().as_deref());
@@ -276,7 +300,7 @@ pub fn run(argv: &[String]) -> String {
             }
         }
         // `queue` is serve's own, not offered to the mod.
-        _ => r.fail("usage", "commands: version, feed, status, card, approve, answer, send"),
+        _ => r.fail("usage", "commands: version, feed, status, card, approve, answer, send, usage"),
     }
 }
 
