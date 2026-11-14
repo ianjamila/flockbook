@@ -4,7 +4,7 @@ import { focused, shared, setShared, run, openOverlay, closeOverlay, appHome, re
 import { agents, spaces } from "./parked.js";
 import { loadConfig, updateSeen, setting, setSetting, setSettings } from "./config.js";
 import { gripFrame, geom, fitTerm, termAt } from "./termresize.js";
-import { askOf, prOf, bgOf, bgWords, askMark, handoffOf } from "./asks.js";
+import { askOf, prOf, bgOf, bgWords, askMark, handoffOf, nowWait } from "./asks.js";
 
 export const KEY_AGENT = "flockbook.agent";
 // The screen in the stack, as this mod last selected it (layout() is the file, not the live tree).
@@ -282,6 +282,11 @@ export function overlays(a) {
     const p = prOf(a?.address);
     if (p?.state !== "MERGED" && p?.state !== "CLOSED") out.unshift({ glyph: "🔀", group: "merging", word: "merging", tip: "its turn ended while its PR goes through the merge queue (a merge watch runs in the background)", wait: true });
   }
+  // A WORKING tab whose Now line waits on a Codex job or CI, with no ⏳ / 🔍 in its title (the pipeline's own Codex call
+  // sets none): that wait, live (s29, owner 11-14: #2049 "Waiting for the round 10 Codex job" sat under ✅).
+  const nw = a?.status === "working" && !out.some((o) => o.glyph === "⏳" || o.glyph === "🔍") ? nowWait(a.address) : null;
+  if (nw === "review") out.unshift({ glyph: "🔍", group: "reviewwait", word: "waiting on a review", tip: "it waits on a Codex review job", wait: true });
+  if (nw === "ci") out.unshift({ glyph: "⏳", group: "ci", word: "waiting on CI", tip: "it waits on CI", wait: true });
   // Its shells alone, read as that CI / review watch, are that watch: no "⚙ 1 shell running" next to it (s29).
   if (b && (b.agents || !(b.ci || b.review))) out.push({ glyph: "⚙", group: "background", word: bgWords(b), tip: `its turn ended, but ${bgWords(b)} in the background`, agents: b.agents ?? 0 });
   // Finished with a hand-off (asks.js handoffGiven), nothing running behind it: the Overview's "Hand-off given".
@@ -301,14 +306,20 @@ export function subStatus(tab) {
   if (!list.length) return null;
   // A live CI wait leads (it is what the tab does now); else the first of SUB_GROUPS it has.
   const live = list.find((o) => o.wait);
-  const [key, title] = (live && SUB_GROUPS.find(([k]) => k === live.group)) ?? SUB_GROUPS.find(([k]) => list.some((o) => o.group === k)) ?? [list[0].group, ""];
+  // Owner 11-14 s29 ("Live work wins"): ✅ means results wait for the owner only on a tab with nothing running (its
+  // turn over, no live wait, no background agent). On a working tab it is a hint word: the tab sits under what it does
+  // now (In review, Agents at work …), or with no other symbol, under its status with no sub-group.
+  const busy = tab.status === "working" || tabAgents(tab.id)[0]?.status === "working" || list.some((o) => o.wait || (o.group === "background" && o.agents > 0));
+  const has = (k) => list.some((o) => o.group === k) && !(busy && k === "results");
+  const [key, title] = (live && SUB_GROUPS.find(([k]) => k === live.group)) ?? SUB_GROUPS.find(([k]) => has(k))
+    ?? (busy && list.every((o) => o.group === "results") ? [null, ""] : [list[0].group, ""]);
   const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
   return {
     key, title,
     glyphs: list.map((o) => o.glyph).join(""),
     hint: list.map((o) => `${o.glyph} ${o.word}`).join(" · "),
     tip: list.map((o) => `${cap(o.tip)}.`).join(" "),
-    owner: list.some((o) => o.group === "merge" || o.group === "results" || o.group === "handoff" || o.ask),
+    owner: list.some((o) => o.group === "merge" || (o.group === "results" && !busy) || o.group === "handoff" || o.ask),
     // The ask's symbol (🔁 🔀 🗄 💬), for labels that show the title's own symbols but not this one.
     askGlyph: list.find((o) => o.ask)?.glyph ?? null,
     // Work still running behind a finished turn: the tab shows as working.

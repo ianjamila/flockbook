@@ -352,7 +352,7 @@ export function backgroundWork(screen) {
   // recheck not me"): `review`, so the Overview keeps it under "In review", working.
   return REVIEW_WAIT.test(reply) ? { shells, agents, review: true } : { shells, agents };
 }
-const REVIEW_WAIT = /\bwait(?:ing)?\s+(?:for|on)\s+(?:the\s+)?(?:Codex|Fable)\b|\b(?:Codex|Fable)\s+(?:review|recheck|round|rerun)\b[^.\n]{0,60}?\b(?:still running|is running|running in the background|in progress)\b/i;
+const REVIEW_WAIT = /\bwait(?:ing)?\s+(?:for|on)\s+(?:the\s+)?(?:(?:round\s+\d+|R\d+|next)\s+)?(?:Codex|Fable)\b|\b(?:Codex|Fable)\s+(?:review|recheck|round|rerun)\b[^.\n]{0,60}?\b(?:still running|is running|running in the background|in progress)\b/i;
 const MERGE_WAIT = /\b(?:in(?:to)?|through|joins?|joined|entered)\s+(?:GitHub's\s+|the\s+)?(?:merge\s+)?queue\b|\bonce\s+(?:#\d+|it|they|both|the PRs?)\s+(?:merges?|lands?|is merged|are merged)\b|\bmerge queue\b[^.\n]{0,60}?\b(?:now|running|still|in progress|pending)\b|\bwait(?:ing)?\s+(?:for|on)\s+(?:the\s+)?(?:merge|merges)\b|\b(?:both\s+)?merges?\s+once\b|\bmerge (?:job|gate|watch|run)\b[^.\n]{0,60}?\b(?:still running|is running|running|in progress|pending)\b|\bstill merging\b|\bis merging\b/i;
 // A GitHub build (Actions, a workflow run, "the build") counts as CI too (owner 11-14 02:54: a tab waiting on "the
 // helper build … on GitHub" sat under Done).
@@ -509,6 +509,13 @@ export function nowDoing(screen) {
 }
 // </now>
 export const KEY_NOW = "flockbook.now";   // { [address]: { now, steps, helpers } }
+// What a WORKING tab's Now line says it waits on: "review" (a Codex / Fable job, e.g. the pipeline's own "Waiting for
+// the round 10 Codex job", which puts no 🔍 in the title), "ci", or null (s29, owner 11-14 "Live work wins").
+export function nowWait(address) {
+  const t = address ? shared(KEY_NOW)?.[address]?.now : null;
+  if (!t) return null;
+  return CI_WAIT.test(t) ? "ci" : REVIEW_WAIT.test(t) ? "review" : null;
+}
 export const nowOf = (address) => (address ? shared(KEY_NOW)?.[address] ?? null : null);
 
 // The PR a tab's 🔀 is about, and what GitHub said of it: { pr, repo, state? } or null.
