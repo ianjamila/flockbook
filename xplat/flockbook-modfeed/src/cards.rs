@@ -113,6 +113,43 @@ pub const BOX_NOT_EMPTY: &str = "The agent's box has text in it. Clear it in the
 pub fn box_not_empty() -> Done {
     Done::new("box_not_empty", Some(BOX_NOT_EMPTY))
 }
+pub const BOX_STILL_FULL: &str = "The agent's box still has text in it after Flockbook cleared its line. Clear it in the terminal, then send again. Nothing was sent.";
+
+/// What Send anyway's look at the box found (`clear_suggestion`).
+#[derive(Debug, PartialEq)]
+pub enum Over {
+    /// The box does not show that lone "/word": nothing was pressed, `send`'s usual check decides.
+    NotShown,
+    /// The key gate said no before any key: nothing was pressed.
+    Refused,
+    /// The line was cleared, but the box is not down to one row (or the keys or the read failed): nothing is sent.
+    Stuck,
+    /// The box is down to one row: the text may go.
+    Cleared,
+}
+
+/// Send anyway (`send --over-suggestion <word>`): when Claude Code's box shows exactly the lone `word` (most likely
+/// its dim prompt suggestion), Ctrl-E Ctrl-U clears the box's line (a typed "/word" goes; a dim suggestion is not
+/// text and stays), the screen is read again after a pause, and only a box down to one row lets the text go.
+/// `passes`: the key gate, asked right before the keys.
+pub fn clear_suggestion<S: PaneScreen + ?Sized>(s: &S, pane_id: &str, word: &str, passes: &dyn Fn() -> bool) -> Over {
+    let Ok(screen) = s.visible_text(pane_id) else { return Over::NotShown };
+    if crate::queue::claude_lone_slash(&screen).as_deref() != Some(word) {
+        return Over::NotShown;
+    }
+    if !passes() {
+        return Over::Refused;
+    }
+    if s.send_named_keys(&["ctrl+e".into(), "ctrl+u".into()], pane_id).is_err() {
+        return Over::Stuck;
+    }
+    // Tested 11-11: the box redraws within a few frames.
+    s.pause(300);
+    match s.visible_text(pane_id) {
+        Ok(after) if crate::queue::claude_box_one_row(&after) => Over::Cleared,
+        _ => Over::Stuck,
+    }
+}
 /// Why the gate said no: the agent changed, or it has no identity to check, which no retry fixes.
 pub fn refused(pane: &Pane) -> Done {
     if pane.agent.as_ref().map(KeyGate::has_identity) == Some(true) {
@@ -247,7 +284,7 @@ pub fn card_with<S: PaneScreen + ?Sized>(pane: &Pane, screen: &S, log: Option<&P
     let blocked = pane.agent.as_ref().is_some_and(|a| a.status == AgentStatus::Blocked);
     if read {
         match &now {
-            Some(Current::Approval { command, tool, .. }) => answered.seen(&pane.id, Some((tool, command))),
+            Some(Current::Approval { id, command, tool, .. }) => answered.seen(&pane.id, Some((id, tool, command))),
             _ => answered.seen(&pane.id, None),
         }
     }
@@ -299,6 +336,7 @@ pub fn approve<S: PaneScreen + ?Sized>(pane: &Pane, screen: &S, log: Option<&Pat
         Claim::Got => {}
         Claim::Taken => return already_answered(),
         Claim::Busy => return busy(),
+        Claim::Wait => return Done::new("busy", Some("The last answer's key may still be arriving, so this one sent nothing. Wait a few seconds and press again.")),
     }
     // The screen is read again right before the key, and the key goes only while the box is still this id.
     match approval::respond_if_open(screen, &pane.id, &id, allow, &agent.kind, blocked, pending.as_ref(), Some(&gate(pane))) {
@@ -377,9 +415,10 @@ pub fn answer<S: PaneScreen + ?Sized>(pane: &Pane, screen: &S, log: Option<&Path
 }
 
 /// The composer: the text, with each file in `files` named in it. `was`: the locate cache entry this terminal had
-/// before the send looked its log up again.
+/// before the send looked its log up again. `over`: Send anyway over Claude Code's lone "/word" suggestion
+/// (`clear_suggestion`); after every check above it, so another agent or conversation still gets nothing.
 #[allow(clippy::too_many_arguments)]
-pub fn send(pane: &Pane, client: &HcClient, text: &str, files: &[String], log: Option<&Path>, expect_kind: Option<&str>, expect_path: Option<&str>, was: Option<&crate::locate::Entry>) -> Done {
+pub fn send(pane: &Pane, client: &HcClient, text: &str, files: &[String], log: Option<&Path>, expect_kind: Option<&str>, expect_path: Option<&str>, was: Option<&crate::locate::Entry>, over: Option<&str>) -> Done {
     // The agent the owner was reading: another agent, or a new conversation, in this terminal now gets nothing.
     if let Some(k) = expect_kind {
         if Some(k) != pane.agent.as_ref().map(|a| a.kind.as_str()) {
@@ -410,6 +449,16 @@ pub fn send(pane: &Pane, client: &HcClient, text: &str, files: &[String], log: O
     // The text would go after what is in the agent's box ("/" + "/status" = "//status"). A box not found, an agent
     // not read, or no screen: it goes as before.
     let kind = pane.agent.as_ref().map(|a| a.kind.as_str()).unwrap_or("");
+    if let Some(word) = over.filter(|_| kind == "claude") {
+        let passes = || keygate::passes(client, Some(&gate(pane)), &pane.id, None, None);
+        match clear_suggestion(client, &pane.id, word, &passes) {
+            Over::NotShown => {}
+            Over::Refused => return refused(pane),
+            Over::Stuck => return Done::new("box_not_empty", Some(BOX_STILL_FULL)),
+            // The box still shows the dim word: the text is pasted over it (as with a dim suggestion below).
+            Over::Cleared => return if passes() { deliver(client, pane, text, files) } else { refused(pane) },
+        }
+    }
     let suggests = kind == "claude" && claude_suggests(std::env::var_os("HOME").map(std::path::PathBuf::from).as_deref());
     if let Ok(screen) = client.visible_text(&pane.id) {
         if crate::queue::box_has_text(kind, &screen, suggests) == Some(true) {
@@ -422,6 +471,11 @@ pub fn send(pane: &Pane, client: &HcClient, text: &str, files: &[String], log: O
             }
         }
     }
+    deliver(client, pane, text, files)
+}
+
+/// Types the text (with its files) into the pane and presses Enter.
+fn deliver(client: &HcClient, pane: &Pane, text: &str, files: &[String]) -> Done {
     let r = if files.is_empty() { client.deliver(text, &pane.id) } else { client.deliver_files(text, &pane.id, files) };
     match r {
         DeliveryOutcome::Sent => Done::new("sent", None),
@@ -446,6 +500,63 @@ mod tests {
     }
     fn own(text: &str) -> Vec<QuestionAnswer> {
         vec![QuestionAnswer { picks: vec![], other: Some(text.into()) }, QuestionAnswer::default()]
+    }
+
+    // Send anyway from another machine (report 11-14): the helper where the terminal runs clears Claude's dim
+    // suggestion line itself, then the text goes.
+    mod over_suggestion {
+        use super::super::{clear_suggestion, Over};
+        use herdr_core::fake::FakeScreen;
+        const RULE: &str = "────────────────────────────────────────";
+        fn claude(row: &str) -> String {
+            format!("● Done.\n\n{RULE}\n{row}\n{RULE}\n  ~/proj  ⎇main\n")
+        }
+        fn run(screens: Vec<&str>, word: &str, gate: bool) -> (Over, Vec<String>) {
+            let s = FakeScreen::with_panes(vec![], screens);
+            let o = clear_suggestion(&s, "hc:t1", word, &|| gate);
+            (o, s.sent())
+        }
+        const CLEAR: [&str; 2] = ["ctrl+e", "ctrl+u"];
+
+        #[test]
+        fn clears_then_lets_the_text_go() {
+            let (dim, empty) = (claude("❯\u{a0}/handoff"), claude("❯\u{a0}"));
+            assert_eq!(run(vec![&dim, &dim], "/handoff", true), (Over::Cleared, CLEAR.map(String::from).to_vec()), "dim: stays, one row");
+            assert_eq!(run(vec![&dim, &empty], "/handoff", true), (Over::Cleared, CLEAR.map(String::from).to_vec()), "typed: gone");
+        }
+
+        #[test]
+        fn nothing_pressed_unless_the_box_shows_that_word() {
+            let other = claude("❯\u{a0}/compact");
+            assert_eq!(run(vec![&other], "/handoff", true), (Over::NotShown, vec![]), "another word");
+            let text = claude("❯\u{a0}hello");
+            assert_eq!(run(vec![&text], "/handoff", true), (Over::NotShown, vec![]), "typed text");
+            let listed = format!("  /handoff      Write a hand-off\n{RULE}\n❯\u{a0}/handoff\n{RULE}\n");
+            assert_eq!(run(vec![&listed], "/handoff", true), (Over::NotShown, vec![]), "a command list above: typed");
+            assert_eq!(run(vec!["no box"], "/handoff", true), (Over::NotShown, vec![]));
+        }
+
+        #[test]
+        fn the_gate_comes_first() {
+            let dim = claude("❯\u{a0}/handoff");
+            assert_eq!(run(vec![&dim], "/handoff", false), (Over::Refused, vec![]));
+        }
+
+        #[test]
+        fn a_box_left_with_rows_sends_nothing() {
+            let (dim, two) = (claude("❯\u{a0}/handoff"), claude("❯\u{a0}\n  second line"));
+            assert_eq!(run(vec![&dim, &two], "/handoff", true).0, Over::Stuck);
+            let s = FakeScreen::with_panes(vec![], vec![&dim, &dim]);
+            *s.key_error.borrow_mut() = Some(herdr_core::HerdrError::Protocol("keys failed".into()));
+            assert_eq!(clear_suggestion(&s, "hc:t1", "/handoff", &|| true), Over::Stuck, "the keys failed");
+            let s = FakeScreen::with_panes(vec![], vec![&dim, &dim]);
+            *s.fail_reads.borrow_mut() = 0;
+            let o = clear_suggestion(&s, "hc:t1", "/handoff", &|| {
+                *s.fail_reads.borrow_mut() = 1; // the read after the keys fails
+                true
+            });
+            assert_eq!(o, Over::Stuck, "the read after the clear failed");
+        }
     }
 
     // Issue #11, item 4: the card says so before Send, with the rule `answer` refuses with.

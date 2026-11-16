@@ -53,6 +53,19 @@ export const v_virtual_list = (id, n, sizes, key, render) => { const e = mk("vl"
 export const VirtualListScrollHandle = {
   new: () => ({ scroll_to_item: (i, s) => calls.push(["scroll_to_item", i, s]), scroll_to_bottom: () => calls.push(["bottom"]) }),
 };
+// The plus build's hover boxes (hover.js), tab list scrolling (tabs.js) and selection colour (selection.js).
+// A hover card's trigger is its child, so tests walk into it and fire its clicks; its content stays in _a.content.
+export const HoverCard = {
+  new: (id) => {
+    const e = mk("hovercard");
+    e._a.id = id;
+    const wrap = new Proxy(e, { get: (t, k) => (k === "trigger" ? (x) => { t.kids.push(x); return wrap; } : (typeof t[k] === "function" ? (...a) => { t[k](...a); return wrap; } : t[k])) });
+    return wrap;
+  },
+};
+export const ScrollHandle = { new: () => ({ scroll_to_item: (i, s) => calls.push(["scroll_to_item", i, s]), scroll_to_bottom: () => calls.push(["bottom"]) }) };
+export const themes = [];
+export const set_theme = (t) => { themes.push(t); return null; };
 
 // All text in an element tree, for assertions.
 export function textOf(el) {

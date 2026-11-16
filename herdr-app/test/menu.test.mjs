@@ -14,13 +14,16 @@ beforeEach(() => {
   reset();
   fake.agents = [agent("t1", "idle", { tab: "tb1" })];
   fake.spaces = [space("sp1", { tabs: [tab("tb1", 1, { active: true }), tab("tb2", 2)] })];
+  // plus build: with the tab list on the right (the default) the bar draws no pills; turn it off to right-click one.
+  fake.shared["flockbook.tablist"] = false;
 });
 
 test("a tab's menu: rename, move, terminal, panes, splits, put away, close; ends of the row lose a move", () => {
   const list = fake.spaces[0].tabs;
   const labels = (items) => items.filter(Boolean).map((i) => i.label);
   assert.deepEqual(labels(tabItems(list[0], { agent: fake.agents[0], list })),
-    ["Rename…", "Move right", "Open terminal", "Show panes", "Split right", "Split down", "Put away", "Close tab"]);
+    // plus build: "Summarize this tab" and "Rewrite About line" (the latter only where the About tick can write it).
+    ["Rename…", "Move right", "Summarize this tab", "Rewrite About line", "Open terminal", "Show panes", "Split right", "Split down", "Put away", "Close tab"]);
   assert.deepEqual(labels(tabItems(list[1], { list, spaceId: "sp1" })), ["Open", "Rename…", "Move left", "Put away", "Close tab"]);
   assert.deepEqual(labels(spaceItems(fake.spaces[0])), ["New tab here", "Rename…", "Close workspace…"]);
 });

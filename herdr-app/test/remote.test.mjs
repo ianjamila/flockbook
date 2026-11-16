@@ -108,6 +108,101 @@ test("another version there: the card says it replaces it", async () => {
   assert.match(text, /Install the Flockbook helper on box\?/);
 });
 
+test("an older helper of the same version there: the card says it is older, offers this build's", async () => {
+  fake.why = { type: "error", code: "remote_helper_outdated", message: "The helper on box is older than this Flockbook (it lacks send-over-suggestion).",
+    remote: { protocol: 1, sidecar: "0.1.0", missing: ["send-over-suggestion"] }, install: install() };
+  const { cx, v } = await open();
+  const text = textOf(v.render(cx));
+  assert.match(text, /The helper on box is older than this Flockbook\./);
+  assert.doesNotMatch(text, /another version/);
+  assert.match(text, /Install the Flockbook helper on box\?/);
+});
+
+// s32 (review): an older helper still reads, so no failed feed draws the card; a Send anyway it can't do
+// (composer.helperAsk) puts the same card over the reply box, Install there clears it, Cancel hides it.
+test("Send anyway to an older helper: its install card over the reply box", async () => {
+  there = true;
+  const { cx, v } = await open();
+  await v.tick(cx); await cx.settle();
+  const older = { type: "error", code: "remote_helper_outdated", message: "The helper on box is older than this Flockbook (it lacks send-over-suggestion).",
+    remote: { protocol: 1, sidecar: "0.1.0", missing: ["send-over-suggestion"] }, install: install() };
+  assert.equal(byId(v.render(cx), "helper-install"), null, "no card while it reads fine");
+  v.composer.helperAsk = { address: "box/t7", err: older, at: Date.now() };
+  let el = v.render(cx);
+  assert.match(textOf(el), /The helper on box is older than this Flockbook\./);
+  assert.equal(v.feed().rows[0]?.text, "hello from box", "the chat stays");
+  assert.ok(byId(el, "helper-card"), "the card is drawn");
+  byId(el, "helper-install")._h.on_click({}, cx);
+  await cx.settle();
+  assert.deepEqual(calls.find((a) => a[0] === "helper")?.slice(0, 6), ["helper", "install", "--machine", "box", "--sha256", SHA]);
+  assert.equal(v.composer.helperAsk, null, "installed: the card goes");
+  assert.equal(byId(v.render(cx), "helper-install"), null);
+  v.composer.helperAsk = { address: "box/t7", err: older, at: Date.now() + 1 };   // a later ask, after the install
+  byId(v.render(cx), "helper-cancel")._h.on_click({}, cx);
+  assert.equal(byId(v.render(cx), "helper-install"), null, "cancelled: hidden (the note under the box says why)");
+  v.helper.state.delete("box");
+  v.composer.helperAsk = { address: "box/t9", err: older, at: Date.now() + 1 };
+  assert.equal(byId(v.render(cx), "helper-install"), null, "another tab's ask: not here");
+});
+
+// s34: a send the helper there refused for another version also fails the chat's feed, which draws its own card:
+// the reply box's card stays away (one card, not two).
+test("a send refused for another version while the chat already shows its card: one card", async () => {
+  fake.why = { type: "error", code: "remote_helper_outdated", message: "The helper on box is another version (0.0.9).", remote: { protocol: 1, sidecar: "0.0.9" }, install: install() };
+  const { cx, v } = await open();
+  v.composer.helperAsk = { address: "box/t7", err: fake.why };
+  const text = textOf(v.render(cx));
+  assert.equal(text.split("Install the Flockbook helper on box?").length - 1, 1, text);
+});
+
+// s34 review: installed through the chat's own card, the reply box's ask (and its note) goes too, not shown once the
+// feed reads again.
+test("installed through the chat's card: the reply box's ask and its note go", async () => {
+  fake.why = { type: "error", code: "remote_helper_outdated", message: "The helper on box is another version (0.0.9).", remote: { protocol: 1, sidecar: "0.0.9" }, install: install() };
+  const { cx, v } = await open();
+  v.composer.helperAsk = { address: "box/t7", err: fake.why, at: Date.now() - 5 };
+  v.composer.note = { text: "Not sent: the Flockbook helper on box is not this Flockbook's version. Install it (above), then send again.", bad: true, helper: true };
+  byId(v.render(cx), "helper-install")._h.on_click({}, cx);
+  await cx.settle();
+  const text = textOf(v.render(cx));
+  assert.equal(v.feed().rows[0]?.text, "hello from box", "the feed reads again");
+  assert.doesNotMatch(text, /Install the Flockbook helper/);
+  assert.equal(v.composer.helperAsk, null);
+  assert.equal(v.composer.note, null);
+});
+
+// s36 (s34 recheck item 2): the helper there fixed WITHOUT this card (deployed by hand, or from another computer):
+// the next good read proves it is this version, so a plain send's ask and its note go; an ask for an ability the
+// helper lacks (Send anyway on an older build of this version) stays, a read does not prove the ability.
+test("the helper fixed elsewhere: the next good read clears a plain send's install card and note", async () => {
+  fake.why = { type: "error", code: "remote_helper_outdated", message: "The helper on box is another version (0.0.9).", remote: { protocol: 1, sidecar: "0.0.9" }, install: install() };
+  const { cx, v } = await open();
+  v.composer.helperAsk = { address: "box/t7", err: fake.why, at: Date.now() - 5 };
+  v.composer.note = { text: "Not sent: the Flockbook helper on box is not this Flockbook's version. Install it (above), then send again.", bad: true, helper: true };
+  there = true;   // updated by hand: no install from any card
+  await v.refresh(cx); await cx.settle();
+  assert.equal(v.feed().rows[0]?.text, "hello from box", "the feed reads again");
+  assert.equal(v.composer.helperAsk, null, "the ask goes");
+  assert.equal(v.composer.note, null, "and its note");
+  assert.doesNotMatch(textOf(v.render(cx)), /Install the Flockbook helper/);
+});
+
+test("a good read keeps a Send anyway's ask for an ability the helper there lacks", async () => {
+  there = true;
+  const { cx, v } = await open();
+  await v.tick(cx); await cx.settle();
+  const older = { type: "error", code: "remote_helper_outdated", message: "The helper on box is older than this Flockbook (it lacks send-over-suggestion).",
+    remote: { protocol: 1, sidecar: "0.1.0", missing: ["send-over-suggestion"] }, install: install() };
+  v.composer.helperAsk = { address: "box/t7", err: older, at: Date.now() };
+  await v.refresh(cx); await cx.settle();
+  assert.ok(v.composer.helperAsk, "kept: reading works on the older build too");
+  assert.ok(byId(v.render(cx), "helper-install"));
+  // Another tab's ask is not this feed's to clear.
+  v.composer.helperAsk = { address: "box/t9", err: { ...older, remote: { protocol: 1, sidecar: "0.0.9" } }, at: Date.now() };
+  await v.refresh(cx); await cx.settle();
+  assert.equal(v.composer.helperAsk?.address, "box/t9");
+});
+
 test("no helper for that platform, Windows, a bad address, a failed call: clear words, no card", async () => {
   const show = async (why) => { fake.why = why; const { cx, v } = await open(); const el = v.render(cx); return { text: textOf(el), card: byId(el, "helper-install") }; };
   let r = await show(missing(null));

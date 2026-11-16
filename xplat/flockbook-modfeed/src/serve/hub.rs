@@ -420,7 +420,11 @@ pub fn workspaces(home: Option<&str>) -> Vec<herdr_core::Workspace> {
         return vec![];
     }
     let never = crate::config::load(crate::config::dir(home).as_deref()).remote_never;
-    super::layout::snapshot(&HcClient::new(session, 8, 22), never).unwrap_or_default()
+    let client = HcClient::new(session, 8, 22);
+    let mut ws = super::layout::snapshot(&client, never).unwrap_or_default();
+    // Parked Claude tabs (owner 11-13) show on the phone with their job's status, as in the mod.
+    crate::parked::promote(&mut ws, &client);
+    ws
 }
 
 fn now_s() -> u64 {

@@ -4,12 +4,69 @@
 // walks the picker's tabs (`card --all`).
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, Textarea, TextareaState } from "gpui-base";
-import { shared, setShared, agents } from "herdr";
+import { shared, setShared, hc } from "herdr";
+import { agents } from "./parked.js";
 import { icon, openTerminal, KEY_TERM } from "./state.js";
 import * as sidecar from "./sidecar.js";
+import { elicitation, elicitFocus, noteElicit, captureElicit } from "./asks.js";
+import { HelperUI, installedSince } from "./helpercard.js";
 
 export const CARD_MS = 1500;
+// s34 (owner, item 12): approve and answer for a terminal on another machine are checked there first: a helper there
+// of another version (or none, or an older build) runs nothing and answers with the install card's data. It is kept
+// (`helperAsk`) and drawn with the card, or in Needs you in place of a card that could not be read.
+const HELPER_ASK = new Set(["remote_helper_missing", "remote_helper_outdated"]);
+export const helperAskOf = (err, from = "press") => (HELPER_ASK.has(err?.code) && err.install ? { err, from, at: Date.now() } : null);
+export const HELPER_NOT_SENT = (m) => `Not sent: the Flockbook helper on ${m} has to be installed or updated first. Install it (below), then press again.`;
+// An answer's "another agent is in this pane": the sidecar's check before each key failed, and for a question that
+// check also wants the exact question on screen (herdr-core question::answer_question), so an agent still drawing
+// (a busy machine) fails it the same way. The check runs before each key, the first one too, and the sidecar does
+// not say which one failed: nothing went in when it failed at the first key, some picks may be in otherwise.
+export const STOPPED_ANSWER = "Flockbook stopped: the screen no longer matched this question (still drawing, or another agent in the pane). Nothing went in if it stopped before the first key; otherwise your first picks may be in. Check the terminal (ctrl-`) before trying again.";
+// Typed answers go to the agent key by key through Herdr (hc keys), which has key names only for these: letters,
+// digits, space and the unshifted symbols. The sidecar refuses any other character before the first key ("the typed
+// answer has characters Herdr cannot type yet … answer in the terminal": flockbook-helper-fixes.patch, can_type).
+const TYPEABLE = /^[A-Za-z0-9 ',.;\/\-=[\]\\`]$/;
+// The characters of the own answers Herdr can't type, each once ("!?é"), or "" when all can go. Only a picker's
+// answers are typed key by key: a question answered by a message (`q.delivery` "message", Codex) goes as text, so
+// any character goes (herdr-core question::answer_question sends it before the key check).
+export function untypeable(others = new Map(), q = null) {
+  if (q?.delivery === "message") return "";
+  const bad = new Set();
+  for (const v of others.values()) for (const ch of String(v ?? "").trim()) if (!TYPEABLE.test(ch)) bad.add(ch);
+  return [...bad].join("");
+}
+export const UNTYPEABLE = (chars) => `Herdr can't type ${[...chars].map((c) => c === " " ? "space" : c === "\n" ? "a new line" : `“${c}”`).join(" ")} yet, so this answer can't go from here. Reword it (letters, digits, spaces and ' , . ; / - = [ ] \\ \` only), or answer in the terminal.`;
+// The sidecar's own refusal of such an answer, for a card that was sent anyway (an older check here, a race).
+export const cannotType = (note) => /cannot type/i.test(String(note ?? ""));
+// The sidecar's review check (herdr-core question/claude_exact.rs review_ambiguous): a Claude question asked through
+// its tool (not on screen only) with 2+ questions, or a multi-choice last one, ends on Claude's review screen, which
+// lists the picks joined by commas. An option name with a comma or a review mark (● →), two names alike (spaces
+// dropped), a question text with a review mark, or an own answer with a comma, a review mark or alike an option:
+// the sidecar refuses before any key ("the review screen could not show which options were picked"). Checked here
+// first, so the card says so before Send. "option": no answer can go from here; "own": the own answer can't.
+const reviewMark = (s) => /[●→]/.test(s);
+export function reviewBlocked(q, others = new Map()) {
+  const qs = q?.questions ?? [];
+  const hooked = (q?.agent ?? "claude") === "claude" && !String(q?.toolUseId ?? "").startsWith("screen-");
+  if (!hooked || q?.delivery === "message" || !(qs.length > 1 || qs[qs.length - 1]?.multi)) return null;
+  for (const [k, x] of qs.entries()) {
+    // A comma counts only in a multi-choice question: a single-choice one's review line shows one answer, not
+    // picks joined by commas (11-12: every "Yes, …" / "No / not yet" card was sent to the terminal).
+    const comma = (s) => Boolean(x.multi) && s.includes(",");
+    const names = (x.options ?? []).map((o) => String(o.label ?? "").replace(/\s+/g, ""));
+    if (reviewMark(x.text ?? "") || names.some((n) => comma(n) || reviewMark(n)) || new Set(names).size !== names.length) return "option";
+    const own = String(others.get(k) ?? "").replace(/\s+/g, "");
+    if (own && (comma(own) || reviewMark(own) || names.includes(own))) return "own";
+  }
+  return null;
+}
+export const REVIEW_OPTION = "Answer this one in the terminal: an option's name has a comma (or ● →), so Flockbook can't check your picks on Claude's review screen and won't send them.";
+export const REVIEW_OWN = "Your own answer has a comma (or ● →, or matches an option), so Flockbook can't check it on Claude's review screen. Reword it, or answer in the terminal.";
 const KEY_FULL = "flockbook.card.full"; // { address, card }: that full card
+
+// The MCP-prompt reader (elicitation) lives in asks.js now, so the asks tick reads it too (s10).
+export { elicitation };
 
 // Whether to read the card: herdr-app shows the agent as blocked, or the log ends with a call that
 // waits (a pending perm or question row).
@@ -50,6 +107,12 @@ export const MAX_QUESTIONS = 4;
 const answered = (en, qi) => Boolean(en.picks.get(qi)?.size || (en.others.get(qi) ?? "").trim());
 
 // A digit key's number (1-9), or null.
+// An own answer stays on one line: Enter in the box (or a pasted line break) would put a new line in it,
+// and a new line can't be typed into Claude's question. Line breaks and the spaces around them → one space.
+export function oneLine(v) {
+  return String(v ?? "").replace(/[ \t]*\r?\n[ \t]*/g, " ").trim();
+}
+
 export function digit(e) {
   const m = e?.modifiers ?? {};
   if (m.platform || m.cmd || m.control || m.alt) return null;
@@ -63,17 +126,31 @@ export class Cards {
     this.focus = cx?.focus_handle?.() ?? null;
     this.canFocus = () => true;   // the chat says no while you type a reply
     this.byAgent = new Map();
+    // A pause between a key and the next screen read (tests make it instant).
+    this.wait = (cx, ms) => new Promise((res) => (cx?.timer?.after ? cx.timer.after(ms, () => res()) : setTimeout(res, ms)));
     this.address = null;   // whose card the boxes belong to now
+    this.helper = null;   // s34: the install card after a press the helper there could not run (made when first needed)
+    // Which own-answer box has the keyboard (its question), or null. While one has it, the card's own key
+    // handler leaves 1-9 and Enter alone so they type into the box. (The row used to stop every key
+    // instead, and a stopped key never reaches a text box as typed text: nothing could be typed, s12.)
+    this.typingIn = null;
     this.others = Array.from({ length: MAX_QUESTIONS }, (_v, qi) => {
       const input = TextareaState.new({ placeholder: "Or type your own answer", rows: 1 });
+      input.on("focus", () => { this.typingIn = qi; });
+      input.on("blur", () => { if (this.typingIn === qi) this.typingIn = null; });
       input.on("change", (_e, cx) => {
+        // A new line (Enter, Shift+Enter, a paste) becomes a space (a repeat change from set_value is harmless).
+        let v = input.value();
+        if (/\n/.test(v)) { v = oneLine(v); input.set_value(v); }
         const e = this.byAgent.get(this.address); if (!e) return;
         const was = Boolean((e.others.get(qi) ?? "").trim());
-        e.others.set(qi, input.value());
-        // The card's `blocked` may change with it: the next poll reads it again at once.
+        e.others.set(qi, v);
+        // The card's `blocked` (the helper's review check) may change with it: the next poll reads it again at once.
         if (e.card?.kind === "question") e.at = 0;
-        if (was !== Boolean(input.value().trim())) cx.notify();
+        if (was !== Boolean(v.trim())) cx.notify();
       });
+      // Enter in the box does what Enter on the card does: the next question, or send.
+      input.on("submit", (e, cx) => { if (!e?.shift) this.enter(cx, this.address); });
       return input;
     });
   }
@@ -93,7 +170,8 @@ export class Cards {
   }
 
   // Reads the card when `want`, at most every CARD_MS unless `force`. Drops it when not wanted.
-  async poll(cx, address, want, force = false) {
+  // `afterPress`: the re-read right after a press, which keeps that press's install card (s36).
+  async poll(cx, address, want, force = false, afterPress = false) {
     if (!address) return;
     const e = this.entry(address);
     if (!want) { if (e.card) { e.card = null; e.note = null; cx.notify(); } return; }
@@ -101,8 +179,31 @@ export class Cards {
     e.busy = true; e.at = Date.now();
     try {
       const r = await sidecar.card(address, false, e.card?.kind === "question" ? draftFor(e.card.question, e.picks, e.others) : null);
+      // s34: a card read on another machine whose helper must be installed first: Needs you shows its install card.
+      // A read that works clears only a read's ask: a press's stays until that press goes (or the install).
+      const ask = r.error ? helperAskOf(r.error, "poll") : null, had = Boolean(e.helperAsk);
+      // s36: a good read also clears a press's ask whose helper only had to be this version (fixed by hand or from
+      // another computer, not from a card); its note goes with it. One lacking an ability stays (a read can't tell).
+      if (ask) e.helperAsk = ask;
+      else if (!r.error && e.helperAsk && (e.helperAsk.from === "poll" || (!afterPress && !(e.helperAsk.err?.remote?.missing?.length)))) {
+        const m = e.helperAsk.err?.install?.machine;
+        if (m && e.note === HELPER_NOT_SENT(m)) e.note = null;
+        e.helperAsk = null;
+      }
+      if (had !== Boolean(e.helperAsk)) cx.notify();
       const line = r.error ? null : r.lines.find((l) => l.type === "card");
       let card = line && line.kind ? line : null;
+      // No card from the helper: an MCP server's input request on screen (elicitation) gets one of its own.
+      if (!card && !r.error) {
+        const scr = await hc(["read", address]).catch(() => null);
+        const el = scr?.code === 0 ? elicitation(scr.stdout) : null;
+        // The card shows (and a press compares) the whole request, not the 1200-char cut (s28 Codex R1).
+        if (el) card = { kind: "elicitation", server: el.server, text: el.full, answerable: el.answerable, request: `elicit:${el.server}:${el.full.length}:${el.full.slice(0, 80)}:${el.full.slice(-80)}` };
+        // The sidebar's 🔌 sees it now, not at the next asks tick.
+        if (scr?.code === 0) noteElicit(address, el);
+        // The first real one is saved for the layout check (s29), read only.
+        if (scr?.code === 0) void captureElicit(address, scr.stdout);
+      } else if (card) noteElicit(address, null);
       // The screen shows one question at a time; keep the full set read with "Show all".
       if (card && e.card && card.request === e.card.request && card.unread > 0 && !e.card.unread) card = e.card;
       // Another view read it in full already.
@@ -136,8 +237,15 @@ export class Cards {
   // 1-9 picks an option of the first question without a pick (a multi-choice one: toggles);
   // on an approval 1 allows once and 2 denies. Enter sends the answer. True when it took the key.
   key_down(e, cx, address) {
+    // A key that reaches the card while the card itself lacks the keyboard comes from its own-answer box (s13 F2:
+    // the card's focus decides, so a missed blur can't leave the shortcuts dead). Escape there hands the keyboard
+    // back to the card, nothing sent or cleared (F3); every other key types into the box.
+    if (this.focus ? !this.focus.is_focused() : this.typingIn !== null) {
+      if (e?.key === "escape" && this.focus) { this.typingIn = null; this.focus.focus(); cx.notify?.(); return true; }
+      return false;
+    }
     const en = this.byAgent.get(address), c = en?.card;
-    if (!c || en.sending) return false;
+    if (!c || en.sending || c.kind === "elicitation") return false;
     const n = digit(e);
     if (c.kind === "approval") {
       // Answered already (the sidecar keeps one answer per prompt): the keys stay with whoever has the focus.
@@ -145,17 +253,8 @@ export class Cards {
       if (n === 1 || n === 2) { cx.spawn((cx) => this.approve(cx, address, n === 1)); return true; }
       return false;
     }
+    if (e?.key === "enter") return this.enter(cx, address);
     const qs = c.question?.questions ?? [];
-    if (e?.key === "enter") {
-      if (c.unread > 0) return false;
-      const step = en.step ?? 0;
-      if (step < qs.length - 1) {
-        if (!answered(en, step)) return false;
-        en.step = step + 1; cx.notify(); return true;
-      }
-      if (!c.blocked && answersFor(c.question, en.picks, en.others)) { cx.spawn((cx) => this.answer(cx, address)); return true; }
-      return false;
-    }
     if (n === null) return false;
     const qi = Math.min(en.step ?? 0, qs.length - 1);
     // The number after the options moves the keyboard into the own-answer box.
@@ -163,6 +262,34 @@ export class Cards {
     if (!this.pick(en, qs, qi, n - 1)) return false;
     cx.notify();
     return true;
+  }
+
+  // Enter, on the card or in an own-answer box: the next question once this one is answered, else send
+  // when the answers can go. Moving on from a box gives the keyboard back to the card (its box is gone),
+  // so 1-9 pick on the next question. True when it did something.
+  enter(cx, address) {
+    const en = this.byAgent.get(address), c = en?.card;
+    if (!c || en.sending || c.kind === "approval" || c.kind === "elicitation" || c.unread > 0) return false;
+    const qs = c.question?.questions ?? [];
+    const step = en.step ?? 0;
+    if (step < qs.length - 1) {
+      if (!answered(en, step)) return false;
+      en.step = step + 1;
+      if (this.typingIn !== null) { this.typingIn = null; this.focus?.focus(); }
+      cx.notify(); return true;
+    }
+    if (!c.blocked && answersFor(c.question, en.picks, en.others) && !reviewBlocked(c.question, en.others) && !untypeable(en.others, c.question)) { cx.spawn((cx) => this.answer(cx, address)); return true; }
+    return false;
+  }
+
+  // The own-answer boxes are shared by every card: fill them with `address`'s text when its card is shown. The
+  // address is set FIRST: set_value fires "change", which stores the box's text for `this.address` (s13: it used
+  // to write the new card's text into the previous tab's answer).
+  hydrate(address) {
+    if (this.address === address) return;
+    this.address = address;
+    const e = this.byAgent.get(address);
+    this.others.forEach((b, k) => b.set_value(e?.others.get(k) ?? ""));
   }
 
   // Picks option `oi` of question `qi`. A one-choice pick moves on to the next question.
@@ -176,7 +303,7 @@ export class Cards {
     return true;
   }
 
-  async act(cx, address, run) {
+  async act(cx, address, run, stopped = sidecar.AGENT_CHANGED) {
     const e = this.entry(address);
     if (e.sending || !e.card) return;
     e.sending = true; e.note = null; cx.notify();
@@ -184,24 +311,87 @@ export class Cards {
     try {
       const r = await run(e.card);
       const done = r.lines.find((l) => l.type === "done");
-      if (r.error) note = r.error.message;
+      const ask = helperAskOf(r.error);
+      if (!r.error) e.helperAsk = null;
+      if (ask) { e.helperAsk = ask; note = HELPER_NOT_SENT(ask.err.install.machine); }
+      else if (r.error) note = r.error.message;
       else if (done?.result === "sent") e.card = null;
-      else if (sidecar.agentChanged(done)) note = sidecar.AGENT_CHANGED;
+      else if (sidecar.agentChanged(done)) note = stopped;
       else if (done?.result === "changed") note = "It changed on screen. Here is what it shows now.";
       else note = done?.message || "The keys did not go out.";
     } finally { e.sending = false; }
-    await this.poll(cx, address, true, true);
+    await this.poll(cx, address, true, true, true);
     e.note = note;  // after the read: a new card would clear it
     cx.notify();
   }
 
   approve(cx, address, allow) { return this.act(cx, address, (c) => sidecar.approve(address, c.request, allow)); }
 
+  // s34: the install card for `address` (a press, or a card read, its machine's helper could not run), or null.
+  // Installed → it goes and the card is read again.
+  helperCard(address, t) {
+    const e = this.byAgent.get(address);
+    if (!e?.helperAsk) return null;
+    // Installed since (by this card or any other): the ask and its note go.
+    const m = e.helperAsk.err.install.machine;
+    if (installedSince(m, e.helperAsk.at)) { if (e.note === HELPER_NOT_SENT(m)) e.note = null; e.helperAsk = null; return null; }
+    this.helper ??= new HelperUI();
+    return this.helper.sendCard(t, e.helperAsk.err, async (cx) => { e.helperAsk = null; await this.poll(cx, address, true, true); });
+  }
+
+  // s27 (owner 11-14 "one-click MCP Supabase migrations"): Accept / Decline on an MCP server's input request. Only on a
+  // press, never by itself, and every key is checked first: the screen is read again and the key goes only while the
+  // SAME request (server and text) is still there with the terminal's selection on the button pressed. Decline moves
+  // the selection down and checks it reached Decline before Enter; when it didn't, Esc (cancel: nothing runs).
+  async elicitAnswer(cx, address, accept) {
+    const e = this.entry(address), c = e.card;
+    if (e.sending || c?.kind !== "elicitation" || !c.answerable) return;
+    e.sending = true; e.note = null; cx.notify?.();
+    let note = null;
+    const read = async () => { const r = await hc(["read", address]).catch(() => null); return r?.code === 0 ? String(r.stdout ?? "") : null; };
+    const same = (scr) => { const el = scr == null ? null : elicitation(scr); return Boolean(el && el.server === c.server && el.full === c.text); };
+    const key = async (...k) => (await hc(["keys", address, ...k]).catch(() => null))?.code === 0;
+    try {
+      let scr = await read();
+      if (scr == null) note = "Not sent: its screen could not be read. Answer in the terminal.";
+      else if (!same(scr)) note = elicitation(scr) ? "Not sent: the request on screen changed. Here is what it shows now." : null;
+      else if (accept) {
+        if (elicitFocus(scr) !== "accept") note = "Not sent: the terminal's selection is not on Accept. Answer in the terminal.";
+        else if (!(await key("enter"))) note = "The key did not go out. Answer in the terminal.";
+        else note = await this.elicitAfter(cx, read, same);
+      } else {
+        if (elicitFocus(scr) !== "decline") {
+          if (!(await key("down"))) { note = "The key did not go out. Answer in the terminal."; return; }
+          await this.wait(cx, 300);
+          scr = await read();
+          if (!same(scr)) { note = "Not sent: the request on screen changed. Here is what it shows now."; return; }
+          if (elicitFocus(scr) !== "decline") {
+            // Never Enter here: cancel instead, which runs nothing either.
+            note = (await key("esc")) ? await this.elicitAfter(cx, read, same, "Cancelled (Esc): the selection did not reach Decline.") : "The key did not go out. Answer in the terminal.";
+            return;
+          }
+        }
+        if (!(await key("enter"))) note = "The key did not go out. Answer in the terminal.";
+        else note = await this.elicitAfter(cx, read, same);
+      }
+    } finally {
+      e.sending = false;
+      await this.poll(cx, address, true, true);
+      e.note = note;   // after the read: a new card would clear it
+      cx.notify?.();
+    }
+  }
+  // After a key: null when the request left the screen, else a note (or `gone`'s text when it went but says more).
+  async elicitAfter(cx, read, same, gone = null) {
+    await this.wait(cx, 800);
+    return same(await read()) ? "Sent, but the request still shows. Check its terminal." : gone;
+  }
+
   answer(cx, address) {
     const e = this.entry(address);
     const answers = answersFor(e.card?.question, e.picks, e.others);
-    if (!answers) return;
-    return this.act(cx, address, (c) => sidecar.answer(address, c.request, answers));
+    if (!answers || e.card?.blocked || reviewBlocked(e.card?.question, e.others) || untypeable(e.others, e.card?.question)) return;
+    return this.act(cx, address, (c) => sidecar.answer(address, c.request, answers), STOPPED_ANSWER);
   }
 
   // The card for `address`, or null. `id` makes the ids unique when two views show one.
@@ -216,7 +406,7 @@ export class Cards {
       .child(label);
     const box = v_flex().id(id).w_full().max_w(800).p(14).gap(10).rounded(14).bg(t.raised);
     if (this.focus) box.track_focus(this.focus)
-      .on_mouse_down("left", () => this.focus.focus())
+      .on_mouse_down("left", () => { this.typingIn = null; this.focus.focus(); })
       .on_key_down((ev, cx) => { if (this.key_down(ev, cx, address)) cx.stop_propagation(); });
     const hint = (n) => div().size(18).flex_none().rounded(5).border(1).border_color(t.border).flex().items_center().justify_center()
       .text_size(10.5).text_color(t.muted).child(String(n));
@@ -229,8 +419,40 @@ export class Cards {
       if (shared(KEY_TERM)) openTerminal(null);
       openTerminal(a);
     };
-    const tail = () => e.note ? div().id(`${id}-note`).text_size(12).text_color(t.blocked).child(e.note) : null;
+    // The note of the last press; the sidecar refusing a typed answer it can't type also gets the terminal button.
+    const said = () => !e.note ? null : cannotType(e.note)
+      ? h_flex().id(`${id}-note`).gap(10).items_center()
+        .child(div().flex_1().min_w(0).text_size(12).text_color(t.blocked).child(e.note))
+        .child(button("note-terminal", "Answer in terminal", true, toTerminal))
+      : div().id(`${id}-note`).text_size(12).text_color(t.blocked).child(e.note);
+    // s34: under the note, the install card when the helper there must be installed first.
+    const tail = () => {
+      const helper = this.helperCard(address, t), note = said();   // the card first: a stale one clears its note
+      return helper ? v_flex().w_full().gap(8).children([note, helper].filter(Boolean)) : note;
+    };
 
+    if (c.kind === "elicitation") {
+      // s27 (owner 11-14): Accept / Decline here, each checked against the screen first (elicitAnswer); the server and
+      // its whole request are shown so you know what Accept runs.
+      box.child(head(`MCP server “${c.server}” asks for your input`));
+      if (c.text) box.child(div().id(`${id}-elicit`).max_h(220).overflow_y_scrollbar().px(10).py(8).rounded(8).bg(t.background)
+        .text_size(13).text_color(t.foreground).child(c.text));
+      if (!c.answerable) {
+        // s28 (Fable): the screen can't vouch for the dialog's buttons (more than one title-like line, or text under them).
+        box.child(h_flex().gap(8).items_center()
+          .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child("Answer it in its terminal: its screen can't be checked well enough for a one-click answer."))
+          .child(button("elicit-terminal", "Answer in terminal", true, toTerminal)));
+        const n0 = tail(); if (n0) box.child(n0);
+        return box;
+      }
+      box.child(h_flex().gap(8).items_center()
+        .child(button("elicit-accept", e.sending ? "Sending…" : "Accept", true, (cx) => this.elicitAnswer(cx, address, true), e.sending))
+        .child(button("elicit-decline", "Decline", false, (cx) => this.elicitAnswer(cx, address, false), e.sending))
+        .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child("Checked against its screen before any key goes."))
+        .child(button("elicit-terminal", "Answer in terminal", false, toTerminal)));
+      const n = tail(); if (n) box.child(n);
+      return box;
+    }
     if (c.kind === "approval") {
       box.child(head(c.title || (c.tool ? `${c.tool} wants to run` : "Approval needed")));
       if (c.command) box.child(div().id(`${id}-command`).max_h(140).overflow_y_scrollbar().px(10).py(8).rounded(8).bg(t.background)
@@ -273,20 +495,22 @@ export class Cards {
       });
       // The boxes are shared by every card; fill them with this card's text when it is shown.
       const input = this.others[qi];
-      if (this.address !== address) { this.others.forEach((b, k) => b.set_value(e.others.get(k) ?? "")); this.address = address; }
-      // Own answer: a row like the options. Clicks and keys stay in the text box: the card would
-      // take the focus on a press and read 1-9 and Enter as picks.
+      this.hydrate(address);
+      // Own answer: a row like the options. A press stays in the text box (the card would take the
+      // focus). Keys must NOT be stopped here: a stopped key never reaches the box as typed text. The
+      // card's key handler skips them instead while the box has the keyboard (`typingIn`).
       const own = Boolean((e.others.get(qi) ?? "").trim());
       const keep = (_ev, cx) => cx.stop_propagation();
       if (input) sec.child(h_flex().id(`${id}-q${qi}-other`).px(10).py(7).gap(10).items_center().rounded(8)
         .bg(own ? t.selected : t.background).border(1).border_color(own ? t.accent : t.border)
-        .on_mouse_down("left", keep).on_key_down(keep)
+        .on_mouse_down("left", keep)
         .child(div().size(14).flex_none().rounded(qq.multi ? 3 : 7).border(1).border_color(own ? t.accent : t.muted).bg(own ? t.accent : t.background))
         .child(div().flex_1().min_w(0).child(Textarea.new(input).w_full().text_size(13)))
         .when((qq.options ?? []).length < 9, (el) => el.child(hint((qq.options ?? []).length + 1))));
       box.child(sec);
     });
     // The terminal's review screen could not show these answers: `answer` would refuse, so Send is off from the start.
+    // (The plus build's own check below says it before the helper's poll answers; this line, when there, wins.)
     if (c.blocked && !(c.unread > 0)) box.child(h_flex().id(`${id}-blocked`).gap(10).items_center()
       .child(div().flex_1().min_w(0).text_size(12).text_color(t.blocked).child(c.blocked))
       .child(button("terminal", "Answer in terminal", false, toTerminal)));
@@ -297,16 +521,22 @@ export class Cards {
         .child(div().text_size(12.5).text_color(t.muted)
           .child(`${c.unread} more question${c.unread === 1 ? " follows" : "s follow"}. Answer them all here, then send.`)));
     } else {
-      const ready = !c.blocked && Boolean(answersFor(q, e.picks, e.others));
+      const cant = untypeable(e.others, q);
+      // An own answer Herdr can't type blocks like an own answer the review screen can't show; the helper's own
+      // review check (`c.blocked`, upstream) blocks first ("helper": its line above says why, with its terminal button).
+      const blocked = (c.blocked ? "helper" : null) ?? reviewBlocked(q, e.others) ?? (cant ? "type" : null);
+      const ready = Boolean(answersFor(q, e.picks, e.others)) && !blocked;
       const last = step >= count - 1;
       // The hint on the left; Back, then Next or Send answer at the right end.
       box.child(h_flex().gap(10).items_center()
         .child(div().text_size(12).text_color(t.dim).child(count ? `1-9 picks · Enter ${last ? "sends" : "goes on"}` : ""))
         .child(div().flex_1())
+        .when(blocked !== null && blocked !== "helper", (el) => el.child(button("terminal", "Answer in terminal", blocked === "option", toTerminal)))
         .when(step > 0, (el) => el.child(button("back", "Back", false, async (cx) => { e.step = step - 1; cx.notify(); })))
         .child(last
-          ? button("answer", e.sending ? "Sending…" : "Send answer", true, (cx) => this.answer(cx, address), !ready || e.sending)
-          : button("next", "Next", true, async (cx) => { e.step = step + 1; cx.notify(); }, !answered(e, step))));
+          ? button("answer", e.sending ? "Sending…" : "Send answer", blocked === null, (cx) => this.answer(cx, address), !ready || e.sending)
+          : button("next", "Next", blocked !== "option", async (cx) => { e.step = step + 1; cx.notify(); }, !answered(e, step))));
+      if (blocked && blocked !== "helper") box.child(div().id(`${id}-review`).text_size(12).text_color(t.blocked).child(blocked === "option" ? REVIEW_OPTION : blocked === "type" ? UNTYPEABLE(cant) : REVIEW_OWN));
     }
     const n = tail(); if (n) box.child(n);
     return box;

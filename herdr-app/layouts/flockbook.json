@@ -47,36 +47,99 @@
           "children": [
             {
               "id": "chat",
-              "type": "block",
-              "content": {
-                "mod": "flockbook",
-                "props": {
-                  "view": "chat"
+              "type": "column",
+              "resizable": false,
+              "children": [
+                {
+                  "id": "chat-top",
+                  "type": "block",
+                  "size": {
+                    "px": 56
+                  },
+                  "window_drag": true,
+                  "content": {
+                    "mod": "flockbook",
+                    "props": {
+                      "view": "top"
+                    }
+                  }
+                },
+                {
+                  "id": "chat-body",
+                  "type": "block",
+                  "content": {
+                    "mod": "flockbook",
+                    "props": {
+                      "view": "chat",
+                      "bar": "outside"
+                    }
+                  }
                 }
-              },
-              "window_drag": true
+              ]
             },
             {
               "id": "needs",
-              "type": "block",
-              "content": {
-                "mod": "flockbook",
-                "props": {
-                  "view": "needs"
+              "type": "column",
+              "resizable": false,
+              "children": [
+                {
+                  "id": "needs-top",
+                  "type": "block",
+                  "size": {
+                    "px": 56
+                  },
+                  "window_drag": true,
+                  "content": {
+                    "mod": "flockbook",
+                    "props": {
+                      "view": "top"
+                    }
+                  }
+                },
+                {
+                  "id": "needs-body",
+                  "type": "block",
+                  "content": {
+                    "mod": "flockbook",
+                    "props": {
+                      "view": "needs",
+                      "bar": "outside"
+                    }
+                  }
                 }
-              },
-              "window_drag": true
+              ]
             },
             {
               "id": "overview",
-              "type": "block",
-              "content": {
-                "mod": "flockbook",
-                "props": {
-                  "view": "overview"
+              "type": "column",
+              "resizable": false,
+              "children": [
+                {
+                  "id": "overview-top",
+                  "type": "block",
+                  "size": {
+                    "px": 56
+                  },
+                  "window_drag": true,
+                  "content": {
+                    "mod": "flockbook",
+                    "props": {
+                      "view": "top"
+                    }
+                  }
+                },
+                {
+                  "id": "overview-body",
+                  "type": "block",
+                  "content": {
+                    "mod": "flockbook",
+                    "props": {
+                      "view": "overview",
+                      "bar": "outside"
+                    }
+                  }
                 }
-              },
-              "window_drag": true
+              ]
             },
             {
               "id": "tab",
@@ -119,6 +182,45 @@
               ]
             }
           ]
+        }
+      ]
+    },
+    {
+      "id": "tablist",
+      "type": "column",
+      "size": {
+        "px": 250
+      },
+      "min": 180,
+      "max": 420,
+      "resizable": false,
+      "background": "chrome",
+      "children": [
+        {
+          "id": "tabs-top",
+          "type": "block",
+          "size": {
+            "px": 56
+          },
+          "window_drag": true,
+          "content": {
+            "mod": "flockbook",
+            "props": {
+              "view": "tabs",
+              "part": "head"
+            }
+          }
+        },
+        {
+          "id": "tabs-body",
+          "type": "block",
+          "content": {
+            "mod": "flockbook",
+            "props": {
+              "view": "tabs",
+              "part": "list"
+            }
+          }
         }
       ]
     }

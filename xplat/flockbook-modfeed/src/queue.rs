@@ -560,15 +560,23 @@ fn is_rule(line: &str) -> bool {
     t.chars().count() >= 10 && t.chars().all(|c| c == '─')
 }
 
+/// An input box's two edges: the last rule line, and the nearest rule above it, which may carry the session's name
+/// ("──────── name ─": a named session draws it in the top edge; composer.js BOX_EDGE).
+fn box_edges(lines: &[String]) -> Option<(usize, usize)> {
+    let b = lines.iter().rposition(|l| is_rule(l))?;
+    let titled = |l: &str| {
+        let t = trim(l);
+        t.chars().take_while(|c| *c == '─').count() >= 8 && t.ends_with('─')
+    };
+    let a = lines[..b].iter().rposition(|l| is_rule(l) || titled(l))?;
+    Some((a, b))
+}
+
 /// Claude Code's input box rows as the screen has them: only the box's two-column margin is taken off (the prompt
 /// mark and its space on the first row, two columns on the others), nothing trimmed or replaced.
 pub fn raw_box(screen: &str) -> Vec<String> {
     let lines = lines_of(screen);
-    let rules: Vec<usize> = (0..lines.len()).filter(|&i| is_rule(&lines[i])).collect();
-    if rules.len() < 2 {
-        return vec![];
-    }
-    let (a, b) = (rules[rules.len() - 2], rules[rules.len() - 1]);
+    let Some((a, b)) = box_edges(&lines) else { return vec![] };
     lines[a + 1..b]
         .iter()
         .enumerate()
@@ -588,11 +596,7 @@ pub fn raw_box(screen: &str) -> Vec<String> {
 
 /// Claude Code: the rows between the last two rule lines; the first starts with "❯ ".
 fn claude_box(lines: &[String]) -> Vec<String> {
-    let rules: Vec<usize> = (0..lines.len()).filter(|&i| is_rule(&lines[i])).collect();
-    if rules.len() < 2 {
-        return vec![];
-    }
-    let (a, b) = (rules[rules.len() - 2], rules[rules.len() - 1]);
+    let Some((a, b)) = box_edges(lines) else { return vec![] };
     box_rows(&lines[a + 1..b], '❯')
 }
 
@@ -685,6 +689,47 @@ pub fn box_has_text(kind: &str, screen: &str, claude_suggests: bool) -> Option<b
         _ => return None,
     };
     Some(rows.iter().any(|r| !trim(r).is_empty()))
+}
+
+/// Send anyway (`send --over-suggestion`): Claude Code's box when it holds only a lone "/word" (one row, a command
+/// name and nothing after it) and no command list stands right above the box (a really typed "/…" shows one): that
+/// word. Most likely Claude's dim prompt suggestion. As composer.js `suggestedSlash`.
+pub fn claude_lone_slash(screen: &str) -> Option<String> {
+    let lines = lines_of(screen);
+    let rows = ruled(&lines, Some('❯'))?;
+    let [row] = &rows[..] else { return None };
+    let word = trim(row);
+    if !slash_word(word) {
+        return None;
+    }
+    // The two lines right above the box's top edge.
+    let (top, _) = box_edges(&lines)?;
+    if lines[top.saturating_sub(2)..top].iter().any(|l| list_row(l)) {
+        return None;
+    }
+    Some(word.to_string())
+}
+
+/// Whether "/word" is a lone command name: "/" and at least one of A-Z a-z 0-9 _ : . - (composer.js's rule).
+pub fn slash_word(w: &str) -> bool {
+    w.strip_prefix('/').is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || "_:.-".contains(c)))
+}
+
+/// A row of Claude Code's command list: "/name", two or more spaces, its description (the picked row starts "❯ ").
+fn list_row(line: &str) -> bool {
+    let l = line.replace('\u{a0}', " ");
+    let l = l.trim_start();
+    let l = l.strip_prefix('❯').map_or(l, |r| if r.starts_with(char::is_whitespace) { r.trim_start() } else { l });
+    let Some(name_end) = l.find(char::is_whitespace) else { return false };
+    let rest = &l[name_end..];
+    let gap = rest.chars().take_while(|c| c.is_whitespace()).count();
+    slash_word(&l[..name_end]) && gap >= 2 && rest.chars().nth(gap).is_some()
+}
+
+/// Claude Code's box is down to one row (after Send anyway cleared its line): whatever still shows there is not
+/// typed (its placeholder or a dim suggestion); a typed second row would remain.
+pub fn claude_box_one_row(screen: &str) -> bool {
+    ruled(&lines_of(screen), Some('❯')).is_some_and(|rows| rows.len() <= 1)
 }
 
 /// Claude Code's box when it is one row starting with "/" (with prompt suggestions on, `box_has_text` counts it as
@@ -815,8 +860,7 @@ fn paint_cells(s: &str) -> (Cells, (u32, u32)) {
 /// The rows between the last two rule lines, the first starting with `mark` (taken off with its space); another
 /// first row (a dialog, a menu): `None`.
 fn ruled(lines: &[String], mark: Option<char>) -> Option<Vec<String>> {
-    let rules: Vec<usize> = (0..lines.len()).filter(|&i| is_rule(&lines[i])).collect();
-    let [.., a, b] = rules[..] else { return None };
+    let (a, b) = box_edges(lines)?;
     let inside = &lines[a + 1..b];
     match mark {
         Some(m) => {
@@ -849,7 +893,8 @@ pub struct Live<'a> {
 impl PullIo for Live<'_> {
     fn agent(&mut self) -> Option<Agent> {
         use herdr_core::PaneScreen;
-        let ws = self.client.snapshot().ok()?;
+        let mut ws = self.client.snapshot().ok()?;
+        crate::parked::promote(&mut ws, self.client);
         herdr_core::all_panes(&ws).into_iter().find(|p| p.id == self.pane_id)?.agent.clone()
     }
     fn screen(&mut self) -> Option<String> {
@@ -898,6 +943,53 @@ mod box_tests {
         assert_eq!(box_has_text_c(&claude("❯ \n  second line")), Some(true), "text on a later row");
         assert_eq!(box_has_text_c(&claude(" Do you want to proceed?\n ❯ 1. Yes")), None, "a dialog: not the box");
         assert_eq!(box_has_text_c("no box here"), None);
+    }
+
+    // Send anyway from another machine (report 11-14): the box held Claude's dim "/handoff" suggestion.
+    #[test]
+    fn claude_lone_slash() {
+        let w = |screen: &str| super::claude_lone_slash(screen);
+        assert_eq!(w(&claude("❯\u{a0}/handoff")).as_deref(), Some("/handoff"));
+        assert_eq!(w(&claude("❯ /review-pr:check")).as_deref(), Some("/review-pr:check"), "plugin names and colons");
+        assert_eq!(w(&claude("❯\u{a0}/handoff now")), None, "a value after it: typed");
+        assert_eq!(w(&claude("❯\u{a0}/handoff\n  more")), None, "a second row: typed");
+        assert_eq!(w(&claude("❯\u{a0}hello")), None);
+        assert_eq!(w(&claude("❯\u{a0}/")), None, "a bare slash is no command");
+        assert_eq!(w(&claude("❯\u{a0}")), None);
+        assert_eq!(w("no box here"), None);
+        // A typed "/…" shows Claude's command list right above the box.
+        let listed = format!("  /handoff      Write a hand-off\n  /help   Get help\n{RULE}\n❯\u{a0}/handoff\n{RULE}\n");
+        assert_eq!(w(&listed), None, "a command list above: typed");
+        let picked = format!("❯ /handoff      Write a hand-off\n\n{RULE}\n❯\u{a0}/handoff\n{RULE}\n");
+        assert_eq!(w(&picked), None, "the list's picked row");
+        let far = format!("  /handoff      Write a hand-off\n\n\n\n{RULE}\n❯\u{a0}/handoff\n{RULE}\n");
+        assert_eq!(w(&far).as_deref(), Some("/handoff"), "chat text higher up is no list");
+        assert!(super::slash_word("/a.b_c-d:e") && !super::slash_word("/") && !super::slash_word("handoff") && !super::slash_word("/a b"));
+        assert!(!super::slash_word("/é"), "ASCII only, as composer.js");
+    }
+
+    // A named session (/rename) draws its name in the box's top edge ("──── name ─"), as composer.js BOX_EDGE knows:
+    // without this the box was not found, so its text was never checked before a send.
+    #[test]
+    fn claude_box_under_a_titled_edge() {
+        let titled = |row: &str| format!("● Done.\n{RULE}\nchat\n──────────── Herdr flockbook polish ─\n{row}\n{RULE}\n  ~/proj\n");
+        assert_eq!(box_has_text_c(&titled("❯\u{a0}hi there")), Some(true));
+        assert_eq!(box_has_text_c(&titled("❯\u{a0}")), Some(false));
+        assert_eq!(super::claude_lone_slash(&titled("❯\u{a0}/compact")).as_deref(), Some("/compact"));
+        assert!(super::claude_box_one_row(&titled("❯\u{a0}/compact")));
+        assert_eq!(super::raw_box(&titled("❯\u{a0}hi")), vec!["hi".to_string()]);
+        assert_eq!(super::claude_slash_row(&titled("❯\u{a0}/compact")).as_deref(), Some("/compact"));
+    }
+
+    #[test]
+    fn claude_box_one_row() {
+        let one = |screen: &str| super::claude_box_one_row(screen);
+        assert!(one(&claude("❯\u{a0}/handoff")), "the dim suggestion stays after the clear");
+        assert!(one(&claude("❯\u{a0}")));
+        assert!(one(&claude("❯\u{a0}Try \"fix typecheck errors\"")));
+        assert!(!one(&claude("❯\u{a0}\n  second line")), "a typed second row");
+        assert!(!one(&claude(" Do you want to proceed?\n ❯ 1. Yes")), "a dialog: no box");
+        assert!(!one("no box here"));
     }
 
     #[test]
