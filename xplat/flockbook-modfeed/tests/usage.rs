@@ -301,6 +301,70 @@ fn a_broken_or_missing_memory_file_is_no_memory() {
     assert!(names.iter().all(|n| !n.contains(".tmp")), "{names:?}");
 }
 
+// ---- a reset inside the week (owner 11-17) ----
+// The work account's limit was reset by hand: the reset date (Sat 05:00) stayed the same, its sessions' status lines
+// said 62% used, and the panel kept the remembered 94% from before the reset ("highest in the week wins"). A session's
+// figure is from its last reply, and its transcript is written at each reply, so the transcript's mtime says how
+// fresh a figure is: the newest reply wins. A reading whose reply time is unknown (an older helper's memory) wins
+// only when it is higher AND it could be newer (its file was saved after the newest known reply).
+
+/// `session`, plus the transcript the input names, last written at `replied` (seconds).
+fn session_replied(dir: &Path, sid: &str, config: &str, rate_limits: Value, mtime: u64, replied: u64) {
+    session(dir, sid, config, Some(rate_limits), mtime);
+    let t = PathBuf::from(format!("{config}/projects/-Users-x/{sid}.jsonl"));
+    std::fs::create_dir_all(t.parent().unwrap()).unwrap();
+    std::fs::write(&t, "{}\n").unwrap();
+    set_mtime(&t, replied);
+}
+
+#[test]
+fn a_reset_inside_the_week_shows_once_a_session_replies() {
+    let t = tempfile::tempdir().unwrap();
+    let (dir, home) = (t.path().join("statusline"), t.path().join("home"));
+    let a = format!("{}/.claude-eaglewatch", home.display());
+    // Before the reset: 94% (last reply at 1_000). After it: a session replied at 5_000 and says 62%.
+    session_replied(&dir, "before", &a, weekly(94.0, 1_795_208_400), 5_100, 1_000);
+    session_replied(&dir, "after", &a, weekly(62.0, 1_795_208_400), 5_050, 5_000);
+    let l = &usage::claude_lines(&dir, &home)[0];
+    assert_eq!(l["weekly"]["used"], 62, "the newest reply wins: {l:?}");
+    assert_eq!(l["replied"], 5_000_000, "the reply time is passed on in ms");
+    assert_eq!(l["at"], 5_050_000, "at is still the chosen reading's own file time");
+}
+
+#[test]
+fn an_idle_session_still_loses_to_the_newest_reply() {
+    let t = tempfile::tempdir().unwrap();
+    let (dir, home) = (t.path().join("statusline"), t.path().join("home"));
+    let a = format!("{}/.claude", home.display());
+    // s38's case with reply times: the idle ones re-save later but replied earlier.
+    session_replied(&dir, "busy", &a, weekly(80.0, 1_795_208_400), 1_000, 990);
+    session_replied(&dir, "idle", &a, weekly(58.0, 1_795_208_400), 1_003, 500);
+    assert_eq!(usage::claude_lines(&dir, &home)[0]["weekly"]["used"], 80);
+}
+
+#[test]
+fn a_remembered_reading_without_a_reply_time_loses_once_a_newer_reply_is_known() {
+    let t = tempfile::tempdir().unwrap();
+    let (dir, home, mem) = (t.path().join("statusline"), t.path().join("home"), t.path().join("usage-accounts.json"));
+    let a = format!("{}/.claude-eaglewatch", home.display());
+    // What the old helper remembered: 94%, saved at 1_000 s, no reply time.
+    std::fs::write(&mem, json!({"lines": [{"type": "usage", "kind": "claude", "config": a, "email": null, "at": 1_000_000,
+        "weekly": {"left": 6, "used": 94, "resets_at": 1_795_208_400}}]}).to_string()).unwrap();
+    // A reply BEFORE that save could be older than the 94%: the higher one stays.
+    session_replied(&dir, "early", &a, weekly(62.0, 1_795_208_400), 2_000, 900);
+    assert_eq!(usage::claude_lines_remembering(&dir, &home, &mem, 3_000_000)[0]["weekly"]["used"], 94);
+    // A reply after it is surely newer: the reset shows, and the memory keeps it with its reply time.
+    session_replied(&dir, "late", &a, weekly(63.0, 1_795_208_400), 4_000, 3_500);
+    let l = &usage::claude_lines_remembering(&dir, &home, &mem, 5_000_000)[0];
+    assert_eq!(l["weekly"]["used"], 63, "{l:?}");
+    for f in ["early.json", "late.json"] {
+        std::fs::remove_file(dir.join(f)).unwrap();
+    }
+    let l = &usage::claude_lines_remembering(&dir, &home, &mem, 6_000_000)[0];
+    assert_eq!(l["weekly"]["used"], 63, "remembered: {l:?}");
+    assert_eq!(l["replied"], 3_500_000);
+}
+
 // ---- Codex ----
 
 fn day(codex: &Path, d: NaiveDate) -> PathBuf {

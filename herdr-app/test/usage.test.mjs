@@ -83,6 +83,43 @@ test("within one week the lowest left wins, whichever machine read it last", () 
   assert.match(textOf(byId(jitter, "usage-0-left")), /^30% left$/);
 });
 
+// Owner 11-17: the work account's limit was reset by hand inside the week, its reset date unchanged (Sat 05:00); the
+// panel kept "6% left" from before the reset while its sessions said 38%. The helper now says when a figure was given
+// (`replied`, ms): the newest reply wins. A reading without one (an older helper) was given at or before its `at`, so
+// it wins only when it is lower AND its `at` is after that reply.
+test("a reset inside the week: the newest reply wins; a reading without a reply time only when it could be newer", () => {
+  const replied = (line, t) => ({ ...line, replied: t });
+  const reset = draw(data({
+    "": [replied(claude("/home/test/.claude", "me@example.test", 38, NOW - 30_000), NOW - 60_000)],
+    "pc-wsl": [replied(claude("/home/x/.claude", "me@example.test", 6, NOW - 1_000), NOW - 5 * 3_600_000)],
+  }));
+  assert.match(textOf(byId(reset, "usage-0-left")), /^38% left$/);
+  // s38's case still holds with reply times: an idle session re-saved later but replied earlier.
+  const idle = draw(data({
+    "": [replied(claude("/home/test/.claude", "me@example.test", 20, NOW - 60_000), NOW - 90_000)],
+    "pc-wsl": [replied(claude("/home/x/.claude", "me@example.test", 32, NOW - 8_000), NOW - 3_600_000)],
+  }));
+  assert.match(textOf(byId(idle, "usage-0-left")), /^20% left$/);
+  // An older helper's reading (no reply time) saved BEFORE the newest reply: the reply wins.
+  const old = draw(data({
+    "": [replied(claude("/home/test/.claude", "me@example.test", 38, NOW - 30_000), NOW - 60_000)],
+    "pc-wsl": [claude("/home/x/.claude", "me@example.test", 6, NOW - 5 * 3_600_000)],
+  }));
+  assert.match(textOf(byId(old, "usage-0-left")), /^38% left$/);
+  // Saved AFTER it (it could be newer) and lower: it still wins, as before.
+  const unsure = draw(data({
+    "": [replied(claude("/home/test/.claude", "me@example.test", 38, NOW - 30_000), NOW - 60_000)],
+    "pc-wsl": [claude("/home/x/.claude", "me@example.test", 6, NOW - 10_000)],
+  }));
+  assert.match(textOf(byId(unsure, "usage-0-left")), /^6% left$/);
+  // Either order of the sources gives the same answer.
+  const swapped = draw(data({
+    "pc-wsl": [claude("/home/x/.claude", "me@example.test", 6, NOW - 5 * 3_600_000)],
+    "": [replied(claude("/home/test/.claude", "me@example.test", 38, NOW - 30_000), NOW - 60_000)],
+  }));
+  assert.match(textOf(byId(swapped, "usage-0-left")), /^38% left$/);
+});
+
 test("percent left, and a bar filled to what is left", () => {
   const el = draw(data({ "": [claude("/home/test/.claude", "me@example.test", 36, NOW - 60_000)] }));
   assert.equal(textOf(byId(el, "usage-0-left")), "36% left");

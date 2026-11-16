@@ -3,9 +3,9 @@
 //!
 //! Claude Code: the status line wrapper (`flockbook-statusline`) saves every session's status line input as
 //! `<folder>/<session id>.json` (`status::folder`); its `rate_limits` hold the account's limits, and its
-//! `transcript_path` (`<config folder>/projects/<project>/<session id>.jsonl`) says which account's session it was.
-//! Every session re-saves its own last figure, so the account's reading is the latest window's highest one
-//! (`account_reading`), not the newest file. Those records are removed after a day, so the helper keeps each
+//! `transcript_path` (`<config folder>/projects/<project>/<session id>.jsonl`) says which account's session it was;
+//! the transcript's mtime says when that session last replied. Every session re-saves its own last figure, so the
+//! account's reading is the latest window's newest REPLY (`account_reading`), not the newest file. Those records are removed after a day, so the helper keeps each
 //! account's last line in `<flockbook>/usage-accounts.json` for 30 days (`claude_lines_remembering`).
 //!
 //! Codex: the rollouts under `$CODEX_HOME` (else `~/.codex`) `sessions/YYYY/MM/DD/`; the last `rate_limits` in the
@@ -80,26 +80,53 @@ fn email_of(config: &Path, home: &Path) -> Option<String> {
 /// Two `resets_at` this close (seconds) are the same weekly window (a new window is days later).
 const SAME_WINDOW_SECS: i64 = 3600;
 
-/// One account's figure from all its sessions' readings (`(mtime ms, weekly)`, newest first). Every session re-saves
-/// the figure from its own last reply, so an idle one keeps an old, lower one (s38 live: 58/68/75 next to 80). Within
-/// a window usage only goes up: the latest window (`resets_at`, ± `SAME_WINDOW_SECS`) and in it the highest figure;
-/// among equal figures the newest file. Readings without a `resets_at` count only when none has one.
-fn account_reading(readings: Vec<(i64, Value)>) -> Option<(i64, Value)> {
-    let resets = |w: &Value| w["resets_at"].as_i64();
-    let latest = readings.iter().filter_map(|(_, w)| resets(w)).max();
-    let used = |w: &Value| w["used"].as_f64().unwrap_or(0.0);
-    readings
+/// One session's reading: `at` = its status line file's mtime (ms; it is re-saved every refresh), `replied` = its
+/// transcript's mtime (ms), i.e. when the figure was given; None when unknown (a missing transcript, or a line an
+/// older helper remembered).
+#[derive(Clone, Debug)]
+struct Reading {
+    at: i64,
+    replied: Option<i64>,
+    weekly: Value,
+}
+
+/// One account's figure from all its sessions' readings (newest file first). Every session re-saves the figure from
+/// its own last reply, so an idle one keeps an old, lower one (s38 live: 58/68/75 next to 80), and a limit reset by
+/// hand keeps its reset date (owner 11-17: 94% before, 62% after, same Sat 05:00), so neither "newest file" nor
+/// "highest figure" is right. The latest window (`resets_at`, ± `SAME_WINDOW_SECS`), and in it the reading with the
+/// newest reply (equal: the higher figure). A reading with no reply time was given at or before its `at`: it wins
+/// only when it is higher and its `at` is after that reply (it could be newer); with no reply times at all, the
+/// highest figure, as before (equal: the newest file). Readings without a `resets_at` count only when none has one.
+fn account_reading(readings: Vec<Reading>) -> Option<Reading> {
+    let resets = |r: &Reading| r.weekly["resets_at"].as_i64();
+    let latest = readings.iter().filter_map(resets).max();
+    let used = |r: &Reading| r.weekly["used"].as_f64().unwrap_or(0.0);
+    let window: Vec<Reading> = readings
         .into_iter()
-        .filter(|(_, w)| match (latest, resets(w)) {
-            (Some(l), Some(r)) => r >= l - SAME_WINDOW_SECS,
+        .filter(|r| match (latest, resets(r)) {
+            (Some(l), Some(x)) => x >= l - SAME_WINDOW_SECS,
             (Some(_), None) => false,
             (None, _) => true,
         })
-        // Newest first, so on equal figures the first (newest) is kept.
-        .fold(None, |best: Option<(i64, Value)>, (at, w)| match &best {
-            Some((_, b)) if used(b) >= used(&w) => best,
-            _ => Some((at, w)),
-        })
+        .collect();
+    let newest_reply = window.iter().filter(|r| r.replied.is_some()).fold(None, |best: Option<&Reading>, r| match best {
+        Some(b) if (b.replied, used(b)) >= (r.replied, used(r)) => best,
+        _ => Some(r),
+    });
+    let known = newest_reply.and_then(|r| r.replied);
+    // Newest first, so on equal figures the first (newest) is kept.
+    let unknown = window
+        .iter()
+        .filter(|r| r.replied.is_none() && known.map_or(true, |k| r.at > k))
+        .fold(None, |best: Option<&Reading>, r| match best {
+            Some(b) if used(b) >= used(r) => best,
+            _ => Some(r),
+        });
+    match (newest_reply, unknown) {
+        (Some(k), Some(u)) if used(u) > used(k) => Some(u.clone()),
+        (Some(k), _) => Some(k.clone()),
+        (None, u) => u.cloned(),
+    }
 }
 
 /// One `usage` line per Claude config folder with a weekly reading in `dir` (the status line wrapper's folder).
@@ -110,12 +137,17 @@ pub fn claude_lines(dir: &Path, home: &Path) -> Vec<Value> {
 
 /// The `usage` lines of each config folder's readings; `emails`: a remembered email per folder, used when the
 /// folder's own file can't be read.
-fn lines_of(read: BTreeMap<String, Vec<(i64, Value)>>, home: &Path, emails: &BTreeMap<String, String>) -> Vec<Value> {
+fn lines_of(read: BTreeMap<String, Vec<Reading>>, home: &Path, emails: &BTreeMap<String, String>) -> Vec<Value> {
     read.into_iter()
         .filter_map(|(config, readings)| Some((config, account_reading(readings)?)))
-        .map(|(config, (at, w))| {
+        .map(|(config, r)| {
             let email = email_of(Path::new(&config), home).or_else(|| emails.get(&config).cloned());
-            json!({"type": "usage", "kind": "claude", "config": config, "email": email, "weekly": w, "at": at})
+            let mut line = json!({"type": "usage", "kind": "claude", "config": config, "email": email, "weekly": r.weekly, "at": r.at});
+            // `replied`: when the figure was given (ms); absent when unknown, so the mod knows to fall back.
+            if let Some(t) = r.replied {
+                line["replied"] = json!(t);
+            }
+            line
         })
         .collect()
 }
@@ -128,7 +160,7 @@ pub const MEMORY_FILE: &str = "usage-accounts.json";
 
 /// The remembered lines in `file` (`{"lines": [usage line…]}`), as readings per config folder plus their emails; lines
 /// older than `REMEMBER_MS` at `now_ms`, or not shaped like a reading, are left out. A missing or broken file is none.
-fn load_memory(file: &Path, now_ms: i64) -> (BTreeMap<String, Vec<(i64, Value)>>, BTreeMap<String, String>) {
+fn load_memory(file: &Path, now_ms: i64) -> (BTreeMap<String, Vec<Reading>>, BTreeMap<String, String>) {
     let (mut read, mut emails) = (BTreeMap::new(), BTreeMap::new());
     let kept = std::fs::read(file).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok());
     for l in kept.as_ref().and_then(|v| v["lines"].as_array()).into_iter().flatten() {
@@ -136,7 +168,7 @@ fn load_memory(file: &Path, now_ms: i64) -> (BTreeMap<String, Vec<(i64, Value)>>
         if now_ms - at > REMEMBER_MS {
             continue;
         }
-        read.entry(config.to_string()).or_insert_with(Vec::new).push((at, w.clone()));
+        read.entry(config.to_string()).or_insert_with(Vec::new).push(Reading { at, replied: l["replied"].as_i64(), weekly: w.clone() });
         if let Some(e) = l["email"].as_str() {
             emails.insert(config.to_string(), e.to_string());
         }
@@ -155,7 +187,7 @@ pub fn claude_lines_remembering(dir: &Path, home: &Path, memory: &Path, now_ms: 
         let all = read.entry(config).or_default();
         all.append(&mut readings);
         // account_reading wants the newest first (equal figures: the newest is kept).
-        all.sort_by(|a, b| b.0.cmp(&a.0));
+        all.sort_by(|a, b| b.at.cmp(&a.at));
     }
     let out = lines_of(read, home, &emails);
     let text = json!({"lines": out}).to_string();
@@ -172,7 +204,7 @@ pub fn claude_lines_remembering(dir: &Path, home: &Path, memory: &Path, now_ms: 
 }
 
 /// The weekly readings in `dir` per config folder, each folder's newest first.
-fn claude_readings(dir: &Path) -> BTreeMap<String, Vec<(i64, Value)>> {
+fn claude_readings(dir: &Path) -> BTreeMap<String, Vec<Reading>> {
     let Ok(entries) = std::fs::read_dir(dir) else { return BTreeMap::new() };
     let mut files: Vec<(i64, PathBuf)> = entries
         .filter_map(Result::ok)
@@ -183,16 +215,18 @@ fn claude_readings(dir: &Path) -> BTreeMap<String, Vec<(i64, Value)>> {
     // Newest first; the name settles equal times.
     files.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
     files.truncate(CLAUDE_FILES);
-    let mut read: BTreeMap<String, Vec<(i64, Value)>> = BTreeMap::new();
+    let mut read: BTreeMap<String, Vec<Reading>> = BTreeMap::new();
     for (at, path) in files {
         if std::fs::metadata(&path).map_or(true, |m| m.len() > CLAUDE_FILE_MAX) {
             continue;
         }
         let Some(v) = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else { continue };
-        let (Some(config), Some(w)) = (v.get("transcript_path").and_then(Value::as_str).and_then(config_of), v.get("rate_limits").and_then(claude_weekly)) else {
+        let transcript = v.get("transcript_path").and_then(Value::as_str);
+        let (Some(config), Some(w)) = (transcript.and_then(config_of), v.get("rate_limits").and_then(claude_weekly)) else {
             continue;
         };
-        read.entry(config.to_string()).or_default().push((at, w));
+        let replied = transcript.and_then(|t| mtime_ms(Path::new(t)));
+        read.entry(config.to_string()).or_default().push(Reading { at, replied, weekly: w });
     }
     read
 }

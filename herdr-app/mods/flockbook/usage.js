@@ -47,13 +47,26 @@ const SAME_WEEK_S = 3600;
 const resetOf = (r) => (Number.isFinite(r.weekly?.resets_at) ? r.weekly.resets_at : null);
 // Which reading is the account's (s38 live: each session re-saves its own last figure, so a newer reading can be an
 // idle session's old one — the PC showed 32% left 52 s after the Mac's 20%). The latest week wins (a reading without a
-// reset time loses to one with); within one week usage only goes up, so the lowest "left" wins; then the newest
-// `at`; a tie goes to this computer.
+// reset time loses to one with). Within one week (owner 11-17: a limit reset by hand keeps its reset date, so "the
+// lowest left wins" kept the 6% from before the reset): the newest reply wins (`replied`, ms: when the figure was
+// given, from a helper that knows it). A reading without `replied` was given at or before its `at`, so against one
+// with it, it wins only when it is lower and its `at` is after that reply; two without it: the lowest "left", as
+// before. Then the newest `at`; a tie goes to this computer.
+const replyOf = (r) => (Number.isFinite(r.replied) ? r.replied : null);
+const lowerLeft = (a, b) => (b.weekly.left !== a.weekly.left ? (b.weekly.left < a.weekly.left ? b : a) : null);
 const newer = (a, b) => {
   if (!a) return b;
   const ra = resetOf(a), rb = resetOf(b);
   if (ra !== rb && (ra === null || rb === null || Math.abs(ra - rb) > SAME_WEEK_S)) return (rb ?? -Infinity) > (ra ?? -Infinity) ? b : a;
-  if (b.weekly.left !== a.weekly.left) return b.weekly.left < a.weekly.left ? b : a;
+  const pa = replyOf(a), pb = replyOf(b);
+  if (pa !== null && pb !== null) {
+    if (pa !== pb) return pb > pa ? b : a;
+  } else if (pa !== null || pb !== null) {
+    const [known, unknown] = pa !== null ? [a, b] : [b, a];
+    return unknown.at > replyOf(known) && unknown.weekly.left < known.weekly.left ? unknown : known;
+  }
+  const low = lowerLeft(a, b);
+  if (low) return low;
   return b.at > a.at || (b.at === a.at && b.machine === LOCAL && a.machine !== LOCAL) ? b : a;
 };
 // A source's new answer plus the Claude readings it gave before and no longer does (owner 11-16: the status line
