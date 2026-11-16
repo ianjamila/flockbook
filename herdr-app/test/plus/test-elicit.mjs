@@ -1,6 +1,7 @@
 // Tests for cards.js elicitation(): an MCP server's "requests your input" box read off the screen (s9, 11-12).
 // The screens are modelled on Claude Code's dialog (title 'MCP server “<name>” requests your input', the message,
-// then Accept / Decline); no real capture was available. Run: node test-elicit.mjs
+// then Accept / Decline); no real capture was available then. s41: the first real one (11-14) matched the model; it is
+// pinned as the "real capture" tests at the end. Run: node test-elicit.mjs
 import { MOD } from "./paths.mjs";
 import fs from "node:fs";
 const src = fs.readFileSync(MOD + "asks.js", "utf8");   // moved from cards.js in s10
@@ -84,4 +85,29 @@ eq("two title lines: no answer", elicitFocus(twoTitles), null);
 eq("two title lines: card not answerable", elicitation(twoTitles)?.answerable, false);
 eq("one title: answerable", elicitation(" MCP server “x” requests your input\n Go?\n ❯ Accept    Decline")?.answerable, true);
 eq("a title with more words on its line is not the title", elicitFocus(" Note: MCP server “x” requests your input soon\n Go?\n ❯ Accept    Decline"), null);
+// s41: the first REAL request (the one-time capture, Supabase MCP, 11-14), its layout kept as Claude Code drew it
+// (the "Calling … / Fulfilling input" lines above, a full-width rule, two-space indent, "↑/↓ to navigate"); the chat
+// above it and the project id are replaced. The model above matched it: read, answerable, selection on Accept.
+const real = [
+  "⏺ Sending the dry run now (the whole block ends in an error, so nothing commits).",
+  "",
+  "⏺ Calling plugin:supabase:supabase · 5s…",
+  "  ⎿  Fulfilling input required by 'tools/call' (round 1)",
+  "",
+  "─".repeat(131),
+  "  MCP server “plugin:supabase:supabase” requests your input",
+  "",
+  "  This SQL includes destructive operations (DROP, DELETE, TRUNCATE or UPDATE without WHERE).",
+  "  It may permanently remove data, tables, schemas or other objects.",
+  "  Run it on project exampleprojectref?",
+  "",
+  "  ❯ Accept    Decline",
+  "",
+  "  Esc to cancel · ↑/↓ to navigate",
+  "",
+].join("\n");
+const realText = "This SQL includes destructive operations (DROP, DELETE, TRUNCATE or UPDATE without WHERE). It may permanently remove data, tables, schemas or other objects. Run it on project exampleprojectref?";
+eq("real capture: server, text, answerable", elicitation(real), { server: "plugin:supabase:supabase", text: realText, full: realText, answerable: true });
+eq("real capture: selection on Accept", elicitFocus(real), "accept");
+eq("real capture, moved down: selection on Decline", elicitFocus(real.replace("  ❯ Accept    Decline", "    Accept  ❯ Decline")), "decline");
 process.exit(bad ? 1 : 0);
