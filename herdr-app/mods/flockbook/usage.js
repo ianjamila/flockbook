@@ -20,6 +20,8 @@ export const USAGE_REMOTE_MS = 120_000;                // each connected machine
 // Longer than the slowest ask: a remote read is the platform check + the command, each up to 35 s (s36 review P3).
 const BUSY_MS = 90_000;
 export const STALE_MS = 15 * 60_000;                   // older than this: "as of 2 h ago"
+// An account's last reading is remembered this long after the helper stops giving one (owner 11-16).
+export const REMEMBER_MS = 30 * 24 * 3600_000;
 export const LOW = 15;                                 // under this % left: red
 export const WARN = 40;                                // under this % left: amber; from here on green
 // A click on an account opens its usage page (owner 11-15 s38) in the system browser (Chrome on the Mac). claude.ai
@@ -54,6 +56,17 @@ const newer = (a, b) => {
   if (b.weekly.left !== a.weekly.left) return b.weekly.left < a.weekly.left ? b : a;
   return b.at > a.at || (b.at === a.at && b.machine === LOCAL && a.machine !== LOCAL) ? b : a;
 };
+// A source's new answer plus the Claude readings it gave before and no longer does (owner 11-16: the status line
+// records behind a reading are removed after 24 h, so an account with no session for a day dropped out of the answer
+// and its row said no session had ever run). A remembered reading keeps its own `at`, so the row says how old it is,
+// and a week that has since reset reads 100% left; it is let go REMEMBER_MS after it was read. Codex is not carried:
+// its reading comes from session files nothing removes.
+export function carry(prev, next, now = Date.now()) {
+  const have = new Set(next.filter((l) => l?.kind === "claude").map((l) => norm(l.config)));
+  const kept = (prev ?? []).filter((l) => l?.type === "usage" && l.kind === "claude" && l.config && !have.has(norm(l.config))
+    && Number.isFinite(l.at) && now - l.at <= REMEMBER_MS);
+  return [...next, ...kept];
+}
 // Claude accounts by email (a reading without one by its config folder's name); Codex by kind. { claude: [{ key, email,
 // configs, reading }], codex: reading|null }; each account holds the newest reading and every config folder seen for it.
 export function merge(list) {
@@ -132,7 +145,7 @@ export function figures(row, now = Date.now()) {
   const r = row.reading;
   const who = row.kind === "codex" ? "Codex" : row.email ?? row.name ?? baseName(row.folder) ?? "Claude";
   if (!r) {
-    const why = row.kind === "codex" ? "no Codex session found" : "no Claude session has run with this account yet";
+    const why = row.kind === "codex" ? "no Codex session found" : "no recent Claude session with this account";
     return { left: null, right: "—", line: why, low: false, tip: `${who}: ${why}` };
   }
   const resets = Number.isFinite(r.weekly.resets_at) ? r.weekly.resets_at : null;
@@ -172,7 +185,8 @@ function store(source, patch) {
   setShared(KEY_USAGE, { ...d, sources: { ...d.sources, [source]: { ...(d.sources?.[source] ?? {}), ...patch } } });
 }
 // Asks one source if it is due; returns after the answer is kept. A failed ask keeps the last readings when only the
-// link failed, and drops them when the helper there cannot answer (missing, older, unsupported, Never).
+// link failed, and drops them when the helper there cannot answer (missing, older, unsupported, Never). A good answer
+// keeps the last reading of a Claude account it no longer lists (`carry`).
 async function ask(source, now, every) {
   const d = shared(KEY_USAGE);
   const was = d?.sources?.[source]?.asked;
@@ -183,7 +197,7 @@ async function ask(source, now, every) {
   try {
     const a = await sidecar.call("usage", source === LOCAL ? [] : ["--machine", source, "--cache", sidecar.cachePath()]);
     if (a.error) store(source, { asked: now, ...(KEEP.has(a.error.code) ? {} : { lines: [] }) });
-    else store(source, { asked: now, lines: a.lines.filter((l) => l.type === "usage") });
+    else store(source, { asked: now, lines: carry(shared(KEY_USAGE)?.sources?.[source]?.lines, a.lines.filter((l) => l.type === "usage"), now) });
   } catch { /* the helper is away: the last readings stay */ }
   finally { const b = { ...(shared(KEY_USAGE_BUSY) ?? {}) }; delete b[source]; setShared(KEY_USAGE_BUSY, b); }
 }

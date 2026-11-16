@@ -10,7 +10,7 @@ import { space } from "./fixtures.mjs";
 import { SideView } from "../mods/flockbook/side.js";
 import { KEY_MACHINES } from "../mods/flockbook/machines.js";
 import { KEY_CONFIG } from "../mods/flockbook/config.js";
-import { KEY_USAGE, pollUsage, figures, rows, merge, readings, clock, until, USAGE_URL, USAGE_MS, USAGE_REMOTE_MS, profileFor, chromeLocalState, refreshChromeProfiles, KEY_CHROME } from "../mods/flockbook/usage.js";
+import { KEY_USAGE, pollUsage, figures, rows, merge, readings, clock, until, USAGE_URL, USAGE_MS, USAGE_REMOTE_MS, profileFor, chromeLocalState, refreshChromeProfiles, KEY_CHROME, carry, REMEMBER_MS } from "../mods/flockbook/usage.js";
 
 const NOW = new Date(2026, 10, 15, 14, 0).getTime();   // Sunday 15 Nov 2026, 14:00 local
 const secs = (y, mo, d, h, mi) => new Date(y, mo, d, h, mi).getTime() / 1000;
@@ -172,6 +172,8 @@ test("a click opens a Claude account's page in its own Chrome profile; no match,
   assert.deepEqual(fake.shared[KEY_CHROME].emails, { "jamilaian21@gmail.com": "Profile 3", "eaglewatch9002@eaglewatch.ph": "Profile 4" });
   fake.shared[KEY_CONFIG] = { file: { accounts: [WORK, PERSONAL] } };
   fake.home = "/home/test";
+  // The side bar's own poll reads the profiles again once the real clock is 10 minutes past NOW: the same file there.
+  fake.readText = (p) => (p.endsWith("/Google/Chrome/Local State") ? LOCAL_STATE : null);
   const el = draw(data({ "": [
     claude("/home/test/.claude-eaglewatch", "eaglewatch9002@eaglewatch.ph", 16, NOW - 60_000),
     claude("/home/test/.claude", "jamilaian21@gmail.com", 2, NOW - 60_000), codex(70, NOW - 60_000),
@@ -182,7 +184,8 @@ test("a click opens a Claude account's page in its own Chrome profile; no match,
   fake.exec = () => ({ code: 0, stdout: "", stderr: "" });
   for (const i of [0, 1, 2, 3]) byId(el, `usage-${i}`)._h.on_click({}, cx);
   await new Promise((r) => setTimeout(r, 0));
-  assert.deepEqual(log.exec.map(([c, a]) => [c, ...a]), [
+  // The side bar's own poll may ask the helper here too (it is due once the real clock passes NOW): not a click's doing.
+  assert.deepEqual(log.exec.filter(([c]) => !c.endsWith("flockbook-modfeed")).map(([c, a]) => [c, ...a]), [
     ["/usr/bin/open", "-na", "Google Chrome", "--args", "--profile-directory=Profile 4", USAGE_URL.claude],
     ["/usr/bin/open", "-na", "Google Chrome", "--args", "--profile-directory=Profile 3", USAGE_URL.claude],
   ]);
@@ -243,7 +246,7 @@ test("no reading: a dash and the reason, for the accounts that are set and for C
   const el = draw(data({}));
   for (const i of [0, 1]) {
     assert.equal(textOf(byId(el, `usage-${i}-left`)), "—");
-    assert.equal(textOf(byId(el, `usage-${i}-line`)), "no Claude session has run with this account yet");
+    assert.equal(textOf(byId(el, `usage-${i}-line`)), "no recent Claude session with this account");
     assert.equal(byId(el, `usage-${i}-fill`), null, "no bar fill without a reading");
   }
   assert.equal(textOf(byId(el, "usage-2-left")), "—");
@@ -361,4 +364,43 @@ test("merge: Claude by email, a reading without one by its folder's name", () =>
   assert.equal(m.claude.find((x) => x.email).reading.weekly.left, 10);
   assert.equal(m.claude.find((x) => !x.email).reading.weekly.left, 20);
   assert.deepEqual([...m.claude.find((x) => x.email).configs].sort(), ["/a/.claude", "/c/.claude"]);
+});
+
+// Owner 11-16 (screenshot: the Personal row said "no Claude session has run with this account yet" a day after it
+// showed 2% left): the status line records behind a reading are removed after 24 h, so an account with no session
+// for a day vanished from the helper's answer. The last reading is remembered instead.
+test("remembered: a Claude account missing from a later answer keeps its last reading", () => {
+  const home = claude("/home/test/.claude", "me@example.test", 40, NOW - 3600_000);
+  const work = claude("/home/test/.claude-eaglewatch", "work@example.test", 70, NOW - 60_000);
+  const workNew = claude("/home/test/.claude-eaglewatch", "work@example.test", 65, NOW);
+  assert.deepEqual(carry([home, work, codex(80, NOW - 60_000)], [workNew], NOW), [workNew, home],
+    "the account that is gone stays; the one answered again is replaced; Codex is not carried (its files are not removed)");
+  assert.deepEqual(carry(undefined, [workNew], NOW), [workNew]);
+  assert.deepEqual(carry([home], [], NOW), [home]);
+  // The same folder written with backslashes or a trailing slash is the same account.
+  assert.deepEqual(carry([claude("C:\\Users\\x\\.claude\\", "me@example.test", 40, NOW - 1000)], [claude("C:/Users/x/.claude", "me@example.test", 30, NOW)], NOW).length, 1);
+  // Not for ever: an account not seen for REMEMBER_MS is let go.
+  const old = claude("/home/test/.claude", "me@example.test", 40, NOW - REMEMBER_MS - 1);
+  assert.deepEqual(carry([old], [workNew], NOW), [workNew]);
+});
+
+test("remembered: polling keeps an idle account's figure and the row says how old it is", async () => {
+  const home = claude("/home/test/.claude", "me@example.test", 40, NOW - 60_000);
+  const work = (left, at) => claude("/home/test/.claude-eaglewatch", "work@example.test", left, at);
+  let lines = [home, work(70, NOW)];
+  fake.exec = () => answer(lines);
+  await pollUsage(NOW);
+  const later = NOW + 26 * 3600_000;                     // a day on: the personal account's records are gone
+  lines = [work(60, later)];
+  await pollUsage(later);
+  const el = draw();
+  const f = figures(rows(fake.shared[KEY_USAGE], [PERSONAL, WORK], "/home/test")[0], later);
+  assert.equal(f.right, "40% left");
+  assert.match(f.line, /as of 1 d ago$/);
+  assert.equal(figures(rows(fake.shared[KEY_USAGE], [PERSONAL, WORK], "/home/test")[1], later).right, "60% left");
+  assert.ok(el);
+  // A helper that cannot answer at all still clears the source (as before).
+  fake.exec = () => failure("unsupported");
+  await pollUsage(later + USAGE_MS);
+  assert.deepEqual(fake.shared[KEY_USAGE].sources[""].lines, []);
 });
