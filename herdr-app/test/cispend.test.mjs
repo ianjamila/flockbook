@@ -75,6 +75,45 @@ test("Ubicloud: an estimate after the credit, in use or not, the minutes, and co
   assert.equal(spendFigures({ ...spend({ ubicloud: { ...spend().ubicloud, listUsd: 0, minutes: 0 } }), machine: "" }, NOW).ubicloud.right, "$0");
 });
 
+// s41 (owner picked both): a mark on the GitHub bar where the CI-budget check moves CI to Ubicloud (its switchAtUsd,
+// $270), the bar red past it (amber before it, however little is left), and, once CI has moved, the day it moved and
+// the day it moves back (the 1st) on the Ubicloud line.
+test("GitHub: a mark at the switch point; red past it, amber before it", () => {
+  const gh = (usedUsd, extra = {}) => spendFigures({ ...spend({ github: { ...spend().github, usedUsd, switchAtUsd: 270, ...extra } }), machine: "" }, NOW).github;
+  let g = gh(261.93);
+  assert.equal(g.mark, 90, "$270 of $300");
+  assert.equal(g.level, "warn", "13% left but short of $270: amber");
+  assert.match(g.tip, /moves CI to Ubicloud past \$270(?!\.)/);
+  g = gh(275);
+  assert.equal(g.level, "low", "past $270: red");
+  assert.equal(gh(120).level, "ok");
+  // An older file without the switch point: no mark, coloured by what is left as before.
+  const old = spendFigures({ ...spend({ github: { ...spend().github, usedUsd: 261.93 } }), machine: "" }, NOW).github;
+  assert.deepEqual([old.mark, old.level], [null, "low"]);
+  assert.equal(gh(261.93, { switchAtUsd: 400 }).mark, null, "a switch point past the included amount draws no mark");
+});
+
+test("the GitHub bar draws the mark", () => {
+  fake.shared[KEY_CISPEND] = src({ "": spend({ github: { ...spend().github, switchAtUsd: 270 } }) });
+  const mark = byId(draw(), "cispend-github-mark");
+  assert.ok(mark, "mark drawn");
+  fake.shared[KEY_CISPEND] = src({ "": spend() });
+  assert.equal(byId(draw(), "cispend-github-mark"), null, "no switch point, no mark");
+});
+
+test("Ubicloud: once CI has moved, the day it moved and the day it moves back", () => {
+  const switched = { since: "2026-11-17", backOn: "2026-12-01", issue: 2190, url: "https://github.com/o/r/issues/2190" };
+  let u = spendFigures({ ...spend({ ubicloud: { ...spend().ubicloud, inUse: ["CHECKS"], switched } }), machine: "" }, NOW).ubicloud;
+  assert.equal(u.line, "in use now: checks · since Tue 17 Nov · back to GitHub Tue 1 Dec · 1,114 min this month");
+  assert.match(u.tip, /moved to Ubicloud Tue 17 Nov \(issue #2190\), back to GitHub Tue 1 Dec/);
+  // Not in use (moved back, or the record is stale): no dates.
+  u = spendFigures({ ...spend({ ubicloud: { ...spend().ubicloud, inUse: [], switched } }), machine: "" }, NOW).ubicloud;
+  assert.equal(u.line, "not in use · CI on GitHub · 1,114 min this month");
+  // In use without a record (the issue lookup failed): as before.
+  u = spendFigures({ ...spend({ ubicloud: { ...spend().ubicloud, inUse: ["CHECKS"], switched: null } }), machine: "" }, NOW).ubicloud;
+  assert.equal(u.line, "in use now: checks · 1,114 min this month");
+});
+
 test("a reading older than a missed check says how old", () => {
   const f = spendFigures({ ...spend({ at: NOW - 5 * 3600_000 }), machine: "mac" }, NOW);
   assert.match(f.github.line, / · as of 5 h ago$/);

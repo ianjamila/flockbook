@@ -65,12 +65,19 @@ export function spendFigures(s, now = Date.now()) {
     const out = dayText(g.projectedExhaustion);
     const moved = (s.ubicloud?.inUse ?? []).length > 0;
     const parts = [over ? `${usd(g.usedUsd - g.includedUsd)} over` : pace, moved ? "CI on Ubicloud now" : out && !over ? `runs out ${out}` : null, stale].filter(Boolean);
+    // s41: where the CI-budget check moves CI to Ubicloud (its switchAtUsd; an older file has none): a mark on the bar,
+    // red past it, amber before it however little is left (the switch, not the $300, is the line that matters).
+    const switchAt = Number.isFinite(g.switchAtUsd) && g.switchAtUsd > 0 && g.switchAtUsd < g.includedUsd ? g.switchAtUsd : null;
+    let level = levelOf(Math.round(left));
+    if (switchAt != null) level = g.usedUsd >= switchAt ? "low" : level === "low" ? "warn" : level;
     github = {
-      used: Math.round(used), left: Math.round(left), level: levelOf(Math.round(left)),
+      used: Math.round(used), left: Math.round(left), level,
+      mark: switchAt != null ? Math.round((switchAt / g.includedUsd) * 1000) / 10 : null,
       right: `${usd(g.usedUsd)} of ${usd(g.includedUsd).replace(/\.00$/, "")}`,
       line: parts.join(" · "),
       tip: [`GitHub Actions this month: ${usd(g.usedUsd)} of the ${usd(g.includedUsd)} included in Enterprise`, pace ? `${pace} on average` : null,
-        out ? `at this pace the included amount runs out ${out}` : null, "the CI-budget check moves CI to Ubicloud past $270",
+        out ? `at this pace the included amount runs out ${out}` : null,
+        `the CI-budget check moves CI to Ubicloud past ${switchAt != null ? usd(switchAt).replace(/\.00$/, "") : "$270"}${switchAt != null ? " (the mark on the bar)" : ""}`,
         `read ${ago(age)} on ${from}`, "click to open GitHub billing"].filter(Boolean).join(" · "),
     };
   }
@@ -81,12 +88,16 @@ export function spendFigures(s, now = Date.now()) {
     const credit = Number.isFinite(u.creditUsd) ? u.creditUsd : 0;
     const right = u.estUsd > 0 ? `≈ ${usd(u.estUsd)}` : u.listUsd > 0 ? "$0 (credit)" : "$0";
     const status = inUse.length ? `in use now: ${groupsText(inUse)}` : "not in use · CI on GitHub";
+    // s41: while CI is on Ubicloud, the day the check moved it (its open "switched" issue) and the day it moves back.
+    const sw = inUse.length && u.switched ? { since: dayText(u.switched.since), back: dayText(u.switched.backOn), issue: u.switched.issue } : null;
+    const dates = sw ? [sw.since ? `since ${sw.since}` : null, sw.back ? `back to GitHub ${sw.back}` : null].filter(Boolean) : [];
     const counting = u.counting > 0 ? `counting… ${u.counting} ${u.counting === 1 ? "day" : "days"} left` : null;
     const mins = u.minutes > 0 ? `${u.minutes.toLocaleString("en-US")} min this month` : null;
     ubicloud = {
       right,
-      line: [status, counting ?? mins, stale].filter(Boolean).join(" · "),
+      line: [status, ...dates, counting ?? mins, stale].filter(Boolean).join(" · "),
       tip: [`Ubicloud this month: an estimate from GitHub's job records, ${usd(u.listUsd)} at list price${credit ? `, less its ${usd(credit)} monthly credit` : ""}`,
+        sw?.since ? `moved to Ubicloud ${sw.since}${Number.isFinite(sw.issue) ? ` (issue #${sw.issue})` : ""}${sw.back ? `, back to GitHub ${sw.back}` : ""}` : null,
         u.minutes > 0 ? `${u.minutes.toLocaleString("en-US")} runner minutes${u.firstDay ? ` since ${dayText(u.firstDay)}` : ""}` : "no Ubicloud minutes this month",
         u.exact ? null : "busy workflows are sampled (a few runs a day, scaled up)",
         "premium machines would cost more", counting, `read ${ago(age)} on ${from}`, "click to open the Ubicloud console"].filter(Boolean).join(" · "),
@@ -137,8 +148,10 @@ export function spendBlock(t, now = Date.now()) {
       .child(h_flex().items_center().text_size(12)
         .child(div().flex_1().min_w(0).child(name("cispend-github-name", "GitHub")))
         .child(div().id("cispend-github-right").text_color(c.level[f.github.level] ?? t.foreground).child(f.github.right)))
-      .child(div().id("cispend-github-bar").w_full().h(4).rounded(2).bg(t.border).overflow_hidden()
-        .child(div().id("cispend-github-fill").h(4).rounded(2).bg(c.level[f.github.level]).w(`${f.github.used}%`)))
+      .child(div().id("cispend-github-bar").relative().w_full().h(4).rounded(2).bg(t.border).overflow_hidden()
+        .child(div().id("cispend-github-fill").h(4).rounded(2).bg(c.level[f.github.level]).w(`${f.github.used}%`))
+        // s41: the switch point ($270): a thin tick in the text colour, over the fill.
+        .when(f.github.mark != null, (b) => b.child(div().id("cispend-github-mark").absolute().top(0).h(4).w(2).bg(t.foreground).left(`${f.github.mark}%`))))
       .when(Boolean(f.github.line), (r) => r.child(div().id("cispend-github-line").text_size(10.5).text_color(t.muted).child(f.github.line)))))
     .when(Boolean(f.ubicloud), (el) => el.child(v_flex().id("cispend-ubicloud").gap(3).tooltip(f.ubicloud.tip).cursor_pointer().on_click(open(f.links.ubicloud))
       .child(h_flex().items_center().text_size(12)
