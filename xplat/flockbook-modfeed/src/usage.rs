@@ -5,7 +5,8 @@
 //! `<folder>/<session id>.json` (`status::folder`); its `rate_limits` hold the account's limits, and its
 //! `transcript_path` (`<config folder>/projects/<project>/<session id>.jsonl`) says which account's session it was.
 //! Every session re-saves its own last figure, so the account's reading is the latest window's highest one
-//! (`account_reading`), not the newest file.
+//! (`account_reading`), not the newest file. Those records are removed after a day, so the helper keeps each
+//! account's last line in `<flockbook>/usage-accounts.json` for 30 days (`claude_lines_remembering`).
 //!
 //! Codex: the rollouts under `$CODEX_HOME` (else `~/.codex`) `sessions/YYYY/MM/DD/`; the last `rate_limits` in the
 //! newest rollout that has one.
@@ -104,7 +105,75 @@ fn account_reading(readings: Vec<(i64, Value)>) -> Option<(i64, Value)> {
 /// One `usage` line per Claude config folder with a weekly reading in `dir` (the status line wrapper's folder).
 /// `home`: where the default folder's `.claude.json` is. Sorted by config folder.
 pub fn claude_lines(dir: &Path, home: &Path) -> Vec<Value> {
-    let Ok(entries) = std::fs::read_dir(dir) else { return vec![] };
+    lines_of(claude_readings(dir), home, &BTreeMap::new())
+}
+
+/// The `usage` lines of each config folder's readings; `emails`: a remembered email per folder, used when the
+/// folder's own file can't be read.
+fn lines_of(read: BTreeMap<String, Vec<(i64, Value)>>, home: &Path, emails: &BTreeMap<String, String>) -> Vec<Value> {
+    read.into_iter()
+        .filter_map(|(config, readings)| Some((config, account_reading(readings)?)))
+        .map(|(config, (at, w))| {
+            let email = email_of(Path::new(&config), home).or_else(|| emails.get(&config).cloned());
+            json!({"type": "usage", "kind": "claude", "config": config, "email": email, "weekly": w, "at": at})
+        })
+        .collect()
+}
+
+/// How long the helper keeps an account's last reading after its status line records are gone (as the mod's carry).
+pub const REMEMBER_MS: i64 = 30 * 24 * 3600 * 1000;
+/// The file the readings are kept in, beside the wrapper's default `statusline` folder (not in it: herdr-core removes
+/// that folder's `.json` files after a day).
+pub const MEMORY_FILE: &str = "usage-accounts.json";
+
+/// The remembered lines in `file` (`{"lines": [usage line…]}`), as readings per config folder plus their emails; lines
+/// older than `REMEMBER_MS` at `now_ms`, or not shaped like a reading, are left out. A missing or broken file is none.
+fn load_memory(file: &Path, now_ms: i64) -> (BTreeMap<String, Vec<(i64, Value)>>, BTreeMap<String, String>) {
+    let (mut read, mut emails) = (BTreeMap::new(), BTreeMap::new());
+    let kept = std::fs::read(file).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+    for l in kept.as_ref().and_then(|v| v["lines"].as_array()).into_iter().flatten() {
+        let (Some(config), Some(at), Some(w)) = (l["config"].as_str(), l["at"].as_i64(), l.get("weekly").filter(|w| w["used"].is_number())) else { continue };
+        if now_ms - at > REMEMBER_MS {
+            continue;
+        }
+        read.entry(config.to_string()).or_insert_with(Vec::new).push((at, w.clone()));
+        if let Some(e) = l["email"].as_str() {
+            emails.insert(config.to_string(), e.to_string());
+        }
+    }
+    (read, emails)
+}
+
+/// `claude_lines`, plus the last reading of each config folder kept in `memory` (up to `REMEMBER_MS` old), so an
+/// account whose status line records were removed (a day idle) still has its line. The fresh and the remembered
+/// readings go through the same rule (`account_reading`: the latest window's highest). `memory` is rewritten (a temp
+/// file, then a rename) when the lines differ from it; no file is made while there is nothing to keep.
+pub fn claude_lines_remembering(dir: &Path, home: &Path, memory: &Path, now_ms: i64) -> Vec<Value> {
+    let mut read = claude_readings(dir);
+    let (kept, emails) = load_memory(memory, now_ms);
+    for (config, mut readings) in kept {
+        let all = read.entry(config).or_default();
+        all.append(&mut readings);
+        // account_reading wants the newest first (equal figures: the newest is kept).
+        all.sort_by(|a, b| b.0.cmp(&a.0));
+    }
+    let out = lines_of(read, home, &emails);
+    let text = json!({"lines": out}).to_string();
+    let old = std::fs::read(memory).ok();
+    if old.as_deref() != Some(text.as_bytes()) && (old.is_some() || !out.is_empty()) {
+        if let Some(folder) = memory.parent() {
+            let tmp = folder.join(format!(".{MEMORY_FILE}.{}.tmp", std::process::id()));
+            if std::fs::write(&tmp, &text).and_then(|_| std::fs::rename(&tmp, memory)).is_err() {
+                let _ = std::fs::remove_file(&tmp);
+            }
+        }
+    }
+    out
+}
+
+/// The weekly readings in `dir` per config folder, each folder's newest first.
+fn claude_readings(dir: &Path) -> BTreeMap<String, Vec<(i64, Value)>> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return BTreeMap::new() };
     let mut files: Vec<(i64, PathBuf)> = entries
         .filter_map(Result::ok)
         .map(|e| e.path())
@@ -125,13 +194,7 @@ pub fn claude_lines(dir: &Path, home: &Path) -> Vec<Value> {
         };
         read.entry(config.to_string()).or_default().push((at, w));
     }
-    read.into_iter()
-        .filter_map(|(config, readings)| Some((config, account_reading(readings)?)))
-        .map(|(config, (at, w))| {
-            let email = email_of(Path::new(&config), home);
-            json!({"type": "usage", "kind": "claude", "config": config, "email": email, "weekly": w, "at": at})
-        })
-        .collect()
+    read
 }
 
 /// The first `rate_limits` object in `v`, however deep it is nested (null does not count).
@@ -222,11 +285,18 @@ pub fn codex_line(codex_home: &Path, today: chrono::NaiveDate) -> Option<Value> 
 
 /// Every `usage` line for this computer: Claude's accounts, then Codex. `env`: the process environment (HOME,
 /// CLAUDE_CONFIG_DIR, CODEX_HOME). `flockbook`: `<herdr-app home>/flockbook`, whose `statusline` folder is the
-/// wrapper's default when the settings name none.
+/// wrapper's default when the settings name none. Claude's readings are remembered in `flockbook`'s `MEMORY_FILE`
+/// (without one: beside the wrapper's folder; neither: not remembered).
 pub fn lines(env: &HashMap<String, String>, flockbook: Option<&Path>, today: chrono::NaiveDate) -> Vec<Value> {
     let home = PathBuf::from(herdr_core::hc::session::home_dir(env));
     let folder = status::folder(&status::default_settings(env)).or_else(|| flockbook.map(|f| f.join("statusline")));
-    let mut out = folder.map(|d| claude_lines(&d, &home)).unwrap_or_default();
+    let memory = flockbook.map(Path::to_path_buf).or_else(|| folder.as_deref().and_then(Path::parent).map(Path::to_path_buf)).map(|d| d.join(MEMORY_FILE));
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let mut out = match (folder, memory) {
+        (folder, Some(m)) => claude_lines_remembering(&folder.unwrap_or_default(), &home, &m, now_ms),
+        (Some(d), None) => claude_lines(&d, &home),
+        (None, None) => vec![],
+    };
     let codex = env.get("CODEX_HOME").filter(|d| !d.is_empty()).map(PathBuf::from).unwrap_or_else(|| home.join(".codex"));
     out.extend(codex_line(&codex, today));
     out

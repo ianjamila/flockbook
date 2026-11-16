@@ -202,6 +202,105 @@ fn a_busy_account_does_not_hide_the_other_accounts_reading() {
     assert_eq!(lines.len(), 2, "{lines:?}");
 }
 
+// ---- remembered readings (owner 11-16 s41: the helper keeps each account's last reading itself) ----
+// The status line records are removed after 24 h (herdr-core statusline.rs MAX_AGE), so an account idle for a day
+// dropped out of `usage`; the mod's own 30-day carry only helps a mod that already saw the reading (not a fresh
+// install, a cleared shared.json or another machine). The helper now keeps the last line per config folder in
+// `<flockbook>/usage-accounts.json` for 30 days.
+
+const DAY_MS: i64 = 24 * 3600 * 1000;
+
+#[test]
+fn a_remembered_reading_outlives_its_status_line_records() {
+    let t = tempfile::tempdir().unwrap();
+    let (dir, home, mem) = (t.path().join("statusline"), t.path().join("home"), t.path().join("fb/usage-accounts.json"));
+    std::fs::create_dir_all(mem.parent().unwrap()).unwrap();
+    let (a, b) = (format!("{}/.claude", home.display()), format!("{}/.claude-eaglewatch", home.display()));
+    std::fs::create_dir_all(home.join(".claude-eaglewatch")).unwrap();
+    std::fs::write(home.join(".claude-eaglewatch/.claude.json"), r#"{"oauthAccount":{"emailAddress":"work@example.test"}}"#).unwrap();
+    session(&dir, "a1", &a, Some(weekly(10.0, 1_795_208_400)), 2_000);
+    session(&dir, "b1", &b, Some(weekly(94.0, 1_795_208_400)), 1_000);
+    let now = 3_000_000;
+    let first = usage::claude_lines_remembering(&dir, &home, &mem, now);
+    assert_eq!(first.len(), 2, "{first:?}");
+    assert!(mem.exists(), "the memory file is written");
+    // A day later the 24 h clean-up removed b's record, and its email file is gone too.
+    std::fs::remove_file(dir.join("b1.json")).unwrap();
+    std::fs::remove_file(home.join(".claude-eaglewatch/.claude.json")).unwrap();
+    let later = usage::claude_lines_remembering(&dir, &home, &mem, now + 2 * DAY_MS);
+    assert_eq!(later.len(), 2, "b is still there: {later:?}");
+    let l = find(&later, &b);
+    assert_eq!(l["weekly"], json!({"left": 6, "used": 94, "resets_at": 1_795_208_400}));
+    assert_eq!(l["at"], 1_000_000, "at is still the reading's own time, so the mod says 'as of N d ago'");
+    assert_eq!(l["email"], "work@example.test", "the remembered email stays when the file can't be read");
+    assert_eq!(l["type"], "usage");
+    assert_eq!(l["kind"], "claude");
+    // Same answer as the plain reader for an account that still has records.
+    assert_eq!(find(&later, &a), find(&usage::claude_lines(&dir, &home), &a));
+}
+
+#[test]
+fn a_remembered_reading_follows_the_same_window_rule_as_fresh_ones() {
+    let t = tempfile::tempdir().unwrap();
+    let (dir, home, mem) = (t.path().join("statusline"), t.path().join("home"), t.path().join("usage-accounts.json"));
+    let a = format!("{}/.claude", home.display());
+    session(&dir, "busy", &a, Some(weekly(80.0, 1_795_208_400)), 1_000);
+    usage::claude_lines_remembering(&dir, &home, &mem, 2_000_000);
+    // The busy session's record is gone; an idle one re-saved an older, lower figure of the same week later.
+    std::fs::remove_file(dir.join("busy.json")).unwrap();
+    session(&dir, "idle", &a, Some(weekly(58.0, 1_795_208_400)), 5_000);
+    let l = &usage::claude_lines_remembering(&dir, &home, &mem, 6_000_000)[0];
+    assert_eq!(l["weekly"]["used"], 80, "within a week usage only goes up: {l:?}");
+    // A new week wins over the remembered higher figure of the old one, and the memory moves on to it.
+    session(&dir, "fresh", &a, Some(weekly(3.0, 1_795_813_200)), 7_000);
+    let l = &usage::claude_lines_remembering(&dir, &home, &mem, 8_000_000)[0];
+    assert_eq!(l["weekly"]["used"], 3);
+    for f in ["idle.json", "fresh.json"] {
+        std::fs::remove_file(dir.join(f)).unwrap();
+    }
+    let l = &usage::claude_lines_remembering(&dir, &home, &mem, 9_000_000)[0];
+    assert_eq!(l["weekly"]["used"], 3, "the memory holds the new week's reading: {l:?}");
+    assert_eq!(l["at"], 7_000_000);
+}
+
+#[test]
+fn a_reading_older_than_30_days_is_forgotten() {
+    let t = tempfile::tempdir().unwrap();
+    let (dir, home, mem) = (t.path().join("statusline"), t.path().join("home"), t.path().join("usage-accounts.json"));
+    let a = format!("{}/.claude", home.display());
+    session(&dir, "s", &a, Some(weekly(40.0, 1_795_208_400)), 1_000);
+    usage::claude_lines_remembering(&dir, &home, &mem, 1_000_000);
+    std::fs::remove_file(dir.join("s.json")).unwrap();
+    assert_eq!(usage::claude_lines_remembering(&dir, &home, &mem, 1_000_000 + 30 * DAY_MS).len(), 1, "30 days: still kept");
+    assert!(usage::claude_lines_remembering(&dir, &home, &mem, 1_000_000 + 30 * DAY_MS + 1).is_empty(), "past 30 days: gone");
+    let kept: Value = serde_json::from_slice(&std::fs::read(&mem).unwrap()).unwrap();
+    assert_eq!(kept["lines"], json!([]), "and dropped from the file: {kept}");
+}
+
+#[test]
+fn a_broken_or_missing_memory_file_is_no_memory() {
+    let t = tempfile::tempdir().unwrap();
+    let (dir, home, mem) = (t.path().join("statusline"), t.path().join("home"), t.path().join("usage-accounts.json"));
+    let a = format!("{}/.claude", home.display());
+    // Nothing read and no file: no file is made.
+    assert!(usage::claude_lines_remembering(&dir, &home, &mem, 1_000).is_empty());
+    assert!(!mem.exists(), "no empty memory file");
+    // A broken file (or entries that are not readings) does not stop the fresh reading, and is replaced.
+    std::fs::write(&mem, "{ not json").unwrap();
+    session(&dir, "s", &a, Some(weekly(12.0, 1_795_208_400)), 1_000);
+    let lines = usage::claude_lines_remembering(&dir, &home, &mem, 2_000_000);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    std::fs::write(&mem, json!({"lines": [{"config": a, "at": "x"}, {"at": 5}, 7, {"config": a, "at": 1_500_000, "weekly": "no"}]}).to_string()).unwrap();
+    let lines = usage::claude_lines_remembering(&dir, &home, &mem, 2_000_000);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["weekly"]["used"], 12);
+    let kept: Value = serde_json::from_slice(&std::fs::read(&mem).unwrap()).unwrap();
+    assert_eq!(kept["lines"].as_array().unwrap().len(), 1, "the file holds the good reading only: {kept}");
+    // No temp files are left beside it.
+    let names: Vec<String> = std::fs::read_dir(t.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert!(names.iter().all(|n| !n.contains(".tmp")), "{names:?}");
+}
+
 // ---- Codex ----
 
 fn day(codex: &Path, d: NaiveDate) -> PathBuf {
@@ -391,6 +490,29 @@ fn the_command_prints_one_line_per_account_found_and_nothing_for_the_rest() {
     // Neither found: only the header and the end.
     let none = run(&["usage"], &[("HOME", &t.path().join("empty")), ("CODEX_HOME", &t.path().join("nocodex"))]);
     assert_eq!(none.len(), 2, "{none:?}");
+}
+
+#[test]
+fn the_command_remembers_an_account_in_the_flockbook_folder() {
+    let t = tempfile::tempdir().unwrap();
+    let (home, app) = (t.path().join("home"), t.path().join("app"));
+    std::fs::create_dir_all(app.join("flockbook")).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    // No statusLine --dir in the settings: the wrapper's default folder <flockbook>/statusline is read.
+    let shared = app.join("flockbook/statusline");
+    // The command ages readings by the real clock: a reading from two days ago.
+    let two_days_ago = std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() - 2 * 24 * 3600;
+    session(&shared, "s1", &format!("{}/.claude", home.display()), Some(weekly(64.0, 1_795_208_400)), two_days_ago);
+    let args = ["usage", "--home", app.to_str().unwrap()];
+    let env = [("HOME", home.as_path()), ("CODEX_HOME", &t.path().join("nocodex"))];
+    let claude = |v: Vec<Value>| v.into_iter().filter(|l| l["kind"] == "claude").collect::<Vec<_>>();
+    assert_eq!(claude(run(&args, &env)).len(), 1);
+    assert!(app.join("flockbook/usage-accounts.json").exists(), "kept beside the statusline folder");
+    std::fs::remove_file(shared.join("s1.json")).unwrap();
+    let again = claude(run(&args, &env));
+    assert_eq!(again.len(), 1, "still there after its record is gone: {again:?}");
+    assert_eq!(again[0]["weekly"]["used"], 64);
+    assert_eq!(again[0]["at"], two_days_ago as i64 * 1000);
 }
 
 #[test]
