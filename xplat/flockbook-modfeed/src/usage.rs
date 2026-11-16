@@ -83,11 +83,26 @@ const SAME_WINDOW_SECS: i64 = 3600;
 /// One session's reading: `at` = its status line file's mtime (ms; it is re-saved every refresh), `replied` = its
 /// transcript's mtime (ms), i.e. when the figure was given; None when unknown (a missing transcript, or a line an
 /// older helper remembered).
-#[derive(Clone, Debug)]
+/// `session` / `cwd`: the session that gave it and its folder; `dropped_from`: a remembered line's reset note.
+#[derive(Clone, Debug, Default)]
 struct Reading {
     at: i64,
     replied: Option<i64>,
     weekly: Value,
+    session: Option<String>,
+    cwd: Option<String>,
+    dropped_from: Option<f64>,
+}
+
+/// How many points lower than an older reading of the same window the chosen one must be to say the limit was reset
+/// (usage only goes down inside a week when it was reset; a point or two is rounding between sessions).
+pub const RESET_DROP: f64 = 5.0;
+
+/// `used` of the newest reading, and the highest `used` it came down from: `Some(old)` when `old` is at least
+/// `RESET_DROP` above it. `older`: (used, a reset note it already carried) of readings surely given before it.
+fn reset_note(used: f64, own: Option<f64>, older: impl Iterator<Item = (f64, Option<f64>)>) -> Option<f64> {
+    let high = older.map(|(u, d)| d.map_or(u, |d| d.max(u))).chain(own).fold(f64::NEG_INFINITY, f64::max);
+    (high >= used + RESET_DROP).then_some(high)
 }
 
 /// One account's figure from all its sessions' readings (newest file first). Every session re-saves the figure from
@@ -122,11 +137,17 @@ fn account_reading(readings: Vec<Reading>) -> Option<Reading> {
             Some(b) if used(b) >= used(r) => best,
             _ => Some(r),
         });
-    match (newest_reply, unknown) {
-        (Some(k), Some(u)) if used(u) > used(k) => Some(u.clone()),
-        (Some(k), _) => Some(k.clone()),
-        (None, u) => u.cloned(),
-    }
+    let mut best = match (newest_reply, unknown) {
+        (Some(k), Some(u)) if used(u) > used(k) => u.clone(),
+        (Some(k), _) => k.clone(),
+        (None, u) => u.cloned()?,
+    };
+    // Surely given before the chosen one: an older reply, or a file saved before it replied.
+    let older = best.replied.map(|w| {
+        window.iter().filter(move |r| match r.replied { Some(t) => t < w, None => r.at <= w }).map(|r| (used(r), r.dropped_from))
+    });
+    best.dropped_from = reset_note(used(&best), best.dropped_from, older.into_iter().flatten());
+    Some(best)
 }
 
 /// One `usage` line per Claude config folder with a weekly reading in `dir` (the status line wrapper's folder).
@@ -143,13 +164,27 @@ fn lines_of(read: BTreeMap<String, Vec<Reading>>, home: &Path, emails: &BTreeMap
         .map(|(config, r)| {
             let email = email_of(Path::new(&config), home).or_else(|| emails.get(&config).cloned());
             let mut line = json!({"type": "usage", "kind": "claude", "config": config, "email": email, "weekly": r.weekly, "at": r.at});
-            // `replied`: when the figure was given (ms); absent when unknown, so the mod knows to fall back.
-            if let Some(t) = r.replied {
-                line["replied"] = json!(t);
-            }
+            extras(&mut line, &r);
             line
         })
         .collect()
+}
+
+/// The optional fields of a line, each only when known: `replied` (when the figure was given, ms; absent: the mod
+/// falls back), `dropped_from`, `session`, `cwd`.
+fn extras(line: &mut Value, r: &Reading) {
+    if let Some(t) = r.replied {
+        line["replied"] = json!(t);
+    }
+    if let Some(d) = r.dropped_from {
+        line["dropped_from"] = number(d);
+    }
+    if let Some(s) = &r.session {
+        line["session"] = json!(s);
+    }
+    if let Some(c) = &r.cwd {
+        line["cwd"] = json!(c);
+    }
 }
 
 /// How long the helper keeps an account's last reading after its status line records are gone (as the mod's carry).
@@ -168,7 +203,14 @@ fn load_memory(file: &Path, now_ms: i64) -> (BTreeMap<String, Vec<Reading>>, BTr
         if now_ms - at > REMEMBER_MS {
             continue;
         }
-        read.entry(config.to_string()).or_insert_with(Vec::new).push(Reading { at, replied: l["replied"].as_i64(), weekly: w.clone() });
+        read.entry(config.to_string()).or_insert_with(Vec::new).push(Reading {
+            at,
+            replied: l["replied"].as_i64(),
+            weekly: w.clone(),
+            session: l["session"].as_str().map(String::from),
+            cwd: l["cwd"].as_str().map(String::from),
+            dropped_from: l["dropped_from"].as_f64(),
+        });
         if let Some(e) = l["email"].as_str() {
             emails.insert(config.to_string(), e.to_string());
         }
@@ -226,7 +268,9 @@ fn claude_readings(dir: &Path) -> BTreeMap<String, Vec<Reading>> {
             continue;
         };
         let replied = transcript.and_then(|t| mtime_ms(Path::new(t)));
-        read.entry(config.to_string()).or_default().push(Reading { at, replied, weekly: w });
+        let session = v.get("session_id").and_then(Value::as_str).map(String::from);
+        let cwd = v.pointer("/workspace/current_dir").or_else(|| v.get("cwd")).and_then(Value::as_str).map(String::from);
+        read.entry(config.to_string()).or_default().push(Reading { at, replied, weekly: w, session, cwd, dropped_from: None });
     }
     read
 }
@@ -269,8 +313,11 @@ fn tail_lines(path: &Path) -> Option<Vec<String>> {
     Some(lines)
 }
 
-/// The last weekly reading in one rollout: (the `rate_limits`' weekly, its plan, its time in ms).
-fn codex_reading(path: &Path) -> Option<(Value, Option<String>, i64)> {
+/// The last weekly reading in one rollout: (the `rate_limits`' weekly, its plan, its time in ms, a reset note: the
+/// highest earlier reading of the same window in the tail read, when `RESET_DROP` above it).
+fn codex_reading(path: &Path) -> Option<(Value, Option<String>, i64, Option<f64>)> {
+    let mut found: Option<(Value, Option<String>, i64)> = None;
+    let mut earlier: Vec<f64> = vec![];
     for line in tail_lines(path)?.iter().rev() {
         if !line.contains("\"rate_limits\"") {
             continue;
@@ -278,15 +325,58 @@ fn codex_reading(path: &Path) -> Option<(Value, Option<String>, i64)> {
         let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
         let Some(r) = find_rate_limits(&v) else { continue };
         let Some(w) = codex_weekly(r) else { continue };
-        let at = v
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-            .map(|t| t.timestamp_millis())
-            .or_else(|| mtime_ms(path))?;
-        return Some((w, r.get("plan_type").and_then(Value::as_str).map(String::from), at));
+        match &found {
+            None => {
+                let at = v
+                    .get("timestamp")
+                    .and_then(Value::as_str)
+                    .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                    .map(|t| t.timestamp_millis())
+                    .or_else(|| mtime_ms(path))?;
+                found = Some((w, r.get("plan_type").and_then(Value::as_str).map(String::from), at));
+            }
+            Some((last, _, _)) => {
+                let same = match (last["resets_at"].as_i64(), w["resets_at"].as_i64()) {
+                    (Some(a), Some(b)) => (a - b).abs() <= SAME_WINDOW_SECS,
+                    _ => false,
+                };
+                if same {
+                    earlier.push(w["used"].as_f64().unwrap_or(0.0));
+                }
+            }
+        }
     }
-    None
+    let (w, plan, at) = found?;
+    let note = reset_note(w["used"].as_f64().unwrap_or(0.0), None, earlier.into_iter().map(|u| (u, None)));
+    Some((w, plan, at, note))
+}
+
+/// The session id and folder of a rollout, from its first line (`session_meta`; the line can be long, only its
+/// start is read).
+fn codex_session(path: &Path) -> (Option<String>, Option<String>) {
+    let mut head = vec![0u8; 16 * 1024];
+    let n = std::fs::File::open(path).and_then(|mut f| f.read(&mut head)).unwrap_or(0);
+    let text = String::from_utf8_lossy(&head[..n]);
+    let first = text.lines().next().unwrap_or("");
+    if !first.contains("\"session_meta\"") {
+        return (None, None);
+    }
+    // The value of the first `"key":"…"` in the line, read as a JSON string.
+    let field = |key: &str| -> Option<String> {
+        // From the value's opening quote.
+        let rest = &first[first.find(&format!("\"{key}\":\""))? + key.len() + 3..];
+        let mut end = 1;
+        let bytes = rest.as_bytes();
+        while end < bytes.len() {
+            match bytes[end] {
+                b'\\' => end += 2,
+                b'"' => return serde_json::from_str::<String>(&rest[..=end]).ok(),
+                _ => end += 1,
+            }
+        }
+        None
+    };
+    (field("session_id"), field("cwd"))
 }
 
 /// The `usage` line for Codex under `codex_home`: the newest day folders from `today` back 14 days, newest files
@@ -309,8 +399,12 @@ pub fn codex_line(codex_home: &Path, today: chrono::NaiveDate) -> Option<Value> 
                 return None;
             }
             seen += 1;
-            if let Some((w, plan, at)) = codex_reading(&path) {
-                return Some(json!({"type": "usage", "kind": "codex", "plan": plan, "weekly": w, "at": at}));
+            if let Some((w, plan, at, dropped_from)) = codex_reading(&path) {
+                let mut line = json!({"type": "usage", "kind": "codex", "plan": plan, "weekly": w, "at": at});
+                // A Codex reading is the reply's own event: its time IS the reply time.
+                let (session, cwd) = codex_session(&path);
+                extras(&mut line, &Reading { at, replied: Some(at), weekly: Value::Null, session, cwd, dropped_from });
+                return Some(line);
             }
         }
     }

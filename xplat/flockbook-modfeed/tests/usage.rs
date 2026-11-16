@@ -365,6 +365,71 @@ fn a_remembered_reading_without_a_reply_time_loses_once_a_newer_reply_is_known()
     assert_eq!(l["replied"], 3_500_000);
 }
 
+// ---- the row says a reset happened and where its figure came from (owner 11-17) ----
+// `dropped_from`: the highest "used" of an older reading in the same window, when the chosen one is at least
+// `usage::RESET_DROP` points lower (usage only goes down inside a week when the limit was reset); it is remembered
+// with the line until a new window. `session` / `cwd`: the session whose status line gave the figure.
+
+#[test]
+fn a_reset_inside_the_week_says_what_it_dropped_from_and_keeps_saying_it() {
+    let t = tempfile::tempdir().unwrap();
+    let (dir, home, mem) = (t.path().join("statusline"), t.path().join("home"), t.path().join("usage-accounts.json"));
+    let a = format!("{}/.claude-eaglewatch", home.display());
+    session_replied(&dir, "before", &a, weekly(94.0, 1_795_208_400), 5_100, 1_000);
+    session_replied(&dir, "after", &a, weekly(62.0, 1_795_208_400), 5_050, 5_000);
+    let l = &usage::claude_lines_remembering(&dir, &home, &mem, 6_000_000)[0];
+    assert_eq!(l["dropped_from"], 94, "{l:?}");
+    // The records are gone: the memory still says it.
+    for f in ["before.json", "after.json"] {
+        std::fs::remove_file(dir.join(f)).unwrap();
+    }
+    let l = &usage::claude_lines_remembering(&dir, &home, &mem, 7_000_000)[0];
+    assert_eq!(l["dropped_from"], 94, "remembered: {l:?}");
+    // A new window starts clean.
+    session_replied(&dir, "next-week", &a, weekly(2.0, 1_795_813_200), 8_000, 7_900);
+    let l = &usage::claude_lines_remembering(&dir, &home, &mem, 9_000_000)[0];
+    assert!(l.get("dropped_from").is_none(), "{l:?}");
+}
+
+#[test]
+fn no_reset_note_for_an_idle_session_or_a_small_difference() {
+    let t = tempfile::tempdir().unwrap();
+    let (dir, home) = (t.path().join("statusline"), t.path().join("home"));
+    let a = format!("{}/.claude", home.display());
+    // The idle session's figure is older and LOWER: usage went up, no reset.
+    session_replied(&dir, "busy", &a, weekly(80.0, 1_795_208_400), 1_000, 990);
+    session_replied(&dir, "idle", &a, weekly(58.0, 1_795_208_400), 1_003, 500);
+    assert!(usage::claude_lines(&dir, &home)[0].get("dropped_from").is_none());
+    // Older and higher by less than RESET_DROP points: no note.
+    let t2 = tempfile::tempdir().unwrap();
+    let dir2 = t2.path().join("statusline");
+    let small = usage::RESET_DROP - 1.0;
+    session_replied(&dir2, "old", &a, weekly(50.0 + small, 1_795_208_400), 1_000, 900);
+    session_replied(&dir2, "new", &a, weekly(50.0, 1_795_208_400), 1_000, 990);
+    assert!(usage::claude_lines(&dir2, &home)[0].get("dropped_from").is_none());
+}
+
+#[test]
+fn the_line_names_the_session_its_figure_came_from() {
+    let t = tempfile::tempdir().unwrap();
+    let (dir, home, mem) = (t.path().join("statusline"), t.path().join("home"), t.path().join("usage-accounts.json"));
+    let a = format!("{}/.claude", home.display());
+    session_replied(&dir, "sess-1", &a, weekly(40.0, 1_795_208_400), 1_000, 990);
+    // workspace.current_dir first, else cwd.
+    let p = dir.join("sess-1.json");
+    let mut v: Value = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+    v["cwd"] = json!("/w/other");
+    v["workspace"] = json!({"current_dir": "/w/proj"});
+    std::fs::write(&p, v.to_string()).unwrap();
+    set_mtime(&p, 1_000);
+    let l = &usage::claude_lines_remembering(&dir, &home, &mem, 2_000_000)[0];
+    assert_eq!(l["session"], "sess-1");
+    assert_eq!(l["cwd"], "/w/proj");
+    std::fs::remove_file(&p).unwrap();
+    let l = &usage::claude_lines_remembering(&dir, &home, &mem, 3_000_000)[0];
+    assert_eq!((l["session"].as_str(), l["cwd"].as_str()), (Some("sess-1"), Some("/w/proj")), "remembered: {l:?}");
+}
+
 // ---- Codex ----
 
 fn day(codex: &Path, d: NaiveDate) -> PathBuf {
@@ -505,6 +570,36 @@ fn codex_a_window_that_is_not_weekly_is_no_reading() {
 }
 
 // ---- the command ----
+
+// Owner 11-17: the mod picks across machines by reply time, so Codex says it too (its reading IS the reply's own
+// timestamp); a reset inside the week inside one rollout says what it dropped from; the session is named.
+#[test]
+fn codex_says_its_reply_time_its_session_and_a_reset_inside_the_week() {
+    let t = tempfile::tempdir().unwrap();
+    let codex = t.path().join("codex");
+    let d = day(&codex, today());
+    // Written in Codex's own key order (json! would sort them): the id and folder come before the long instructions,
+    // which run past the part of the line that is read.
+    let meta = format!(r#"{{"timestamp":"2026-11-15T09:00:00.000Z","ordinal":0,"type":"session_meta","payload":{{"session_id":"01a1-abc","id":"01a1-abc","cwd":"/w/drmed","base_instructions":{{"text":"{}"}}}}}}"#, "x".repeat(20_000));
+    rollout(&d, "rollout-2026-11-15T09-00-00-01a1-abc.jsonl", &[
+        meta,
+        limits_line("2026-11-15T09:30:00.000Z", 90.0, 1_795_252_973),
+        limits_line("2026-11-15T10:00:00.000Z", 50.0, 1_795_252_973),
+    ], 5_000);
+    let l = usage::codex_line(&codex, today()).unwrap();
+    assert_eq!(l["weekly"]["used"], 50);
+    assert_eq!(l["replied"], l["at"], "{l:?}");
+    assert_eq!(l["dropped_from"], 90);
+    assert_eq!(l["session"], "01a1-abc");
+    assert_eq!(l["cwd"], "/w/drmed");
+    // Usage that only went up: no note; no session_meta: no session.
+    let t2 = tempfile::tempdir().unwrap();
+    let codex2 = t2.path().join("codex");
+    let d2 = day(&codex2, today());
+    rollout(&d2, "rollout-b.jsonl", &[limits_line("2026-11-15T09:30:00.000Z", 40.0, 1_795_252_973), limits_line("2026-11-15T10:00:00.000Z", 50.0, 1_795_252_973)], 5_000);
+    let l = usage::codex_line(&codex2, today()).unwrap();
+    assert!(l.get("dropped_from").is_none() && l.get("session").is_none() && l.get("cwd").is_none(), "{l:?}");
+}
 
 fn run(args: &[&str], env: &[(&str, &Path)]) -> Vec<Value> {
     let mut c = Command::new(BIN);

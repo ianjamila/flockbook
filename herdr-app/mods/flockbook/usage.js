@@ -80,21 +80,41 @@ export function carry(prev, next, now = Date.now()) {
     && Number.isFinite(l.at) && now - l.at <= REMEMBER_MS);
   return [...next, ...kept];
 }
+// How many points lower than an older reading of the same week the shown one must be to say the limit was reset
+// (owner 11-17; the helper's RESET_DROP): usage only goes down inside a week when the limit was reset.
+export const RESET_DROP = 5;
+// The winner with its reset note (`dropped_from`): the highest "used" (or note) of the readings of its week surely
+// given before it (an older reply, or a file saved before it replied), when RESET_DROP above it; else the helper's own.
+function withNote(best, all) {
+  if (!best) return best;
+  const w = replyOf(best);
+  const rb = resetOf(best);
+  const older = w === null ? [] : all.filter((r) => r !== best && resetOf(r) !== null && rb !== null && Math.abs(resetOf(r) - rb) <= SAME_WEEK_S
+    && (replyOf(r) !== null ? replyOf(r) < w : r.at <= w));
+  const own = Number.isFinite(best.dropped_from) ? [best.dropped_from] : [];
+  const high = Math.max(-Infinity, ...own, ...older.map((r) => Math.max(r.weekly.used ?? 100 - r.weekly.left, Number.isFinite(r.dropped_from) ? r.dropped_from : -Infinity)));
+  const used = best.weekly.used ?? 100 - best.weekly.left;
+  const { dropped_from: _drop, ...rest } = best;
+  return high >= used + RESET_DROP ? { ...rest, dropped_from: high } : rest;
+}
 // Claude accounts by email (a reading without one by its config folder's name); Codex by kind. { claude: [{ key, email,
 // configs, reading }], codex: reading|null }; each account holds the newest reading and every config folder seen for it.
 export function merge(list) {
   const accts = new Map();
   let codex = null;
+  const codexAll = [];
   for (const r of list) {
-    if (r.kind === "codex") { codex = newer(codex, r); continue; }
+    if (r.kind === "codex") { codex = newer(codex, r); codexAll.push(r); continue; }
     const key = r.email ? `mail:${String(r.email).toLowerCase()}` : `dir:${baseName(r.config)}`;
-    const a = accts.get(key) ?? { key, email: null, configs: new Set(), reading: null };
+    const a = accts.get(key) ?? { key, email: null, configs: new Set(), reading: null, all: [] };
     if (r.email) a.email = r.email;
     if (r.config) a.configs.add(r.config);
     a.reading = newer(a.reading, r);
+    a.all.push(r);
     accts.set(key, a);
   }
-  return { claude: [...accts.values()], codex };
+  const claude = [...accts.values()].map(({ all, ...a }) => ({ ...a, reading: withNote(a.reading, all) }));
+  return { claude, codex: withNote(codex, codexAll) };
 }
 // An account's folder on this computer: the setting's config_dir, else the default ~/.claude.
 export const folderOf = (a, list, homeDir) => {
@@ -166,11 +186,17 @@ export function figures(row, now = Date.now()) {
   const left = past ? 100 : Math.max(0, Math.min(100, Math.round(r.weekly.left)));
   const age = now - r.at;
   const stale = age > STALE_MS;
-  const base = past ? "reset since the last reading" : resets != null ? `resets ${clock(resets)} · ${until(resets * 1000 - now)}` : "reset time unknown";
+  // Owner 11-17: a limit reset inside the week says so (the line, and what it was in the tooltip).
+  const wasReset = !past && Number.isFinite(r.dropped_from);
+  const base0 = past ? "reset since the last reading" : resets != null ? `resets ${clock(resets)} · ${until(resets * 1000 - now)}` : "reset time unknown";
+  const base = wasReset ? `limit reset · ${base0}` : base0;
   const line = stale && !past ? `${base} · as of ${ago(age)}` : base;
   const from = r.machine ? r.machine : "this computer";
+  // Owner 11-17: which session gave the figure, so a stuck one can be traced: its id's first part and its folder.
+  const session = r.session ? `from session ${String(r.session).split("-")[0]}${r.cwd ? ` in ${baseName(r.cwd)}` : ""}` : null;
   const tip = [who, past ? "the weekly limit has reset since this reading" : `${r.weekly.used}% of the weekly limit used`,
-    resets != null ? `${past ? "reset" : "resets"} ${fullClock(resets)}` : null, `read ${ago(age)} on ${from}`].filter(Boolean).join(" · ");
+    wasReset ? `the limit was reset this week (was ${r.dropped_from}% used)` : null,
+    resets != null ? `${past ? "reset" : "resets"} ${fullClock(resets)}` : null, `read ${ago(age)} on ${from}`, session].filter(Boolean).join(" · ");
   return { left, right: `${left}% left`, line, low: !past && left < LOW, level: levelOf(left), tip };
 }
 // "ok" (green) from WARN % left, "warn" (amber) from LOW, "low" (red) below; null without a reading.

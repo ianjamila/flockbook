@@ -120,6 +120,54 @@ test("a reset inside the week: the newest reply wins; a reading without a reply 
   assert.match(textOf(byId(swapped, "usage-0-left")), /^38% left$/);
 });
 
+// Owner 11-17 follow-ups: Codex picks by reply time too; a row says when its limit was reset inside the week; the
+// tooltip names the session the figure came from.
+test("Codex across machines: the newest reply wins inside the week", () => {
+  const replied = (line) => ({ ...line, replied: line.at });
+  const el = draw(data({ "": [replied(codex(80, NOW - 60_000))], "pc-wsl": [replied(codex(10, NOW - 3_600_000))] }));
+  assert.match(textOf(byId(el, "usage-2-left")), /^80% left$/);
+});
+
+test("a reset inside the week: the row says so, from the helper's note or across machines", () => {
+  // The helper's own note.
+  const note = draw(data({ "": [{ ...claude("/home/test/.claude", "me@example.test", 38, NOW - 30_000), replied: NOW - 60_000, dropped_from: 94 }] }));
+  assert.match(textOf(byId(note, "usage-0-line")), /^limit reset · resets /);
+  assert.match(byId(note, "usage-0")._a.tooltip, /limit was reset this week \(was 94% used\)/);
+  // Across machines: the PC's older 94% used (6% left) and the Mac's newer 38% left.
+  const cross = draw(data({
+    "": [{ ...claude("/home/test/.claude", "me@example.test", 38, NOW - 30_000), replied: NOW - 60_000 }],
+    "pc-wsl": [{ ...claude("/home/x/.claude", "me@example.test", 6, NOW - 20_000), replied: NOW - 5 * 3_600_000 }],
+  }));
+  assert.match(textOf(byId(cross, "usage-0-line")), /^limit reset · /);
+  assert.match(byId(cross, "usage-0")._a.tooltip, /was 94% used/);
+  // Usage that went up, a few points of difference, or another week: no note.
+  const up = draw(data({
+    "": [{ ...claude("/home/test/.claude", "me@example.test", 20, NOW - 30_000), replied: NOW - 60_000 }],
+    "pc-wsl": [{ ...claude("/home/x/.claude", "me@example.test", 23, NOW - 20_000), replied: NOW - 3_600_000 }],
+  }));
+  assert.doesNotMatch(textOf(byId(up, "usage-0-line")), /limit reset/);
+  const weekAgo = draw(data({
+    "": [{ ...claude("/home/test/.claude", "me@example.test", 96, NOW - 30_000, secs(2026, 10, 29, 11, 53)), replied: NOW - 60_000 }],
+    "pc-wsl": [{ ...claude("/home/x/.claude", "me@example.test", 3, NOW - 20_000), replied: NOW - 3_600_000 }],
+  }));
+  assert.doesNotMatch(textOf(byId(weekAgo, "usage-0-line")), /limit reset/);
+  // A reset time already past says that instead.
+  const past = draw(data({ "": [{ ...claude("/home/test/.claude", "me@example.test", 38, NOW - 30_000, secs(2026, 10, 15, 9, 0)), dropped_from: 94 }] }));
+  assert.doesNotMatch(textOf(byId(past, "usage-0-line")), /limit reset/);
+});
+
+test("the tooltip names the session the figure came from", () => {
+  const el = draw(data({ "": [
+    { ...claude("/home/test/.claude", "me@example.test", 38, NOW - 30_000), session: "bb43e2b6-6fe1-4dcd-960b-ee1de78e882c", cwd: "/Users/x/Claude/eaglewatch" },
+    { ...codex(60, NOW - 60_000), session: "01a1e42f-1fe1-78a3", cwd: "C:\\w\\drmed\\" },
+  ] }));
+  assert.match(byId(el, "usage-0")._a.tooltip, /from session bb43e2b6 in eaglewatch/);
+  assert.match(byId(el, "usage-2")._a.tooltip, /from session 01a1e42f in drmed/);
+  // Unknown: not mentioned.
+  const none = draw(data({ "": [claude("/home/test/.claude", "me@example.test", 38, NOW - 30_000)] }));
+  assert.doesNotMatch(byId(none, "usage-0")._a.tooltip, /from session/);
+});
+
 test("percent left, and a bar filled to what is left", () => {
   const el = draw(data({ "": [claude("/home/test/.claude", "me@example.test", 36, NOW - 60_000)] }));
   assert.equal(textOf(byId(el, "usage-0-left")), "36% left");
