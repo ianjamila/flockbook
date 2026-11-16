@@ -21,6 +21,9 @@ export const setAgentOrder = (list) => { log.order = list; return null; };
 export const layout = () => fake.layout;
 export const window = () => fake.window;
 export const settings = () => fake.settings;
+// s41 (newmenu.js): key bindings and the installed-agent check.
+export const keys = () => fake.keys ?? [];
+export const knownAgents = async () => fake.knownAgents ?? [];
 export const nextCommand = () => new Promise(() => {});
 export const watchFolder = () => new Promise(() => {});
 export const exec = async (cmd, args = [], opts) => {

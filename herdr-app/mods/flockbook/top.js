@@ -254,7 +254,7 @@ export function topBar(t, over = false) {
       .children(tabs.map(pill))
       : div().px(12).text_size(12.5).text_color(t.muted).child("No tabs in this space"));
   const tools = capsule("tools").px(5).gap(4)
-    .child(button("new", svg(icon("plus")).size(15), () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 }), 30, "New tab (⌘T)"))
+    .child(button("new", svg(icon("plus")).size(15), () => openOverlay({ mod: "flockbook", props: { view: "new" }, kind: "popup", width: 250, height: 512 }), 30, "New tab (⌘T)"))
     .when(Boolean(cur), (el) => el.child(button("terminal", svg(icon("terminal")).size(16), () => openTerminal(cur), 30, currentAgent() ? "Agent's terminal (⌃`)" : "Terminal (⌃`)")))
     .child(button("tablist", svg(icon("tablist")).size(16), () => toggleTablist(), 30, listed ? "Hide the tab list (⌥⌘B)" : "Show the tab list (⌥⌘B)")
       .when(listed, (b) => b.text_color(t.foreground)));

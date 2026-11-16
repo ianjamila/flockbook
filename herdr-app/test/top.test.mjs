@@ -100,7 +100,8 @@ test("the sidebar button shows and hides the sidebar; with it open the button li
   byId(new SideView(fakeCx()).render(fakeCx()), "side-toggle")._h.on_click({}, fakeCx());
   assert.deepEqual(log.run.at(-1), ["layout.hide", { id: "sidebar" }]);
   byId(el, "new")._h.on_click({}, fakeCx());
-  assert.equal(log.overlays.at(-1).mod, "new-menu");
+  // s41: Flockbook's own + menu (one Claude row per account), not Herdr's new-menu.
+  assert.deepEqual([log.overlays.at(-1).mod, log.overlays.at(-1).props?.view], ["flockbook", "new"]);
 });
 
 test("the sidebar state starts from the app's saved layout state", async () => {

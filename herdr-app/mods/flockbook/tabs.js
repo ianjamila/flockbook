@@ -113,7 +113,7 @@ function head(t) {
     .on_mouse_down("left", stop).on_click(action).child(child);
   return h_flex().id("tabs-head").size_full().h(BAR_H).pl(14).pr(8).gap(4).items_center().bg(t.chrome).border_l(1).border_color(t.border)
     .child(div().flex_1().min_w(0).truncate().text_size(12).font_weight(600).text_color(t.muted).child(all ? allHeadText(n) : headText(spaceTitle(space), n)))
-    .child(button("tabs-new", svg(icon("plus")).size(15), () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 }), "New tab (⌘T)"))
+    .child(button("tabs-new", svg(icon("plus")).size(15), () => openOverlay({ mod: "flockbook", props: { view: "new" }, kind: "popup", width: 250, height: 512 }), "New tab (⌘T)"))
     .child(button("tabs-hide", svg(icon("tablist")).size(15), () => toggleTablist(), "Hide the tab list (⌥⌘B)"));
 }
 

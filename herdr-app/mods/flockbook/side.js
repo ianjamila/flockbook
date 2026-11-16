@@ -179,7 +179,7 @@ export class SideView {
       .relative().left(this.slid ? 0 : -PEEK_W).when(this.slid, (el) => el.spring("left", SPRING));
     return root
       .child(header)
-      .child(row("side-new", "plus", "New tab", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))
+      .child(row("side-new", "plus", "New tab", () => openOverlay({ mod: "flockbook", props: { view: "new" }, kind: "popup", width: 250, height: 512 })))
       .child(row("side-needs", "bell", "Needs you", () => showNeeds(), badge, screen === "needs"))
       .child(row("side-overview", "grid", "Overview", () => showOverview(), null, screen === "overview"))
       .child(h_flex().mt(14).mb(2).px(10).items_center()
