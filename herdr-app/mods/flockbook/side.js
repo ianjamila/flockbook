@@ -16,6 +16,7 @@ import { machineGroups, machinesTick, machineHeader, machineEmpty, folded, MACHI
 import { pollUsage, usageBlock, USAGE_MS } from "./usage.js";
 import { pollSpend, spendBlock } from "./cispend.js";
 import { awakeBlock, awakeText, AWAKE_MS } from "./awake.js";
+import { newMenuSpec } from "./newmenu.js";   // s43: the + menu sized for the account names
 
 // The workspace being dragged up or down (drag.js): one at a time, so the docked and the floating
 // sidebar draw from the same one.
@@ -179,7 +180,7 @@ export class SideView {
       .relative().left(this.slid ? 0 : -PEEK_W).when(this.slid, (el) => el.spring("left", SPRING));
     return root
       .child(header)
-      .child(row("side-new", "plus", "New tab", () => openOverlay({ mod: "flockbook", props: { view: "new" }, kind: "popup", width: 250, height: 512 })))
+      .child(row("side-new", "plus", "New tab", () => openOverlay(newMenuSpec())))
       .child(row("side-needs", "bell", "Needs you", () => showNeeds(), badge, screen === "needs"))
       .child(row("side-overview", "grid", "Overview", () => showOverview(), null, screen === "overview"))
       .child(h_flex().mt(14).mb(2).px(10).items_center()

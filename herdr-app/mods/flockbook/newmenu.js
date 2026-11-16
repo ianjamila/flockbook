@@ -61,7 +61,21 @@ export function withClaude(here, there) {
   if (!c) return here;
   return (here ?? []).some((a) => a.key === "claude") ? here.map((a) => (a.key === "claude" ? { ...a, installed: Boolean(c.installed) } : a)) : [...(here ?? []), c];
 }
+// The menu's width for these row names (owner 11-16 s43: at Herdr's 250 px "Claude Code (eaglewatch9002)" squeezed
+// its icon and moved its text): ~7 px a character at 12.8 px, plus the row's padding, icon, gaps and a "wsl · 2"
+// hint; at least Herdr's 250, at most 380 (a longer name is cut).
+export function menuWidth(names) {
+  const longest = Math.max(0, ...(names ?? []).map((n) => String(n).length));
+  return Math.min(380, Math.max(250, Math.ceil(104 + 7 * longest)));
+}
 // </newmenu-pure>
+
+// The overlay the + buttons open (top bar, tab list, side bar), sized for this computer's account names.
+export function newMenuSpec() {
+  const list = accounts();
+  const names = list.length ? claudeAccounts(list, usageRows(snapShared(KEY_USAGE), list, home())).map((a) => a.label) : [];
+  return { mod: "flockbook", props: { view: "new" }, kind: "popup", width: menuWidth(names), height: 512 };
+}
 
 function shortcut(name) {
   const k = keys().find((b) => b.section === "global" && b.action === name);
@@ -124,12 +138,15 @@ export class NewView {
       if (p.select) run("space.select", { id: p.select });
     }).catch(() => notify({ title: "Couldn't start Claude Code", body: "Its command could not be built.", level: "error" }));
   }
+  // Every row's icon in the same fixed 14 px box, so a long name can't squeeze it (owner 11-16 s43); the name is cut.
   row(id, icon, name, action, hint = "", enabled = true) {
     const t = theme();
     return h_flex().id(id).h(31).px(9).gap(10).rounded(7).items_center().flex_none()
       .text_color(enabled ? t.foreground : t.dim).when(enabled, (el) => el.hover((s) => s.bg(t.selected)))
       .on_click(() => { if (enabled) { closeOverlay(props()?.overlay); action(); } })
-      .child(icon).child(div().flex_1().child(name)).child(div().text_size(11).text_color(t.dim).child(hint));
+      .child(h_flex().w(14).h(14).flex_none().items_center().justify_center().child(icon))
+      .child(div().flex_1().min_w(0).truncate().child(name))
+      .child(div().flex_none().text_size(11).text_color(t.dim).child(hint));
   }
   render() {
     const t = theme();
@@ -154,7 +171,7 @@ export class NewView {
           () => this.start(a), hint(a, i), a.installed)))
         .when(this.failed || this.known.length === 0, (el) => el.child(div().px(9).py(6).text_color(t.dim).child(this.failed ? "Could not check installed agents" : "Checking installed agents…"))))
       .child(div().h(1).mx(4).my(5).bg(t.border))
-      .child(this.row("space", div().w(14).child("+"), "New space", () => run("space.new"), shortcut("space.new")))
+      .child(this.row("space", div().child("+"), "New space", () => run("space.new"), shortcut("space.new")))
       .child(this.row("worktree", svg("mods/workspace-chrome/branch.svg").size(14), "New worktree…", () => openOverlay({ mod: "worktree", kind: "dialog", width: 460, height: 280, props: { space: space?.id, folder: panes().find((p) => p.focused)?.cwd, action: "new" } }), "", Boolean(space)))
       .child(this.row("worktree-open", svg("mods/workspace-chrome/branch.svg").size(14), "Open worktree…", () => openOverlay({ mod: "worktree", kind: "dialog", width: 560, height: 480, props: { space: space?.id, folder: panes().find((p) => p.focused)?.cwd, action: "open" } }), "", Boolean(space)));
   }

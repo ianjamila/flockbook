@@ -81,7 +81,46 @@ test("Flockbook's + buttons open this menu (view \"new\"), not Herdr's", () => {
   for (const f of ["tabs.js", "side.js", "top.js"]) {
     const src = fs.readFileSync(new URL(f, dir), "utf8");
     assert.ok(!src.includes('mod: "new-menu"'), `${f} still opens Herdr's menu`);
-    assert.match(src, /mod: "flockbook", props: \{ view: "new" \}/, `${f} opens view "new"`);
+    assert.match(src, /openOverlay\(newMenuSpec\(\)\)/, `${f} opens view "new"`);
   }
+  assert.match(fs.readFileSync(new URL("newmenu.js", dir), "utf8"), /mod: "flockbook", props: \{ view: "new" \}/);
   assert.match(fs.readFileSync(new URL("main.js", dir), "utf8"), /\bnew: NewView\b/);
+});
+
+// Owner 11-16 s43 (screenshot): "Claude Code (eaglewatch9002)" squeezed its icon smaller than the row above and
+// shifted its text left. Every row's icon sits in the same fixed 14 px box; a long name is cut, never the icon.
+test("every row's icon keeps the same fixed box; a long name is cut, not the icon", async () => {
+  const { fake, reset } = await import("./stub/herdr.mjs");
+  const { byId } = await import("./stub/ui.mjs");
+  const { NewView } = await import("../mods/flockbook/newmenu.js");
+  reset();
+  fake.shared["flockbook.config"] = { file: { accounts: LIST } };
+  fake.shared["new-menu.agents"] = { "": KNOWN };
+  const root = new NewView(null).render();
+  for (const id of ["terminal", "claude-ME", "claude-EWI", "codex", "space", "worktree", "worktree-open"]) {
+    const row = byId(root, id);
+    assert.ok(row, `row ${id}`);
+    const [icon, name] = row.kids;
+    assert.ok("flex_none" in icon._a, `${id}: icon box does not shrink`);
+    assert.equal(icon._a.w, 14, `${id}: icon box width`);
+    assert.equal(icon._a.h, 14, `${id}: icon box height`);
+    assert.ok("truncate" in name._a && name._a.min_w === 0, `${id}: name is cut when too long`);
+  }
+});
+
+test("the menu is wide enough for the longest account name with its hint", async () => {
+  const { menuWidth } = await import("../mods/flockbook/newmenu.js");
+  assert.equal(menuWidth([]), 250);                                              // Herdr's width when names are short
+  assert.equal(menuWidth(["Codex", "Claude Code (ME)"]), 250);
+  assert.ok(menuWidth(["Claude Code (jamilaian21)", "Claude Code (eaglewatch9002)"]) >= 300);
+  assert.equal(menuWidth(["Claude Code (" + "x".repeat(80) + ")"]), 380);        // capped; the name is cut instead
+});
+
+test("the + buttons size the menu for the account names", () => {
+  const dir = new URL("../mods/flockbook/", import.meta.url);
+  for (const f of ["tabs.js", "side.js", "top.js"]) {
+    const src = fs.readFileSync(new URL(f, dir), "utf8");
+    assert.ok(!/view: "new" \}, kind: "popup", width: 250/.test(src), `${f} still opens a fixed 250 px menu`);
+    assert.match(src, /openOverlay\(newMenuSpec\(\)\)/, `${f} opens newMenuSpec()`);
+  }
 });
