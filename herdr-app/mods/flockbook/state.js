@@ -178,10 +178,16 @@ export const closeAgent = (a) => closeTab(a.tab);
 export function agentName(a) {
   if (!a) return "";
   const named = a.tab_name && !/^\d+$/.test(a.tab_name) && !/^tb\d+$/.test(a.tab_name);
-  if (named && a.tab_name !== programName(a)) return a.tab_name;
+  if (named && !launchNamed(a.tab_name, a)) return a.tab_name;
   return sessionTitle(a) ?? programName(a);
 }
 const programName = (a) => a.program?.name ?? a.app ?? "Agent";
+// s41: Herdr's + menu names a new tab after the entry picked: the program ("Claude Code") or a launcher of it in
+// programs.json ("Claude Code (Work)", one per account). Either way nobody named it.
+const launchNamed = (name, a) => {
+  const p = programName(a);
+  return name === p || (String(name ?? "").startsWith(`${p} `) && /^\([^()]+\)$/.test(name.slice(p.length + 1)));
+};
 
 // Claude Code's own working/idle marker (✳, spinner frames, braille) and the VS Code tab hook's ▲
 // (waiting on a prompt: tab-prompt.mjs; it can outlive the prompt). Flockbook draws that status
@@ -361,9 +367,9 @@ export function sessionTopic(a) {
   return sessionTitle(a)?.replace(/^[^\p{L}\p{N}]+/u, "").trim() || null;
 }
 // Whether the tab's label comes from its session (nobody named it, or it is named just like its
-// program), so tabLabel follows the topic.
+// program or one of its launchers, "Claude Code (Work)"), so tabLabel follows the topic.
 export function autoNamed(tab, a = tabAgents(tab.id)[0]) {
-  return !tab.named || Boolean(a && tab.name === programName(a));
+  return !tab.named || Boolean(a && launchNamed(tab.name, a));
 }
 // Double-click on a tab: an auto-named tab keeps its current topic as its name; a tab someone
 // named (or one without a topic) gets Herdr's rename box.

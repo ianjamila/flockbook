@@ -399,4 +399,7 @@ eq("ownName: real name kept", r.ownName({ tab_name: "201", tab_index: 0, program
 eq("ownName: its number is the default", r.ownName({ tab_name: "3", tab_index: 2, program: { name: "Claude Code" } }), null);
 eq("ownName: the program's name is the default", r.ownName({ tab_name: "Claude Code", tab_index: 5, program: { name: "Claude Code" } }), null);
 eq("ownName: none", r.ownName({ tab_name: null }), null);
+// s41: a tab the + menu started from a launcher ("Claude Code (Work)", programs.json) is a default name too.
+eq("ownName: a launcher's name is the default", r.ownName({ tab_name: "Claude Code (Work)", tab_index: 1, program: { name: "Claude Code" } }), null);
+eq("ownName: words after a launcher's name are a real name", r.ownName({ tab_name: "Claude Code (Work) notes", tab_index: 1, program: { name: "Claude Code" } }), "Claude Code (Work) notes");
 process.exit(bad ? 1 : 0);

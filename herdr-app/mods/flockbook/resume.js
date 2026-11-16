@@ -39,11 +39,13 @@ export function lostSessions(saved, live, gap) {
   const restart = gone.length > 0 && (gap > GAP_MS || (gone.length >= 2 && gone.length * 2 >= all.length));
   return { offer: restart ? gone : [], forget: [...(restart ? [] : gone), ...cleared].map((x) => x.sid) };
 }
-// The tab's own name, or null for a default one (its number, or the program's name) — a resumed tab without one
-// names itself from its session.
+// The tab's own name, or null for a default one (its number, the program's name, or a launcher's from the + menu,
+// "Claude Code (Work)": the same rule as state.js launchNamed) — a resumed tab without one names itself from its
+// session.
 export function ownName(a) {
-  const n = String(a?.tab_name ?? "").trim();
-  if (!n || n === a?.program?.name || n === String((a?.tab_index ?? -2) + 1)) return null;
+  const n = String(a?.tab_name ?? "").trim(), p = a?.program?.name;
+  const launcher = Boolean(p) && n.startsWith(`${p} `) && /^\([^()]+\)$/.test(n.slice(p.length + 1));
+  if (!n || n === p || launcher || n === String((a?.tab_index ?? -2) + 1)) return null;
   return n;
 }
 // A title without the marks in front (✳, spinners, 🔀 …).
