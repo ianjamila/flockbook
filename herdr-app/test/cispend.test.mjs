@@ -64,7 +64,7 @@ test("Ubicloud: an estimate after the credit, in use or not, the minutes, and co
   let u = spendFigures({ ...spend(), machine: "" }, NOW).ubicloud;
   assert.equal(u.right, "$0 (credit)", "under the $2.50 credit");
   assert.equal(u.line, "not in use · CI on GitHub · 1,114 min this month");
-  assert.match(u.tip, /estimate from GitHub's job records, \$1\.39 at list price, less its \$2\.50 monthly credit/);
+  assert.match(u.tip, /estimate from GitHub's job records\n\$1\.39 at list price, less its \$2\.50 monthly credit/);
   assert.match(u.tip, /since Sun 1 Nov/);
   assert.match(u.tip, /sampled/);
   u = spendFigures({ ...spend({ ubicloud: { ...spend().ubicloud, estUsd: 6.4, listUsd: 8.9, inUse: ["CHECKS", "DB"], counting: 3 } }), machine: "" }, NOW).ubicloud;
@@ -83,7 +83,7 @@ test("GitHub: a mark at the switch point; red past it, amber before it", () => {
   let g = gh(261.93);
   assert.equal(g.mark, 90, "$270 of $300");
   assert.equal(g.level, "warn", "13% left but short of $270: amber");
-  assert.match(g.tip, /moves CI to Ubicloud past \$270(?!\.)/);
+  assert.match(g.tip, /CI moves to Ubicloud past \$270(?!\.)/);
   g = gh(275);
   assert.equal(g.level, "low", "past $270: red");
   assert.equal(gh(120).level, "ok");
@@ -105,13 +105,24 @@ test("Ubicloud: once CI has moved, the day it moved and the day it moves back", 
   const switched = { since: "2026-11-17", backOn: "2026-12-01", issue: 2190, url: "https://github.com/o/r/issues/2190" };
   let u = spendFigures({ ...spend({ ubicloud: { ...spend().ubicloud, inUse: ["CHECKS"], switched } }), machine: "" }, NOW).ubicloud;
   assert.equal(u.line, "in use now: checks · since Tue 17 Nov · back to GitHub Tue 1 Dec · 1,114 min this month");
-  assert.match(u.tip, /moved to Ubicloud Tue 17 Nov \(issue #2190\), back to GitHub Tue 1 Dec/);
+  assert.match(u.tip, /moved to Ubicloud Tue 17 Nov \(issue #2190\) · back to GitHub Tue 1 Dec/);
   // Not in use (moved back, or the record is stale): no dates.
   u = spendFigures({ ...spend({ ubicloud: { ...spend().ubicloud, inUse: [], switched } }), machine: "" }, NOW).ubicloud;
   assert.equal(u.line, "not in use · CI on GitHub · 1,114 min this month");
   // In use without a record (the issue lookup failed): as before.
   u = spendFigures({ ...spend({ ubicloud: { ...spend().ubicloud, inUse: ["CHECKS"], switched: null } }), machine: "" }, NOW).ubicloud;
   assert.equal(u.line, "in use now: checks · 1,114 min this month");
+});
+
+// s41 (owner screenshot: the GitHub hover was one window-wide line): each tip is a few short lines.
+test("hover tips: three to six lines, none longer than 72 characters", () => {
+  const switched = { since: "2026-11-17", backOn: "2026-12-01", issue: 2190 };
+  const f = spendFigures({ ...spend({ github: { ...spend().github, switchAtUsd: 270 }, ubicloud: { ...spend().ubicloud, estUsd: 6.4, inUse: ["CHECKS"], counting: 2, switched } }), machine: "" }, NOW);
+  for (const [name, tip] of [["github", f.github.tip], ["ubicloud", f.ubicloud.tip]]) {
+    const lines = tip.split("\n");
+    assert.ok(lines.length >= 3 && lines.length <= 6, `${name}: ${lines.length} lines`);
+    for (const l of lines) assert.ok(l.length <= 72, `${name} line too long (${l.length}): ${l}`);
+  }
 });
 
 test("a reading older than a missed check says how old", () => {

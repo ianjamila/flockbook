@@ -46,7 +46,9 @@ export function dayText(iso) {
   return `${DAYS[d.getUTCDay()]} ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
 }
 export const usd = (n) => (Number.isFinite(n) ? `$${n.toFixed(2)}` : "—");
-const GROUP_WORDS = { CHECKS: "checks", LIGHT: "light jobs", DB: "database jobs", BROWSER: "browser tests" };
+// A hover tip as short lines: each inner list's parts joined with " · ", empty lines dropped.
+const tipLines = (lines) => lines.map((parts) => parts.filter(Boolean).join(" · ")).filter(Boolean).join("\n");
+const GROUP_WORDS ={ CHECKS: "checks", LIGHT: "light jobs", DB: "database jobs", BROWSER: "browser tests" };
 const groupsText = (list) => list.map((g) => GROUP_WORDS[g] ?? g.toLowerCase()).join(", ");
 // What the two rows show. github: { left (0..100), used (0..100), right, line, level, tip } or null; ubicloud: { right,
 // line, tip } or null; age words when the reading is older than one missed check.
@@ -75,10 +77,13 @@ export function spendFigures(s, now = Date.now()) {
       mark: switchAt != null ? Math.round((switchAt / g.includedUsd) * 1000) / 10 : null,
       right: `${usd(g.usedUsd)} of ${usd(g.includedUsd).replace(/\.00$/, "")}`,
       line: parts.join(" · "),
-      tip: [`GitHub Actions this month: ${usd(g.usedUsd)} of the ${usd(g.includedUsd)} included in Enterprise`, pace ? `${pace} on average` : null,
-        out ? `at this pace the included amount runs out ${out}` : null,
-        `the CI-budget check moves CI to Ubicloud past ${switchAt != null ? usd(switchAt).replace(/\.00$/, "") : "$270"}${switchAt != null ? " (the mark on the bar)" : ""}`,
-        `read ${ago(age)} on ${from}`, "click to open GitHub billing"].filter(Boolean).join(" · "),
+      // s41 (owner: the hover was one window-wide line): a few short lines.
+      tip: tipLines([
+        [`GitHub Actions: ${usd(g.usedUsd)} of the ${usd(g.includedUsd)} included`],
+        [pace ? `${pace} on average` : null, out ? `runs out ${out} at this pace` : null],
+        [`CI moves to Ubicloud past ${switchAt != null ? usd(switchAt).replace(/\.00$/, "") : "$270"}${switchAt != null ? " (the mark on the bar)" : ""}`],
+        [`read ${ago(age)} on ${from}`, "click to open GitHub billing"],
+      ]),
     };
   }
   let ubicloud = null;
@@ -96,11 +101,14 @@ export function spendFigures(s, now = Date.now()) {
     ubicloud = {
       right,
       line: [status, ...dates, counting ?? mins, stale].filter(Boolean).join(" · "),
-      tip: [`Ubicloud this month: an estimate from GitHub's job records, ${usd(u.listUsd)} at list price${credit ? `, less its ${usd(credit)} monthly credit` : ""}`,
-        sw?.since ? `moved to Ubicloud ${sw.since}${Number.isFinite(sw.issue) ? ` (issue #${sw.issue})` : ""}${sw.back ? `, back to GitHub ${sw.back}` : ""}` : null,
-        u.minutes > 0 ? `${u.minutes.toLocaleString("en-US")} runner minutes${u.firstDay ? ` since ${dayText(u.firstDay)}` : ""}` : "no Ubicloud minutes this month",
-        u.exact ? null : "busy workflows are sampled (a few runs a day, scaled up)",
-        "premium machines would cost more", counting, `read ${ago(age)} on ${from}`, "click to open the Ubicloud console"].filter(Boolean).join(" · "),
+      tip: tipLines([
+        ["Ubicloud this month: an estimate from GitHub's job records"],
+        [`${usd(u.listUsd)} at list price${credit ? `, less its ${usd(credit)} monthly credit` : ""}`],
+        [sw?.since ? `moved to Ubicloud ${sw.since}${Number.isFinite(sw.issue) ? ` (issue #${sw.issue})` : ""}` : null, sw?.since && sw.back ? `back to GitHub ${sw.back}` : null],
+        [u.minutes > 0 ? `${u.minutes.toLocaleString("en-US")} runner minutes${u.firstDay ? ` since ${dayText(u.firstDay)}` : ""}` : "no Ubicloud minutes this month", counting],
+        [u.exact ? null : "busy workflows sampled, scaled up", "premium machines cost more"],
+        [`read ${ago(age)} on ${from}`, "click to open the Ubicloud console"],
+      ]),
     };
   }
   return github || ubicloud ? { github, ubicloud, links: s.links ?? {} } : null;
