@@ -28,13 +28,16 @@ export function claudeAccounts(list, usage) {
 }
 // Herdr's entries that start Claude Code (its own, and an s41 programs.json launcher): the account rows replace them.
 export const CLAUDE_KEYS = new Set(["claude", "claude-work"]);
+// The account entries Flockbook keeps in programs.json for Herdr's own menu (programs.js; s43): replaced here too.
+export const PROGRAM_PREFIX = "flockbook-claude-";
+const isClaudeKey = (k) => CLAUDE_KEYS.has(k) || String(k).startsWith(PROGRAM_PREFIX);
 // The menu's agent rows: the account rows (installed when Herdr's Claude entry is), then Herdr's other installed
 // agents, then up to two not installed. `failed`: the check failed (installed ones only, as Herdr's menu).
 export function menuRows(known, accts, failed = false) {
   const list = known ?? [];
   const claude = list.find((a) => a.key === "claude");
   const own = accts.length ? accts.map((a) => ({ key: `claude-${a.mark}`, name: a.label, icon: claude?.icon ?? "icons/claude.svg", tint: Boolean(claude?.tint), installed: claude ? Boolean(claude.installed) : true, account: a.mark })) : [];
-  const rest = accts.length ? list.filter((a) => !CLAUDE_KEYS.has(a.key)) : list;
+  const rest = accts.length ? list.filter((a) => !isClaudeKey(a.key)) : list;
   const installed = [...own.filter((a) => a.installed), ...rest.filter((a) => a.installed)];
   const missing = [...own.filter((a) => !a.installed), ...rest.filter((a) => !a.installed)];
   return { installed, choices: failed ? installed : [...installed, ...missing.slice(0, 2)] };

@@ -8,6 +8,7 @@ import { openMenu, tabItems, openMoveMenu } from "./menu.js";
 import { spaceAgents, spaceTabs, activeTab, currentAgent, currentTerminal, tabLabel, plainLabel, sessionTitle, subStatus, withAsk, keepOrRename, screenFor, showTab, closeTab, openTerminal, showNeeds, icon, tabAgents, shownScreen,
   SPIN_MS, FADE, sidebarShown, toggleSidebar, loadSidebar, showScreen, showOverview, showSettings, showSessions, watchEdge, noteWindowHeight, applyTermRect, termShown, agentName, tabStatus, tablistShown, toggleTablist, watchGrace, keepTerminal, readTermPlace, KEY_TERM, noteWidth, KEY_WORK_W } from "./state.js";
 import { loadConfig, pollUpdate, updateDot, stepTextSize } from "./config.js";
+import { syncPrograms } from "./programs.js";   // s43: Herdr's own + menu's account rows
 import { checkHelperPatch } from "./patchcheck.js";
 import { startAwake } from "./awake.js";
 import { asksTick, TICK_MS as ASKS_MS } from "./asks.js";
@@ -113,7 +114,8 @@ export function startTop(cx, owner) {
   // The settings file, read again each minute (someone may edit it), and the update check (pollUpdate
   // asks the helper at most once an hour).
   // Also: whether a Flockbook update put the official helper over the patched one (patchcheck.js, every 10 min).
-  const settings = async (cx) => { await loadConfig(); await pollUpdate(); await checkHelperPatch(); cx.notify(); };
+  // And Herdr's own + menu's account rows (programs.js; owner 11-16 s43), after the accounts are read.
+  const settings = async (cx) => { await loadConfig(); await syncPrograms().catch(() => {}); await pollUpdate(); await checkHelperPatch(); cx.notify(); };
   cx?.spawn?.(settings);
   cx?.timer?.every(60_000, (cx) => cx.spawn(settings));
   // Asks at the end of a reply (extra review round, merge hand-off) for the Needs you page (asks.js; one copy per tick).
