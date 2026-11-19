@@ -162,7 +162,7 @@ test("the screen: three settings, each with its two choices, reachable with the 
 // Laid out as Herdr's own Settings: sections in a sidebar on the left, the chosen one filled; on the right
 // UPPERCASE headings, and rows with the title and one line about it on the left, the control on the right.
 // plus build: a Workflow section (Needs you / Done / Workspaces switches) between General and Phone page.
-const NAV = [["general", "General"], ["workflow", "Workflow"], ["phone", "Phone page"], ["updates", "Updates"]];
+const NAV = [["general", "General"], ["alerts", "Alerts"], ["workflow", "Workflow"], ["phone", "Phone page"], ["updates", "Updates"]];
 const nodes = (el) => { const all = []; (function walk(n) { if (!n || typeof n !== "object") return; all.push(n); (n.kids ?? []).forEach(walk); })(el); return all; };
 
 test("settings layout: a sidebar with General, Phone page and Updates; General is chosen first", async () => {
@@ -180,7 +180,7 @@ test("settings layout: a sidebar with General, Phone page and Updates; General i
     assert.equal(r._a.bg, id === "general" ? "#selected" : undefined, `${id}: only the chosen row is filled`);
     assert.equal(typeof r._a.tab_index, "number"); stops.push(r._a.tab_index);
   }
-  assert.deepEqual(stops, [1, 2, 3, 4],"the sidebar comes first with Tab");
+  assert.deepEqual(stops, [1, 2, 3, 4, 5],"the sidebar comes first with Tab");
   const pane = byId(el, "settings-root");
   assert.ok(byId(pane, "set-status_row") && byId(pane, "set-remote_helper"));
   assert.equal(byId(pane, "set-phone"), null);

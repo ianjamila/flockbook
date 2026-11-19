@@ -15,6 +15,7 @@ import { accounts } from "./accounts.js";
 import { projects } from "./automove.js";
 import { setStayAwake } from "./awake.js";
 import { claudeMachine, localWindows, NEEDS_MACHINE } from "./where.js";
+import { alertOn, setAlert, loadAlerts } from "./alerts.js";
 // The accounts in use (the "accounts" setting) and the project workspaces (the "projects" setting), in words.
 export function accountsLine() {
   const list = accounts();
@@ -84,11 +85,21 @@ export const SETTINGS = [
   // s36 (owner 11-15: "Yes, but lid open only"): awake.js holds this computer from idle sleep while its agents work.
   { key: "stay_awake", title: "Keep this computer awake while agents work", choices: [["on", "On", "on"], ["off", "Off", "off"]],
     about: "While an agent on this computer works (or runs CI or a review behind a finished turn, or waits on you for under 3 hours), this computer is kept from going to sleep on its own, and it may sleep 15 minutes after the work ends. The screen can still turn off, and closing the lid still sleeps it." },
+  // Owner 11-19 (alerts.js): one switch per kind of ping, kept in ~/.claude/notify-<kind> (the notify hook and cnotify read it).
+  { key: "alert_needed", title: "An agent needs you", choices: () => [["on", "On", "on"], ["off", "Off", "off"]],
+    current: () => (alertOn("needed") ? "on" : "off"), act: (v) => { setAlert("needed", v === "on"); },
+    about: "An approval, a question or a plan waiting for you: Herdr's sound and corner note, and Claude Code's Mac pop-up. Off: none of them for this kind. (In a terminal: cnotify needed on|off.)" },
+  { key: "alert_finished", title: "An agent finishes", choices: () => [["on", "On", "on"], ["off", "Off", "off"]],
+    current: () => (alertOn("finished") ? "on" : "off"), act: (v) => { setAlert("finished", v === "on"); },
+    about: "An agent finished while you weren't looking: Herdr's sound and corner note, and Claude Code's Mac pop-up. Off: none of them for this kind. (In a terminal: cnotify finished on|off.)" },
+  { key: "alert_words", title: "What a note says",
+    info: () => "Each corner note names the task: “Needs you · <the tab's session title>” or “Finished · …”, with its workspace under it. Click it to go there. Herdr's own Settings → Alerts → Play sounds still turns every sound off." },
 ];
 
 // The sidebar's sections; `parts`: [heading, setting keys] in order.
 export const SECTIONS = [
   { id: "general", label: "General", icon: "sliders", parts: [["CHAT", ["text_size", "status_row"]], ["TERMINAL", ["terminal_size"]], ["TAB LIST", ["dance"]], ["OVERVIEW", ["about_line", "about_pause", "about_cap", "accounts_info"]], ["THIS COMPUTER", ["stay_awake"]], ["OTHER MACHINES", ["remote_helper"]]] },
+  { id: "alerts", label: "Alerts", icon: "bell", parts: [["PINGS", ["alert_needed", "alert_finished", "alert_words"]]] },
   { id: "workflow", label: "Workflow", icon: "tool", parts: [["NEEDS YOU", ["pipeline_asks", "worth_considering"]], ["DONE", ["handoff_marks"]], ["WORKSPACES", ["auto_move"]]] },
   { id: "phone", label: "Phone page", icon: "phone" },
   { id: "updates", label: "Updates", icon: "refresh", parts: [["UPDATES", ["check_updates"]]] },
@@ -135,6 +146,7 @@ export class SettingsView {
     this.login.on("blur", save);
     cx?.spawn?.(async (cx) => { await loadConfig(); this.login.set_value(phoneUser()); cx.notify(); });
     cx?.spawn?.(async (cx) => { await pollPhone(false); cx.notify(); });
+    cx?.spawn?.(async (cx) => { await loadAlerts(); cx.notify(); });
     // Every 10 s; every 3 s while On waits for Serve (phone.js).
     cx?.timer?.every(PHONE_TICK_MS, (cx) => cx.spawn(async (cx) => { await phoneTick(); cx.notify(); }));
   }

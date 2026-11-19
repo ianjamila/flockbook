@@ -2,6 +2,7 @@
   "id": "root",
   "type": "row",
   "titlebar": "none",
+  "toast": "flockbook",
   "traffic_lights": [
     18,
     22
