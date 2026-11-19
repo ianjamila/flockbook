@@ -80,6 +80,12 @@ test("toast: Herdr's agent note names the task and its workspace; a click still 
   assert.equal(fake.shared[KEY_LAST].at(-1).title, "Claude Code finished", "what Herdr sent is kept for checks");
 });
 
+// Catches: Herdr's real body ("<workspace> / <tab label>", seen live 11-19) repeating the workspace after ours.
+test("toast: Herdr's '<workspace> / <tab>' body is not repeated after the workspace", () => {
+  fake.props = note({ body: "eaglewatch / Claude Code (jamilaian21)" });
+  assert.equal(textOf(byId(new ToastView(fakeCx()).render(fakeCx()), "toast-body")), "eaglewatch");
+});
+
 test("toast: a needs-you note says so", () => {
   fake.agents = [agent("t7", "blocked", { title: "Merge #2345" })];
   fake.props = note({ title: "Claude Code needs you", level: "error" });

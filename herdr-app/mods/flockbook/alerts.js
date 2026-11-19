@@ -108,7 +108,9 @@ export function noteWords(note, p) {
   if (!a) return { title: p?.title ?? head, body: p?.body ?? "" };
   const task = agentName(a) || p?.title || "";
   const where = spaces().find((s) => s.id === a.space)?.name ?? a.space_name ?? "";
-  return { title: task ? `${head} · ${task}` : head, body: [where, p?.body && p.body !== where ? p.body : null].filter(Boolean).join(" · ") };
+  // Herdr's body is "<workspace> / <tab label>" (seen live 11-19): the task above replaces the tab label, so it is dropped.
+  const extra = p?.body && p.body !== where && !(where && p.body.startsWith(`${where} / `)) ? p.body : null;
+  return { title: task ? `${head} · ${task}` : head, body: [where, extra].filter(Boolean).join(" · ") };
 }
 
 const DOT = { error: "blocked", warning: "working", success: "done", info: "accent" };
