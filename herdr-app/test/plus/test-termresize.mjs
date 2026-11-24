@@ -5,7 +5,7 @@ import fs from "node:fs";
 const DIR = MOD;
 const tr = fs.readFileSync(DIR + "termresize.js", "utf8");
 const pure = tr.slice(tr.indexOf("// <pure>"), tr.indexOf("// </pure>")).replaceAll("export ", "");
-const R = new Function(pure + "; return { gripTint, dragRect, zoneEdge, boxFromGrip, sizeFromGrip, movedEnough, catcherAction, idleAction, IDLE_MS, TERM_MIN, TERM_EDGE, TERM_CORNER, ACTIVE };")();
+const R = new Function(pure + "; return { gripTint, TERM_MARGIN, dragRect, zoneEdge, boxFromGrip, sizeFromGrip, styleBox, movedEnough, catcherAction, idleAction, IDLE_MS, TERM_MIN, TERM_EDGE, TERM_CORNER, ACTIVE };")();
 const st = fs.readFileSync(DIR + "state.js", "utf8");
 const a = st.indexOf("export const TERM_SIZES"), b = st.indexOf("// `at`: the top left");
 const c = st.indexOf("export function nextTermSize"), d = st.indexOf("// A custom size's share");
@@ -22,8 +22,9 @@ eq("s grows height", R.dragRect(start, "s", 40, 90, app), { x: 100, y: 50, w: 80
 eq("se grows both", R.dragRect(start, "se", -100, -50, app), { x: 100, y: 50, w: 700, h: 450 });
 eq("e keeps the minimum width", R.dragRect(start, "e", -700, 0, app), { x: 100, y: 50, w: R.TERM_MIN.w, h: 500 });
 eq("s keeps the minimum height", R.dragRect(start, "s", 0, -900, app), { x: 100, y: 50, w: 800, h: R.TERM_MIN.h });
-eq("e stops at the app's right edge", R.dragRect(start, "e", 5000, 0, app), { x: 100, y: 50, w: 1500, h: 500 });
-eq("s stops at the app's bottom", R.dragRect(start, "s", 0, 5000, app), { x: 100, y: 50, w: 800, h: 950 });
+// The outline stops where the window will (fitTerm keeps TERM_MARGIN from the app's edges), so it never shows a size it won't get.
+eq("e stops a margin short of the app's right edge", R.dragRect(start, "e", 5000, 0, app), { x: 100, y: 50, w: 1500 - R.TERM_MARGIN, h: 500 });
+eq("s stops a margin short of the app's bottom", R.dragRect(start, "s", 0, 5000, app), { x: 100, y: 50, w: 800, h: 950 - R.TERM_MARGIN });
 eq("no app size: no upper bound", R.dragRect(start, "e", 5000, 0, null), { x: 100, y: 50, w: 5800, h: 500 });
 eq("w moves the left edge, right stays", R.dragRect(start, "w", -50, 0, app), { x: 50, y: 50, w: 850, h: 500 });
 eq("n stops at the top", R.dragRect(start, "n", 0, -500, app), { x: 100, y: 0, w: 800, h: 550 });
@@ -46,6 +47,12 @@ eq("s grip box", R.boxFromGrip("s", { x: 107, y: 543, width: 786, height: 6 }, s
 eq("se grip box", R.boxFromGrip("se", { x: 893, y: 543, width: 6, height: 6 }, size), { x: 100, y: 50, w: 800, h: 500 });
 eq("size from e grip", R.sizeFromGrip("e", { width: 6, height: 486 }, { w: 1, h: 1 }), { w: 1, h: 500 });
 eq("size from s grip", R.sizeFromGrip("s", { width: 786, height: 6 }, { w: 1, h: 1 }), { w: 800, h: 1 });
+// Herdr's zoom (owner 11-24, zoom 0.9) scales what a mod draws: a 6 px grip measures 5.5, the 1 px border 0.9,
+// and an outline drawn at screen px lands at 90% of them (live: it started smaller than the window it outlined).
+eq("zoom 0.9: size from e grip (grips + border zoomed)", R.sizeFromGrip("e", { width: 5.4, height: 996 }, { w: 1, h: 1 }, 0.9), { w: 1, h: 1009 });
+eq("zoom 0.9: e grip box", R.boxFromGrip("e", { x: 893 * 0.9, y: 57 * 0.9, width: 5.4, height: 486 * 0.9 }, { w: 720, h: 450 }, 0.9), { x: 90, y: 45, w: 720, h: 450 });
+eq("zoom 0.9: outline drawn ÷ zoom, so it lands on screen px", R.styleBox({ x: 90, y: 9, w: 900, h: 450 }, 0.9), { x: 100, y: 10, w: 1000, h: 500 });
+eq("zoom 1: outline as it is", R.styleBox({ x: 90, y: 9, w: 900, h: 450 }, 1), { x: 90, y: 9, w: 900, h: 450 });
 eq("size from a corner: unchanged", R.sizeFromGrip("se", { width: 6, height: 6 }, { w: 3, h: 4 }), { w: 3, h: 4 });
 
 // termDims

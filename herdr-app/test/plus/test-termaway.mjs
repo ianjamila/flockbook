@@ -17,7 +17,7 @@ const state = await loadMod("state.js", {
     openOverlay: (spec) => { opened.push(JSON.stringify(spec).match(/"terminal":"([^"]+)"/)?.[1]); return `ov${++n}`; },
     closeOverlay: (id) => { closed.push(id); }, appHome: () => "/h", readTextFile: async () => null },
   "./config.js": { setting: () => null, setSettings: async () => true, setSetting: async () => true },
-  "./termresize.js": { gripFrame: (inner) => [inner], geom: {}, fitTerm: (w) => w, termAt: () => null },
+  "./termresize.js": { gripFrame: (inner) => [inner], geom: {}, fitTerm: (w) => w, fitRoom: (_s, room) => room, overlayPx: (d) => d, termAt: () => null },
 });
 const tick = () => state.keepTerminal();
 const reset = () => { opened.length = 0; closed.length = 0; };

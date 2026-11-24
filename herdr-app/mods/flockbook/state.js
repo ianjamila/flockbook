@@ -1,9 +1,9 @@
 // What every view agrees on: the agent shown in the chat, and the screen in the stack.
 // Kept in shared() so the copies of this mod (one per layout block) see the same value.
-import { focused, shared, setShared, run, openOverlay, closeOverlay, appHome, readTextFile, panes } from "herdr";
+import { focused, shared, setShared, run, openOverlay, closeOverlay, appHome, readTextFile, panes, settings } from "herdr";
 import { agents, spaces } from "./parked.js";
 import { loadConfig, updateSeen, setting, setSetting, setSettings } from "./config.js";
-import { gripFrame, geom, fitTerm, termAt } from "./termresize.js";
+import { gripFrame, geom, fitTerm, fitRoom, overlayPx, termAt } from "./termresize.js";
 import { askOf, prOf, bgOf, bgWords, askMark, handoffOf, nowWait } from "./asks.js";
 
 export const KEY_AGENT = "flockbook.agent";
@@ -510,23 +510,26 @@ function terminalWindow(address, name, at = null) {
     { type: "block", size: { px: 42 }, content: { mod: "flockbook", props: { view: "termbar", terminal: address, name } } },
     { type: "block", content: { terminal: address } },
   ] };
+  // [width, height] are screen px (what the drag outline showed); Herdr is asked for them ÷ its zoom (termresize.js overlayPx).
+  const [askW, askH] = overlayPx([width, height], typeof settings === "function" ? settings()?.zoom : 1);
   return openOverlay({
     // Our own frame (rounder than Herdr's): the root paints the terminal's background, so the bar, the
     // terminal's square corners and the grips around them sit inside the rounded edge.
-    kind: "window", key: "flockbook-terminal", width, height, frame: "none", ...(at ? { at } : {}),
+    kind: "window", key: "flockbook-terminal", width: askW, height: askH, frame: "none", ...(at ? { at } : {}),
     layout: { type: "column", resizable: false, background: "background", radius: 16, border: { width: 1, color: "border" }, shadow: "lg",
       children: gripFrame(inner, grip) },
   });
 }
 
-// The size the window opens at: the setting, fitted so it stays clear of the tab list (termresize.js fitTerm);
-// "full" (⤢) covers the app on purpose.
+// The size the window opens at: the setting, fitted so a preset size stays clear of the tab list and a dragged one
+// stays inside the app (termresize.js fitTerm, fitRoom); "full" (⤢) covers the app on purpose.
 const KEY_TERM_DIMS = "flockbook.terminal.dims";   // [w, h] the open window was opened at
 const KEY_TERM_TAB = "flockbook.terminal.tab";     // the shown tab when it opened (or last followed)
 export function termWindowDims() {
   const size = setting("terminal_size");
   const want = termDims(size, setting("terminal_px"));
-  return size === "full" ? want : fitTerm(want, termRoom(), termApp(), termPlace());
+  const app = termApp();
+  return size === "full" ? want : fitTerm(want, fitRoom(size, termRoom(), app), app, termPlace());
 }
 // The work column between the sidebars, app-relative ({x, w, h}), once a screen measured it; null before.
 // The sidebars are 250 px in the layout until their views measured them.

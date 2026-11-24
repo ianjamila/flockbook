@@ -12,7 +12,7 @@
 // The size is saved (terminal_size "custom" + terminal_px), so the window opens that big next time.
 // The − + ⤢ buttons on the title bar still step through the preset sizes.
 import { div } from "gpui-kit";
-import { theme, props, run, openOverlay, closeOverlay } from "herdr";
+import { theme, props, run, openOverlay, closeOverlay, settings } from "herdr";
 
 // <pure> (tests: test/plus/test-termresize.mjs)
 export const TERM_EDGE = 6;                // px: how thick each grip is
@@ -26,11 +26,12 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 // The window's box while `edge` is dragged: `start` {x, y, w, h} is its box at the press (window-relative
 // px), (dx, dy) how far the pointer has gone since, `app` {width, height} the whole app's size (or null).
-// The far edges stay put; the box keeps TERM_MIN and stays inside the app.
+// The far edges stay put; the box keeps TERM_MIN and stops TERM_MARGIN short of the app's right and bottom
+// edges, where fitTerm stops the window, so the outline never shows a size the window won't get.
 export function dragRect(start, edge, dx, dy, app) {
   let { x, y, w, h } = start;
   const right = start.x + start.w, bottom = start.y + start.h;
-  const maxW = app?.width > 0 ? app.width : Infinity, maxH = app?.height > 0 ? app.height : Infinity;
+  const maxW = app?.width > 0 ? app.width - TERM_MARGIN : Infinity, maxH = app?.height > 0 ? app.height - TERM_MARGIN : Infinity;
   if (edge.includes("e")) w = clamp(start.w + dx, TERM_MIN.w, Math.max(TERM_MIN.w, maxW - start.x));
   if (edge.includes("s")) h = clamp(start.h + dy, TERM_MIN.h, Math.max(TERM_MIN.h, maxH - start.y));
   if (edge.includes("w")) { x = clamp(start.x + dx, 0, right - TERM_MIN.w); w = right - x; }
@@ -57,9 +58,9 @@ function zoneOf(grip, at, size) {
 
 // The window's box from a grip's bounds (window-relative) and the window's outer size {w, h}. The grips
 // sit inside the border: a row of three along the top (nw n ne) and the bottom (sw s se), and w / e
-// between them beside the title bar and terminal.
-export function boxFromGrip(grip, b, size) {
-  const E = TERM_EDGE, B = TERM_BORDER;
+// between them beside the title bar and terminal. `z`: Herdr's zoom, which scales the grips and the border as drawn.
+export function boxFromGrip(grip, b, size, z = 1) {
+  const E = TERM_EDGE * z, B = TERM_BORDER * z;
   const x = grip.includes("e") ? b.x + b.width + B - size.w : grip.includes("w") ? b.x - B : b.x - B - E;
   const y = grip.includes("s") ? b.y + b.height + B - size.h : grip.includes("n") ? b.y - B : b.y - B - E;
   return { x: Math.round(x), y: Math.round(y), w: Math.round(size.w), h: Math.round(size.h) };
@@ -70,8 +71,8 @@ export function boxFromGrip(grip, b, size) {
 // A grip's hover colour: the accent at a quarter strength (a #rrggbb accent), else the theme's hover.
 export const gripTint = (t) => (/^#[0-9a-f]{6}$/i.test(t?.accent ?? "") ? `${t.accent}40` : t?.hover);
 
-export function sizeFromGrip(grip, size, was) {
-  const extra = 2 * TERM_EDGE + 2 * TERM_BORDER;
+export function sizeFromGrip(grip, size, was, z = 1) {
+  const extra = (2 * TERM_EDGE + 2 * TERM_BORDER) * z;
   if (grip === "w" || grip === "e") return { ...was, h: Math.round(size.height + extra) };
   if (grip === "n" || grip === "s") return { ...was, w: Math.round(size.width + extra) };
   return was;
@@ -98,7 +99,7 @@ export function idleAction(now, last, start, r, idle = IDLE_MS) {
   return movedEnough(start, r) ? "apply" : "cancel";
 }
 
-// The terminal window stays clear of the tab list (owner 11-13: a window dragged big in a wide app covered the
+// The terminal window stays clear of the tab list at a preset size (owner 11-13: a window dragged big in a wide app covered the
 // tab list once the app got narrower, and its tabs could not be clicked). `want` [w, h]: px, or a share (≤ 1)
 // of the app. `room` {x, w, h}: the work column between the sidebars (app-relative px; h the app's height),
 // `app` {width, height}: the whole app; `at` {x, y}: the window's top left where Herdr puts it (its remembered
@@ -114,12 +115,37 @@ export function fitTerm(want, room, app, at) {
   const maxW = room.x + room.w - TERM_MARGIN - left, maxH = room.h - TERM_MARGIN - top;
   return [Math.round(Math.min(w, Math.max(TERM_MIN.w, maxW))), Math.round(Math.min(h, Math.max(TERM_MIN.h, maxH)))];
 }
+// The room fitTerm fits a window of setting `size` into: a dragged size ("custom") may cover the tab list, up to the
+// app's right edge (owner 11-24 "drag wins": dragged wider than the work column, the window snapped back to the
+// tab list's edge every time); a preset size keeps to the work column. Nothing measured: `room` as it is.
+export function fitRoom(size, room, app) {
+  if (size !== "custom" || !(room?.w > 0) || !(app?.width > room.x)) return room;
+  return { ...room, w: app.width - room.x };
+}
+// The size to ask Herdr for so the window is drawn `dims` [w, h] screen px big: Herdr draws a window's width and
+// height × its zoom (owner 11-24, zoom 0.9: asked 1300 × 950, drawn 1171 × 856), while the outline, the grips and
+// the room are measured in screen px. A share (≤ 1) of the app stays as it is; no zoom known: as it is.
+export function overlayPx(dims, zoom) {
+  const z = Number(zoom);
+  if (!(z > 0) || z === 1) return dims;
+  return dims.map((v) => (v > 1 ? Math.round(v / z) : v));
+}
+// The box to draw for an outline at `r` (screen px): what a mod draws is scaled by Herdr's zoom (owner 11-24,
+// zoom 0.9: the outline landed at 90% of the window it outlined), so it is drawn ÷ zoom.
+export function styleBox(r, z) {
+  const k = Number(z) > 0 ? Number(z) : 1;
+  return k === 1 ? r : { x: r.x / k, y: r.y / k, w: r.w / k, h: r.h / k };
+}
+// Herdr's zoom (settings.json "zoom"), 1 when unknown.
+export const zoomOf = (st) => (Number(st?.zoom) > 0 ? Number(st.zoom) : 1);
 // Where a window Herdr has no spot for goes: centered in the work column (Herdr centers it in the whole app,
 // partly over the tab list).
 export function termAt(dims, room) {
   return { x: Math.round(room.x + Math.max(0, (room.w - dims[0]) / 2)), y: Math.round(Math.max(0, (room.h - dims[1]) / 2)) };
 }
 // </pure>
+
+const appZoom = () => zoomOf(typeof settings === "function" ? settings() : null);
 
 // What the grips measured (module state is shared by every copy of the mod): the open window's outer
 // size, and the app's size from the last catcher (state.js uses it to place a custom size among the presets).
@@ -167,7 +193,7 @@ export class TermGrip {
     // Hovered, a grip that resizes shows a faint accent band, so the edge can be found.
     const root = div().id(`term-grip-${grip}`).size_full().flex().when(along === "column", (el) => el.flex_col())
       .hover((s) => s.bg(gripTint(theme())))
-      .on_size_change((size) => { this.size = size; const g = sizeFromGrip(grip, size, geom); geom.w = g.w; geom.h = g.h; })
+      .on_size_change((size) => { this.size = size; const g = sizeFromGrip(grip, size, geom, appZoom()); geom.w = g.w; geom.h = g.h; })
       .on_mouse_down("left", (e, cx) => {
         cx.stop_propagation();   // not a window drag
         const edge = zoneEdge(grip, e.local_position, this.size);
@@ -197,7 +223,7 @@ const measured = (b, p) => Boolean(b) && geom.w > 0 && geom.h > 0 && Boolean(p.t
 // A press on an active grip: open the catcher with the button down.
 function startResize(grip, edge, e, p) {
   if (!measured(e?.bounds, p)) return;
-  const start = boxFromGrip(grip, e.bounds, geom);
+  const start = boxFromGrip(grip, e.bounds, geom, appZoom());
   openCatcher({ edge, start, px: e.position.x, py: e.position.y, terminal: p.terminal, name: p.name });
 }
 
@@ -260,6 +286,7 @@ export class TermResize {
   render(_cx) {
     const t = theme();
     const r = this.rect;
+    const d = r ? styleBox(r, appZoom()) : null;   // drawn ÷ zoom so it lands on the screen px in r
     const root = cursor(div().id("term-resize").size_full().relative(), this.edge ?? "se")
       .on_size_change((size) => { geom.app = size; })
       .on_mouse_move((e, cx) => {
@@ -272,7 +299,7 @@ export class TermResize {
       .on_mouse_up("left", (e, cx) => this.button("up", e.position, cx))
       .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); this.finish(null, cx); });
     if (!r) return root;
-    return root.child(div().id("term-resize-outline").absolute().left(r.x).top(r.y).w(r.w).h(r.h)
+    return root.child(div().id("term-resize-outline").absolute().left(d.x).top(d.y).w(d.w).h(d.h)
       .rounded(16).border(2).border_color(t.accent).flex().items_center().justify_center()
       .child(div().flex().flex_col().items_center().gap(2).px(10).py(4).rounded(8).bg(t.popover).border(1).border_color(t.border)
         .child(div().text_size(12.5).text_color(t.foreground).child(`${r.w} × ${r.h}`))
