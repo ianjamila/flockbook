@@ -308,13 +308,69 @@ fn a_broken_or_missing_memory_file_is_no_memory() {
 // fresh a figure is: the newest reply wins. A reading whose reply time is unknown (an older helper's memory) wins
 // only when it is higher AND it could be newer (its file was saved after the newest known reply).
 
-/// `session`, plus the transcript the input names, last written at `replied` (seconds).
+/// `session`, plus the transcript the input names, whose last reply (a top-level `assistant` entry) is at `replied`
+/// (seconds) and which was last written then.
 fn session_replied(dir: &Path, sid: &str, config: &str, rate_limits: Value, mtime: u64, replied: u64) {
+    session_touched(dir, sid, config, rate_limits, mtime, replied, replied);
+}
+
+/// `session_replied`, but the transcript was written again at `touched` without a reply: Claude Code rewrites a
+/// session's trailing bookkeeping lines (`last-prompt`, `cost-state`, no timestamp) when an idle session is opened.
+fn session_touched(dir: &Path, sid: &str, config: &str, rate_limits: Value, mtime: u64, replied: u64, touched: u64) {
     session(dir, sid, config, Some(rate_limits), mtime);
     let t = PathBuf::from(format!("{config}/projects/-Users-x/{sid}.jsonl"));
     std::fs::create_dir_all(t.parent().unwrap()).unwrap();
-    std::fs::write(&t, "{}\n").unwrap();
-    set_mtime(&t, replied);
+    let iso = |s: u64| chrono::DateTime::from_timestamp(s as i64, 0).unwrap().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let lines = [
+        json!({"type": "user", "timestamp": iso(replied.saturating_sub(5)), "message": {"content": "{\"type\":\"assistant\"}"}}),
+        json!({"type": "assistant", "timestamp": iso(replied), "message": {"model": "m"}}),
+        json!({"type": "system", "subtype": "turn_duration", "timestamp": iso(replied)}),
+        json!({"type": "last-prompt"}),
+        json!({"type": "cost-state"}),
+    ];
+    std::fs::write(&t, lines.iter().map(|l| format!("{l}\n")).collect::<String>()).unwrap();
+    set_mtime(&t, touched);
+}
+
+// 11-24 live (owner: "why 58% left for the gmail account?"): the account hit its weekly limit at 100% (a session's
+// last reply was the limit error), then an idle session from four days earlier was opened: its transcript's
+// trailing bookkeeping lines were rewritten (a fresh mtime) and its status line re-saved its own old 42%. The
+// transcript mtime made that 42% the "newest reply", so the panel said 58% left and "limit reset". The reply time is
+// the last top-level `assistant` entry's timestamp, not the file's mtime.
+#[test]
+fn a_session_whose_transcript_was_only_touched_has_not_replied() {
+    let t = tempfile::tempdir().unwrap();
+    let (dir, home) = (t.path().join("statusline"), t.path().join("home"));
+    let a = format!("{}/.claude", home.display());
+    session_replied(&dir, "hit", &a, weekly(100.0, 1_795_712_400), 5_000, 5_000);
+    session_touched(&dir, "idle", &a, weekly(42.0, 1_795_712_400), 9_000, 1_000, 9_000);
+    let l = &usage::claude_lines(&dir, &home)[0];
+    assert_eq!(l["weekly"]["used"], 100, "the limit error is the newest reply: {l:?}");
+    assert_eq!(l["replied"], 5_000_000);
+    assert!(l.get("dropped_from").is_none(), "no limit reset: {l:?}");
+}
+
+// The same morning the helper had already remembered the idle session's 42% with the touched time as its reply and
+// "dropped from 100". While that session's own status line record is there, its fresh reading (with the true reply
+// time) replaces the remembered copy, or the bad reply time would keep winning.
+#[test]
+fn a_fresh_reading_replaces_the_remembered_copy_of_its_own_session() {
+    let t = tempfile::tempdir().unwrap();
+    let (dir, home, mem) = (t.path().join("statusline"), t.path().join("home"), t.path().join("usage-accounts.json"));
+    let a = format!("{}/.claude", home.display());
+    std::fs::write(&mem, json!({"lines": [{"type": "usage", "kind": "claude", "config": a, "email": null, "at": 9_000_000,
+        "replied": 9_000_000, "dropped_from": 100, "session": "idle",
+        "weekly": {"left": 58, "used": 42, "resets_at": 1_795_712_400}}]}).to_string()).unwrap();
+    session_replied(&dir, "hit", &a, weekly(100.0, 1_795_712_400), 5_000, 5_000);
+    session_touched(&dir, "idle", &a, weekly(42.0, 1_795_712_400), 9_000, 1_000, 9_000);
+    let l = &usage::claude_lines_remembering(&dir, &home, &mem, 10_000_000)[0];
+    assert_eq!(l["weekly"]["used"], 100, "{l:?}");
+    assert!(l.get("dropped_from").is_none(), "{l:?}");
+    // And the memory now holds the corrected line, so it stays right after the records are gone.
+    for f in ["hit.json", "idle.json"] {
+        std::fs::remove_file(dir.join(f)).unwrap();
+    }
+    assert_eq!(usage::claude_lines_remembering(&dir, &home, &mem, 11_000_000)[0]["weekly"]["used"], 100);
 }
 
 #[test]

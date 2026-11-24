@@ -4,7 +4,7 @@
 //! Claude Code: the status line wrapper (`flockbook-statusline`) saves every session's status line input as
 //! `<folder>/<session id>.json` (`status::folder`); its `rate_limits` hold the account's limits, and its
 //! `transcript_path` (`<config folder>/projects/<project>/<session id>.jsonl`) says which account's session it was;
-//! the transcript's mtime says when that session last replied. Every session re-saves its own last figure, so the
+//! the transcript's last `assistant` entry says when that session last replied (`last_reply_ms`). Every session re-saves its own last figure, so the
 //! account's reading is the latest window's newest REPLY (`account_reading`), not the newest file. Those records are removed after a day, so the helper keeps each
 //! account's last line in `<flockbook>/usage-accounts.json` for 30 days (`claude_lines_remembering`).
 //!
@@ -81,8 +81,8 @@ fn email_of(config: &Path, home: &Path) -> Option<String> {
 const SAME_WINDOW_SECS: i64 = 3600;
 
 /// One session's reading: `at` = its status line file's mtime (ms; it is re-saved every refresh), `replied` = its
-/// transcript's mtime (ms), i.e. when the figure was given; None when unknown (a missing transcript, or a line an
-/// older helper remembered).
+/// transcript's last reply (ms, `last_reply_ms`), i.e. when the figure was given; None when unknown (a missing
+/// transcript or no reply found, or a line an older helper remembered).
 /// `session` / `cwd`: the session that gave it and its folder; `dropped_from`: a remembered line's reset note.
 #[derive(Clone, Debug, Default)]
 struct Reading {
@@ -227,6 +227,10 @@ pub fn claude_lines_remembering(dir: &Path, home: &Path, memory: &Path, now_ms: 
     let (kept, emails) = load_memory(memory, now_ms);
     for (config, mut readings) in kept {
         let all = read.entry(config).or_default();
+        // A session that still has its own record is read fresh: its remembered copy may carry a wrong reply time
+        // (11-24: an older helper took a touched transcript's mtime for one) and must not outvote it.
+        let fresh: Vec<String> = all.iter().filter_map(|r| r.session.clone()).collect();
+        readings.retain(|r| r.session.as_ref().map_or(true, |s| !fresh.contains(s)));
         all.append(&mut readings);
         // account_reading wants the newest first (equal figures: the newest is kept).
         all.sort_by(|a, b| b.at.cmp(&a.at));
@@ -243,6 +247,58 @@ pub fn claude_lines_remembering(dir: &Path, home: &Path, memory: &Path, now_ms: 
         }
     }
     out
+}
+
+/// A transcript tail is read in chunks this big, up to `REPLY_SCAN_MAX` from its end.
+const REPLY_CHUNK: u64 = 256 * 1024;
+const REPLY_SCAN_MAX: u64 = 16 * 1024 * 1024;
+const ASSISTANT: &[u8] = br#""type":"assistant""#;
+
+/// When a session last really got an API reply (ms): the `timestamp` of its transcript's last top-level
+/// `"type":"assistant"` entry (a model reply, or an API error such as the weekly-limit one); that reply is what its
+/// status line's `rate_limits` came from. Not the transcript's mtime (11-24 live): opening an idle session rewrites
+/// its trailing bookkeeping lines (`last-prompt`, `cost-state`), so a four-day-old 42% looked newer than the 100%
+/// limit error. Reads backward from the end, whole lines only; None when no reply is found within `REPLY_SCAN_MAX`
+/// or the file can't be read (the reading then counts as one with an unknown reply time).
+fn last_reply_ms(path: &Path) -> Option<i64> {
+    let line_time = |line: &[u8]| -> Option<i64> {
+        line.windows(ASSISTANT.len()).position(|w| w == ASSISTANT)?;
+        let v: Value = serde_json::from_slice(line).ok()?;
+        if v["type"] != "assistant" {
+            return None;
+        }
+        Some(chrono::DateTime::parse_from_rfc3339(v["timestamp"].as_str()?).ok()?.timestamp_millis())
+    };
+    let mut f = std::fs::File::open(path).ok()?;
+    let size = f.metadata().ok()?.len();
+    let mut pos = size;
+    // The start of a line whose beginning is still above `pos`.
+    let mut carry: Vec<u8> = Vec::new();
+    while pos > 0 && size - pos < REPLY_SCAN_MAX {
+        let n = REPLY_CHUNK.min(pos);
+        pos -= n;
+        f.seek(SeekFrom::Start(pos)).ok()?;
+        let mut buf = vec![0u8; n as usize];
+        f.read_exact(&mut buf).ok()?;
+        buf.extend_from_slice(&carry);
+        // Lines after the first newline are whole (all of them once the file's start is reached).
+        let start = if pos == 0 {
+            0
+        } else {
+            match buf.iter().position(|&b| b == b'\n') {
+                Some(i) => i + 1,
+                None => {
+                    carry = buf;
+                    continue;
+                }
+            }
+        };
+        if let Some(t) = buf[start..].rsplit(|&b| b == b'\n').find_map(line_time) {
+            return Some(t);
+        }
+        carry = buf[..start.saturating_sub(1)].to_vec();
+    }
+    None
 }
 
 /// The weekly readings in `dir` per config folder, each folder's newest first.
@@ -267,7 +323,7 @@ fn claude_readings(dir: &Path) -> BTreeMap<String, Vec<Reading>> {
         let (Some(config), Some(w)) = (transcript.and_then(config_of), v.get("rate_limits").and_then(claude_weekly)) else {
             continue;
         };
-        let replied = transcript.and_then(|t| mtime_ms(Path::new(t)));
+        let replied = transcript.and_then(|t| last_reply_ms(Path::new(t)));
         let session = v.get("session_id").and_then(Value::as_str).map(String::from);
         let cwd = v.pointer("/workspace/current_dir").or_else(|| v.get("cwd")).and_then(Value::as_str).map(String::from);
         read.entry(config.to_string()).or_default().push(Reading { at, replied, weekly: w, session, cwd, dropped_from: None });
