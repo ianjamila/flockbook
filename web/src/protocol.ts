@@ -38,7 +38,8 @@ export interface Device { id: string; name: string; level: Level }
 export type HubMessage =
   | { type: "paired"; token: string; device: Device }
   | { type: "welcome"; hub: string; hubVersion: string; level: Level; session?: string; pushKey?: string; pushOn?: boolean }
-  | { type: "reply"; re: string; ok: boolean; error?: HubError }
+  /** `keys`: the Rust helper's `reenter` only: whether anything was typed in the tab (`none`, `yes`, `maybe`). */
+  | { type: "reply"; re: string; ok: boolean; error?: HubError; keys?: string }
   | { type: "snapshot"; workspaces: Workspace[] }
   | { type: "status"; pane: string; status: Status }
   | { type: "conversation"; pane: string; session: string; mode: "replace" | "append" | "prepend"; items: Item[]; hasEarlier: boolean }

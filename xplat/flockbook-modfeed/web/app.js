@@ -83,6 +83,10 @@ const state = {
   chipsOpen: new Set        (),
   /** On a wide screen, the reader hid the agents beside the conversation (kept on this device). */
   sideHidden: load(SIDE_KEY) === "hidden",
+  /** The pane whose Clear & re-enter is running (the button says so). */
+  reentering: null                 ,
+  /** Per pane, the conversation and prompt (`<log>\n<prompt>`) already re-entered: its card does not show again. */
+  reentered: new Map                (),
 };
 
 // The QR link: `#pair=<secret>&fp=<sha256>`. Read once, then removed from the address bar.
@@ -148,15 +152,18 @@ function ack(id        )       {
  *  and the requests that send keys go with `POST /api` (same origin) instead of the socket. Null: the Mac hub. */
 let helper                            = null;
 
+/** A reply. `keys`: only the Rust helper's `reenter` says whether anything was typed (`none`, `yes`, `maybe`). */
+                                                                             
+
 /** A request over `POST /api`: the answer is the hub messages, the reply to `id` among them. */
-async function post(msg                         , id        )                                                            {
+async function post(msg                         , id        )                 {
   try {
     const r = await fetch("/api", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ v: 1, id, ...msg }),
       credentials: "same-origin", cache: "no-store" });
     if (!r.ok) return { ok: false, code: "failed", message: r.status === 403 ? "The helper refused this request." : `The helper answered ${r.status}.` };
-    let reply                                                   = { ok: false, code: "failed", message: "The helper gave no answer." };
+    let reply        = { ok: false, code: "failed", message: "The helper gave no answer." };
     for (const m of await r.json()                ) {
-      if (m.type === "reply" && m.re === id) reply = { ok: m.ok, code: m.error?.code, message: m.error?.message };
+      if (m.type === "reply" && m.re === id) reply = { ok: m.ok, code: m.error?.code, message: m.error?.message, keys: m.keys };
       else receive(m);
     }
     return reply;
@@ -165,7 +172,7 @@ async function post(msg                         , id        )                   
   }
 }
 
-function request(msg                         , id = `c${nextId++}`)                                                            {
+function request(msg                         , id = `c${nextId++}`)                 {
   if (helper && helper.post.includes(String(msg.type))) return post(msg, id);
   return new Promise((resolve) => {
     if (!ws || ws.readyState !== WebSocket.OPEN) { resolve({ ok: false, code: "failed", message: "Not connected." }); return; }
@@ -1321,10 +1328,58 @@ function conversationScreen(pane        )              {
   const list = h("div", { class: "items" });
   itemsOf.set(list, items);
   const form = composer(pane, !!card, where?.p.agent?.name);
+  const reenter = card ? null : reenterCard(pane, v, where?.p.agent);
   // Claude Code's status line: in the composer, over the text field; a read-only device has it at the foot alone.
   const line = statusLineView(pane);
   if (form && line) form.prepend(line);
-  return h("section", { class: "conversation", "data-pane": pane }, head, pill, list, card, form, form ? null : line && h("div", { class: "status-foot glass-float" }, line));
+  return h("section", { class: "conversation", "data-pane": pane }, head, pill, list, card, reenter, form, form ? null : line && h("div", { class: "status-foot glass-float" }, line));
+}
+
+/** The mod's own re-entry prompt finder (`replyHandoff` of blocks.js), which the Rust helper serves from the mod's files:
+ *  the page finds the prompt the way the Overview and the chat do. Null until loaded, and on a hub that has no such file. */
+let finder                                                                               = null;
+async function loadFinder()                {
+  try {
+    // Not a literal: the Mac hub serves no such file, and the type check looks for a literal's module.
+    const url = "/blocks.js";
+    const m = await import(url);
+    if (typeof m.replyHandoff === "function") { finder = m.replyHandoff; render(); }
+  } catch { /* no finder: no button */ }
+}
+
+/** A re-entry prompt the newest reply carries, for a finished Claude Code tab: a card with the prompt and the button that
+ *  types `/clear`, then the prompt, in that tab (the Rust helper's `reenter`; its own checks still apply). The mod's finder
+ *  reads rows as `{ k, text, from }`: the page's items have `kind` for `k`, the rest as they are. */
+function reenterCard(pane        , v          , agent                )                     {
+  if (!finder || !helper?.post.includes("reenter") || !canInput() || agent?.kind !== "claude" || (agent.status !== "idle" && agent.status !== "done")) return null;
+  const session = v.session;
+  if (!session || session === pane) return null;
+  const found = finder(v.items.map((i) => ({ ...i, k: i.kind })));
+  if (!found || state.reentered.get(pane) === `${session}\n${found.prompt}`) return null;
+  const go = async ()                => {
+    if (state.busy) return;
+    state.busy = true;
+    state.reentering = pane;
+    render();
+    const r = await request({ type: "reenter", pane, text: found.prompt, agent: "claude", session });
+    state.busy = false;
+    state.reentering = null;
+    // Nothing typed: the hub refused it, or the helper said so. Anything else may have reached the tab.
+    const none = r.keys === "none" || (r.keys === undefined && ["readOnly", "badRequest", "notFound"].includes(r.code ?? ""));
+    const said = (r.message ?? "").trim();
+    if (r.ok) toast("Re-entered: the new conversation has its prompt.");
+    else if (none) toast(/nothing was (sent|typed)/i.test(said) ? said : `${explain(r.code, r.message)} Nothing was typed.`);
+    else if (r.keys === undefined) toast("No answer from the helper: the tab may have been cleared and the prompt may or may not have gone. Check the tab before doing anything else.");
+    else toast(`${said || "The tab may have been cleared."} Check the tab before doing anything else.`);
+    if (!none) state.reentered.set(pane, `${session}\n${found.prompt}`);
+    render();
+  };
+  return h("div", { class: "card reenter glass-float", role: "group", "aria-label": "Clear and re-enter" },
+    h("div", { class: "card-head" }, h("strong", {}, "Re-entry prompt")),
+    h("pre", { class: "command" }, found.prompt),
+    h("p", { class: "fine" }, "Types /clear in this tab, then this prompt. If the tab's box has text in it, nothing is typed."),
+    h("div", { class: "actions" },
+      h("button", { id: "reenter", class: "primary", type: "button", disabled: state.busy, onclick: go }, state.reentering === pane ? "Re-entering…" : "Clear & re-enter")));
 }
 
 /** Claude Code's status line (appendices C and D): a row of tags over the composer's field (the model in bold, effort,
@@ -1746,7 +1801,7 @@ async function start()                {
     try {
       const r = await fetch("/hub.json", { cache: "no-store" });
       const j = r.ok ? await r.json()                                       : null;
-      if (j?.auth === "tailscale") { helper = { post: j.post ?? [] }; state.token = "tailscale"; render(); }
+      if (j?.auth === "tailscale") { helper = { post: j.post ?? [] }; state.token = "tailscale"; render(); if (helper.post.includes("reenter")) void loadFinder(); }
     } catch { /* no answer: pair as before */ }
   }
   if (state.token || state.pairSecret) connect();
