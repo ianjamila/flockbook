@@ -189,6 +189,67 @@ test("finished screen: a failed read is retried; a failed Copy keeps the prompt 
   assert.match(textOf(byId(paint(v), "finished-detail")), /P4 now\./, "the shown prompt stays");
 });
 
+// #3 (11-28): the screen's reads race. A slow read that ends after a newer one must not put its older prompt back; a
+// read for a tab that left the list must not store anything; one tab's Copy must not label or block another tab's.
+const later = () => { let done; const p = new Promise((r) => { done = r; }); return { p, done }; };
+const pr = (prompt) => ({ prompt, file: null, problem: null });
+
+test("finished screen: a slow load that ends after Copy's newer read does not bring the old prompt back", async () => {
+  finishedSetup(["t4"]);
+  const v = new FinishedView(fakeCx());
+  const slow = later();
+  let calls = 0;
+  v.reader = () => (++calls === 1 ? slow.p : Promise.resolve(pr("B prompt.")));
+  const load1 = v.load(fakeCx(), "t4");                       // starts first, ends last
+  const cx = clipCx();
+  await v.copy(cx, "t4");
+  assert.equal(v.read.get("t4").prompt, "B prompt.");
+  slow.done(pr("A prompt."));
+  await load1;
+  assert.equal(v.read.get("t4").prompt, "B prompt.", "the older read is dropped");
+});
+
+test("finished screen: a load that ends after its tab left the list stores nothing", async () => {
+  finishedSetup(["t4"]);
+  const v = new FinishedView(fakeCx());
+  const slow = later();
+  v.reader = () => slow.p;
+  const load1 = v.load(fakeCx(), "t4");
+  marks = {};
+  fake.shared["flockbook.handoff"] = marks;                   // the tab left finished()
+  slow.done(pr("late prompt."));
+  await load1;
+  assert.equal(v.read.has("t4"), false);
+});
+
+test("finished screen: tab A copying does not label or block tab B's Copy", async () => {
+  finishedSetup(["t4", "t6"]);
+  const v = new FinishedView(fakeCx());
+  const slow = later();
+  const asked = [];
+  let copying = false;
+  v.reader = (addr) => { asked.push(addr); return addr === "t4" && copying ? slow.p : Promise.resolve(pr(`P ${addr}.`)); };
+  let el = (await load(v), paint(v));
+  byId(el, "fin-t6")._h.on_click({}, fakeCx());
+  el = (await load(v), paint(v));
+  byId(el, "fin-t4")._h.on_click({}, fakeCx());
+  el = paint(v);
+  copying = true;
+  const cxA = clipCx();
+  byId(el, "fin-copy")._h.on_click({}, cxA);                    // A's read is pending
+  assert.match(textOf(byId(paint(v), "fin-copy")), /Copying…/);
+  byId(paint(v), "fin-t6")._h.on_click({}, fakeCx());
+  el = paint(v);
+  assert.match(textOf(byId(el, "fin-copy")), /Copy prompt/, "B's button is not 'Copying…'");
+  const cxB = clipCx();
+  byId(el, "fin-copy")._h.on_click({}, cxB);
+  await Promise.all(cxB.tasks);
+  assert.deepEqual(cxB.clip, ["P t6."], "B's copy ran while A's was pending");
+  slow.done(pr("P t4."));
+  await Promise.all(cxA.tasks);
+  assert.deepEqual(cxA.clip, ["P t4."]);
+});
+
 // Clear & re-enter (finished.js): the button, the run, its notes and the clipboard. No key goes anywhere: the run is a
 // fake `reenterer` that returns the helper's answer (reenter.rs: one `done` or `error` line, with `keys`).
 const SEEN = { agent: "claude", path: "/logs/t4.jsonl" };

@@ -72,7 +72,10 @@ export class FinishedView {
     this.runSig = "";           // the shown tab's run (id, state, result) at the last tick
     this.read = new Map();      // address → { prompt, file, problem }, read once when it is shown (not every tick)
     this.reading = new Set();   // addresses whose read is under way
-    this.busy = null;           // "copy" | "full" while a copy runs
+    this.busy = null;           // { address, what: "copy" | "full" } while a copy runs (only that tab's buttons show it)
+    this.readNo = 0;            // read numbers: each read takes the next when it starts
+    this.storedNo = new Map();  // address → the number of the read whose result is stored (an older one is dropped)
+    this.startedNo = new Map(); // address → the number of the newest read started
     this.copied = null;         // { address, what } for 2 s after a copy
     this.reader = readHandoff;  // how a tab's prompt is read (tests hand in a fake)
     this.fullReader = readFull;
@@ -137,9 +140,25 @@ export class FinishedView {
     if (this.canReenter !== true && !this.asking && Date.now() - this.askedAt >= RETRY_MS) cx.spawn((cx2) => this.askHelper(cx2));
   }
 
+  // A read's result is stored only if no newer read has stored one (a slow read must not put an old prompt back over
+  // Copy's fresh one). `n` is the number the read took when it started (startRead).
+  startRead(address) { const n = ++this.readNo; this.startedNo.set(address, n); return n; }
+  store(address, n, r) {
+    if (n < (this.storedNo.get(address) ?? 0)) return false;
+    this.storedNo.set(address, n);
+    this.read.set(address, { ...r, at: Date.now() });
+    return true;
+  }
+
   async load(cx, address) {
     this.reading.add(address);
-    try { this.read.set(address, { ...(await this.reader(address)), at: Date.now() }); } finally { this.reading.delete(address); }
+    const n = this.startRead(address);
+    try {
+      const r = await this.reader(address);
+      // A tab that left the list meanwhile, or a read started after this one, makes this result stale: nothing is stored
+      // (the tick reads again if the tab shows without one).
+      if (this.startedNo.get(address) === n && this.listed().some((a) => a.address === address)) this.store(address, n, r);
+    } finally { this.reading.delete(address); }
     cx.notify?.();
   }
 
@@ -147,7 +166,7 @@ export class FinishedView {
   // that same text (never a stale one).
   async copy(cx, address) {
     if (typeof cx?.write_to_clipboard !== "function") { notify({ title: "Couldn't copy: no clipboard here. Open the tab and use Copy all.", level: "warning", timeout: 3000 }); return; }
-    if (this.busy) return;
+    if (this.busy?.address === address) return;
     // A tab whose run typed keys shows the new conversation now: a re-read finds no prompt, so its own prompt is copied.
     const run = this.runs.get(address);
     if (run?.state === "done" && run.keys !== "none" && run.prompt) {
@@ -156,9 +175,10 @@ export class FinishedView {
       this.flashCopied(cx, address, "copy"); cx.notify?.();
       return;
     }
-    this.busy = "copy"; cx.notify?.();
+    const mine = this.busy = { address, what: "copy" }; cx.notify?.();
+    const n = this.startRead(address);
     let r;
-    try { r = await this.reader(address); if (r.prompt) this.read.set(address, { ...r, at: Date.now() }); } finally { this.busy = null; }
+    try { r = await this.reader(address); if (r.prompt) this.store(address, n, r); } finally { if (this.busy === mine) this.busy = null; }
     if (!r.prompt) notify({ title: r.problem ? `Couldn't read its chat: ${r.problem}` : "No re-entry prompt in its last reply. Open the tab to see it.", level: "warning", timeout: 4000 });
     else {
       cx.write_to_clipboard(r.prompt);
@@ -171,12 +191,13 @@ export class FinishedView {
   // Copy full: the hand-off file the newest prompt names, read on the tab's own machine.
   async copyFull(cx, address) {
     if (typeof cx?.write_to_clipboard !== "function") { notify({ title: "Couldn't copy: no clipboard here. Open the tab and use Copy full prompt.", level: "warning", timeout: 3000 }); return; }
-    if (this.busy) return;
-    this.busy = "full"; cx.notify?.();
+    if (this.busy?.address === address) return;
+    const mine = this.busy = { address, what: "full" }; cx.notify?.();
+    const n = this.startRead(address);
     let text = null, problem = null;
     try {
       const h = await this.reader(address);
-      if (h.prompt) this.read.set(address, { ...h, at: Date.now() });
+      if (h.prompt) this.store(address, n, h);
       if (h.problem) problem = `Couldn't read its chat: ${h.problem}`;
       else if (!h.prompt) problem = "No re-entry prompt in its last reply. Open the tab to see it.";
       else if (!h.file) problem = "Its re-entry prompt names no full-prompt file (~/claude-notes/handoffs/…). Copy prompt copies it.";
@@ -184,7 +205,7 @@ export class FinishedView {
         const r = await this.fullReader(address, h.file);
         if (r.text) text = r.text; else problem = `Couldn't read the full prompt (${h.file}): ${r.problem}`;
       }
-    } catch (e) { problem = String(e?.message ?? e); } finally { this.busy = null; }
+    } catch (e) { problem = String(e?.message ?? e); } finally { if (this.busy === mine) this.busy = null; }
     if (!text) notify({ title: problem, level: "warning", timeout: 5000 });
     else {
       cx.write_to_clipboard(text);
@@ -232,10 +253,11 @@ export class FinishedView {
     try {
       // The reply is read again: a prompt or log other than the one the owner is looking at types nothing.
       let again;
+      const n = this.startRead(address);
       try { again = await this.reader(address); } catch (e) { again = { prompt: null, problem: String(e?.message ?? e) }; }
       if (!again.prompt || again.problem || again.prompt !== shown.prompt || again.seen?.path !== shown.path) {
         // The new read is shown (the button and the old prompt go with a reply that has none); a read that failed keeps the old one.
-        if (!again.problem) this.read.set(address, { ...again, at: Date.now() });
+        if (!again.problem) this.store(address, n, again);
         this.release(address, id);
         this.note = { address, text: CHANGED };
         notify({ title: CHANGED, level: "warning", timeout: 4000 });
@@ -356,10 +378,10 @@ export class FinishedView {
               const s = this.begin(addr);
               if (s) cx.spawn((cx2) => this.reenter(cx2, addr, s, typeof cx2?.write_to_clipboard === "function" ? cx2 : cx));
             })))
-          .when(hasPrompt, (el) => el.child(this.button("fin-copy", this.busy === "copy" ? "Copying…" : copied("copy") ? "Copied" : "Copy prompt", !canRe, t,
-            (_e, cx) => { if (!this.busy) cx.spawn((cx2) => this.copy(cx2, addr)); })))
-          .when(hasPrompt && Boolean(r?.file), (el) => el.child(this.button("fin-full", this.busy === "full" ? "Copying…" : copied("full") ? "Copied" : "Copy full", false, t,
-            (_e, cx) => { if (!this.busy) cx.spawn((cx2) => this.copyFull(cx2, addr)); })))
+          .when(hasPrompt, (el) => el.child(this.button("fin-copy", this.busy?.address === addr && this.busy.what === "copy" ? "Copying…" : copied("copy") ? "Copied" : "Copy prompt", !canRe, t,
+            (_e, cx) => { if (this.busy?.address !== addr) cx.spawn((cx2) => this.copy(cx2, addr)); })))
+          .when(hasPrompt && Boolean(r?.file), (el) => el.child(this.button("fin-full", this.busy?.address === addr && this.busy.what === "full" ? "Copying…" : copied("full") ? "Copied" : "Copy full", false, t,
+            (_e, cx) => { if (this.busy?.address !== addr) cx.spawn((cx2) => this.copyFull(cx2, addr)); })))
           .when(run?.copyFailed, (el) => el.child(this.button("fin-copy-again", copied("again") ? "Copied" : "Copy again", false, t, (_e, cx2) => this.copyAgain(cx2, addr))))
           .child(this.button("fin-open", "Open tab", false, t, () => showAgent(addr))))
         .when(hasPrompt && !(typed && run.note), (el) => el.child(div().id("fin-hint").text_size(12).text_color(t.muted).child(canRe ? HINT : "Then type /clear in the tab and paste.")))
