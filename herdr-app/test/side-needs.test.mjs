@@ -227,7 +227,13 @@ test("finished screen: reenter_button_needs_prompt_claude_path_helper_and_clipbo
     assert.equal(byId(el, "fin-reenter"), null, `${name}: no button`);
     if (hasPrompt) assert.match(textOf(byId(el, "finished-detail")), /Then type \/clear in the tab and paste\./, `${name}: the step-1 line stays`);
   };
-  await off("no clipboard", v, fakeCx());
+  // the clipboard is checked at the click, as Copy does: the button shows, a click without one types nothing
+  const bare = fakeCx();
+  byId(paintWith(v, bare), "fin-reenter")._h.on_click({}, bare); await Promise.all(bare.tasks);
+  assert.equal(v.calls.length, 0, "no clipboard: nothing typed");
+  assert.match(log.notify.at(-1).title, /no clipboard here/);
+  assert.equal(reentering.has("t4"), false);
+  assert.equal(reenterRuns.has("t4"), false);
   v = await reenterView(doneLine("sent"), { prompt: null });
   await off("no prompt", v, cx, false);
   v = await reenterView(doneLine("sent"), { seen: { agent: "codex", path: "/logs/t4.jsonl" } });
@@ -380,6 +386,8 @@ test("finished screen: clipboard_throw_is_reported (Copy again copies the run's 
   await press(v, cx);
   assert.equal(textOf(byId(paintWith(v, cx), "fin-note")), "msg cleared_not_sent Couldn't put the prompt on your clipboard: use Copy again.");
   assert.doesNotMatch(detail(v, cx), /open the tab and paste/);
+  assert.equal(byId(paintWith(v, cx), "fin-reenter"), null, "no second Clear & re-enter on the stale pre-clear read");
+  assert.ok(byId(paintWith(v, cx), "fin-copy"), "Copy prompt stays");
   // after /clear the chat shows the new conversation: a re-read would give another (or no) prompt
   v.reader = async () => { throw new Error("must not re-read"); };
   fail = false;
@@ -412,7 +420,8 @@ test("finished screen: running_tab_stays_listed_and_picked (A16: the tab leaves 
   const v = await reenterView(doneLine("sent"), { addrs: ["t4", "t6"] });
   let release; const gate = new Promise((r) => { release = r; });
   v.reenterer = async () => { await gate; return doneLine("sent", { cleared: true }); };
-  byId(paintWith(v, cx), "fin-t4")._h.on_click({}, cx);
+  // t4 is the first row by default: the owner never clicked a row
+  assert.equal(v.picked, null);
   byId(paintWith(v, cx), "fin-reenter")._h.on_click({}, cx);
   await new Promise((r) => setTimeout(r, 0));
   marks = { t6: true };   // the /clear took t4 off the list
@@ -447,13 +456,21 @@ test("finished screen: pinned_tab_keeps_its_prompt_beside_its_result (A16: the v
   v2.canReenter = true;
   v2.reader = async (a) => (a === "t6" ? { prompt: "P6.", file: null, seen: SEEN, problem: null } : { prompt: null, file: null, seen: { agent: null, path: null }, problem: null });
   fake.shared["flockbook.handoff"] = marks;
-  v2.picked = "t4";
+  assert.equal(v2.picked, null, "the rebuilt view's owner has picked nothing");
   const tcx = fakeCx(); v2.tick(tcx); await Promise.all(tcx.tasks);
   const el = paintWith(v2, cx);
   assert.ok(byId(el, "fin-t4") && byId(el, "fin-t6"), "still listed");
   assert.match(textOf(byId(el, "finished-detail")), /P4\./, "its prompt (from the run record)");
   assert.equal(textOf(byId(el, "fin-note")), `msg cleared_not_sent ${TAIL}`, "its result");
   assert.equal(v2.shown, "t4");
+  // a run that started in another view finishes: this view repaints at its next tick (and not when nothing changed)
+  const run = reenterRuns.get("t4"); run.state = "running";
+  const c1 = fakeCx(); v2.tick(c1);
+  Object.assign(run, { state: "done", result: "failed" });
+  const c2 = fakeCx(); v2.tick(c2);
+  assert.ok(c2.notified > 0, "repainted when the run ended");
+  const c3 = fakeCx(); v2.tick(c3);
+  assert.equal(c3.notified, 0, "not repainted every tick");
 });
 
 test("sidecar.reenter: the helper gets the terminal, the log the screen showed, the cache and the exact prompt", async () => {

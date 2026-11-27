@@ -59,6 +59,7 @@ export class FinishedView {
     this.barOver = barOver();
     this.top = {}; if (this.barOver) startTop(cx, this.top);
     this.shown = null;          // the tab on the right, from the last tick
+    this.runSig = "";           // the shown tab's run (id, state, result) at the last tick
     this.read = new Map();      // address → { prompt, file, problem }, read once when it is shown (not every tick)
     this.reading = new Set();   // addresses whose read is under way
     this.busy = null;           // "copy" | "full" while a copy runs
@@ -95,13 +96,27 @@ export class FinishedView {
     return list;
   }
 
+  // The tab on the right: the one the owner picked; else the tab of a run (the newest if several: a tab with a run stays
+  // shown, also in a rebuilt view and when it was only the first row); else the first.
+  current(list) {
+    const picked = list.find((a) => a.address === this.picked);
+    if (picked) return picked;
+    let best = null, bestId = -1;
+    for (const a of list) { const id = this.runs.get(a.address)?.id; if (id !== undefined && id > bestId) { best = a; bestId = id; } }
+    return best ?? list[0] ?? null;
+  }
+
   // Every half second: which tab shows on the right; its prompt is read the first time it shows.
   tick(cx) { withSnapshot(() => this.tickBody(cx)); }
 
   tickBody(cx) {
     const list = this.listed();
-    const cur = list.find((a) => a.address === this.picked) ?? list[0] ?? null;
-    if ((cur?.address ?? null) !== this.shown) cx.notify?.();
+    const cur = this.current(list);
+    // A view rebuilt while a run was on repaints when that run's state or result changes (the run started in another view).
+    const run = cur ? this.runs.get(cur.address) : null;
+    const sig = run ? `${run.id}|${run.state}|${run.result ?? ""}|${run.copyFailed ?? ""}` : "";
+    if ((cur?.address ?? null) !== this.shown || sig !== this.runSig) cx.notify?.();
+    this.runSig = sig;
     this.shown = cur?.address ?? null;
     // A tab that left the list is read afresh if it comes back (a new hand-off, a new prompt). A tab with a run is not
     // read again: after its /clear the feed shows the new conversation, not the prompt that was sent.
@@ -170,6 +185,7 @@ export class FinishedView {
     const id = ++runs;
     const shown = { prompt: r.prompt, path: r.seen.path };
     this.runs.set(address, { id, state: "running", prompt: shown.prompt, seen: r.seen, at: Date.now() });
+    this.picked = address;
     reentering.add(address);
     this.note = null;
     return { id, shown, seen: r.seen };
@@ -258,7 +274,7 @@ export class FinishedView {
     const t = theme();
     const stop = (_e, cx) => cx.stop_propagation();
     return v_flex().id("finished-screen").relative().size_full().bg(t.background).on_size_change((size) => noteScreenHeight(size, this.barOver))
-      .child(div().size_full().pt(barRoom(this.barOver)).when(this.barOver, (el) => el.on_mouse_down("left", stop)).child(this.content(t, cx)))
+      .child(div().size_full().pt(barRoom(this.barOver)).when(this.barOver, (el) => el.on_mouse_down("left", stop)).child(this.content(t)))
       .when(this.barOver, (el) => el.child(overBar(t)));
   }
 
@@ -269,7 +285,7 @@ export class FinishedView {
       .on_click(onClick).child(label);
   }
 
-  content(t, cx) {
+  content(t) {
     const list = this.listed();
     if (!list.length) {
       return v_flex().size_full().items_center().justify_center().gap(8).text_color(t.muted)
@@ -277,7 +293,7 @@ export class FinishedView {
         .child(div().text_size(17).font_semibold().text_color(t.foreground).child("Nothing finished"))
         .child(div().text_size(13).child("No session left a re-entry prompt."));
     }
-    const cur = list.find((a) => a.address === this.picked) ?? list[0];
+    const cur = this.current(list);
     const item = (a) => {
       const on = a.address === cur.address;
       const p = a.program;
@@ -293,8 +309,9 @@ export class FinishedView {
     const addr = cur.address;
     const r = this.read.get(addr) ?? this.runPrompt(addr);
     const run = this.runs.get(addr);
+    // Not again after a result that is not "sent": the pre-clear read is stale (the tab shows a new conversation now).
     const canRe = Boolean(r?.prompt) && r.seen?.agent === "claude" && Boolean(r.seen?.path) && this.canReenter === true
-      && typeof cx?.write_to_clipboard === "function";
+      && !(run?.state === "done" && run.result !== "sent");
     const copied = (what) => this.copied?.address === addr && this.copied.what === what;
     let body;
     if (!r) body = div().text_size(13).text_color(t.muted).child("Reading its re-entry prompt…");
@@ -314,7 +331,11 @@ export class FinishedView {
         .child(body)
         .child(h_flex().gap(8).items_center()
           .when(canRe, (el) => el.child(this.button("fin-reenter", run?.state === "running" ? "Re-entering…" : "Clear & re-enter", true, t,
-            () => { const s = this.begin(addr); if (s) cx.spawn((cx2) => this.reenter(cx2, addr, s)); })))
+            (_e, cx) => {
+              if (typeof cx?.write_to_clipboard !== "function") { notify({ title: "Couldn't re-enter: no clipboard here. Open the tab and use Copy all.", level: "warning", timeout: 3000 }); return; }
+              const s = this.begin(addr);
+              if (s) cx.spawn((cx2) => this.reenter(cx2, addr, s));
+            })))
           .when(hasPrompt, (el) => el.child(this.button("fin-copy", this.busy === "copy" ? "Copying…" : copied("copy") ? "Copied" : "Copy prompt", !canRe, t,
             (_e, cx) => { if (!this.busy) cx.spawn((cx2) => this.copy(cx2, addr)); })))
           .when(hasPrompt && Boolean(r?.file), (el) => el.child(this.button("fin-full", this.busy === "full" ? "Copying…" : copied("full") ? "Copied" : "Copy full", false, t,
@@ -323,7 +344,7 @@ export class FinishedView {
           .child(this.button("fin-open", "Open tab", false, t, () => showAgent(addr))))
         .when(hasPrompt, (el) => el.child(div().id("fin-hint").text_size(12).text_color(t.muted).child(canRe ? HINT : "Then type /clear in the tab and paste.")))
         .when(Boolean(run?.note), (el) => el.child(div().id("fin-note").whitespace_normal().text_size(13).text_color(run.bad ? t.blocked : t.foreground).child(run.note)))
-        .when(this.note?.address === addr, (el) => el.child(div().id("fin-note").whitespace_normal().text_size(13).text_color(t.blocked).child(this.note.text))));
+        .when(this.note?.address === addr, (el) => el.child(div().id("fin-changed").whitespace_normal().text_size(13).text_color(t.blocked).child(this.note.text))));
   }
 
   // Picking another tab drops the finished runs of the others (a result stays only until the owner looks elsewhere).
