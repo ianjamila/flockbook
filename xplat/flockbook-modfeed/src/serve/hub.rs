@@ -1,6 +1,6 @@
 //! The phone page's protocol (remote protocol v1, `web/src/protocol.ts`; the Mac app's `HubSession.swift`) on the
 //! sidecar's own commands. A subset: hello, snapshot, watch (conversation, prompt, the agent's queue), loadEarlier,
-//! pulledAck, picture, ping. Approve, answer, send, pullQueued and attach come only over `POST /api` (`post`); on the
+//! pulledAck, picture, ping. Approve, answer, send, reenter, pullQueued and attach come only over `POST /api` (`post`); on the
 //! socket they are refused. Notifications are not offered: those requests get a `failed` reply.
 //!
 //! Every read and every key goes through `cli::run`, the same code the mod's sidecar runs, so the claims, the
@@ -23,7 +23,10 @@ pub const MAX_SEND: usize = 16_000;
 pub const MAX_OTHER: usize = 2_000;
 
 /// The requests that send keys or store something (`attach`): only `POST /api` takes them.
-pub const KEYS: [&str; 5] = ["approve", "answer", "send", "pullQueued", "attach"];
+pub const KEYS: [&str; 6] = ["approve", "answer", "send", "reenter", "pullQueued", "attach"];
+
+/// The whole `reenter` run's limit: 27 s of the mod's 30 s exec, as the CLI's default.
+const REENTER_S: u64 = 27;
 
 /// A picture goes as it is in the log (no re-encoding, unlike the Mac hub): PNG, JPEG and WebP only, at most
 /// `MAX_PICTURE` bytes (`HubImage.maxBytes`) and `MAX_SIDE`/`MAX_PIXELS`, in parts of `PICTURE_PART` bytes.
@@ -341,6 +344,42 @@ fn done_reply(re: &str, lines: &[Value]) -> Value {
     }
 }
 
+/// What `reenter` needs from the page's request, with the gates of `send` and one more: the agent must be Claude Code
+/// (the page shows the button for it only) and the log the prompt was read from is needed (`session`). Err: why it is
+/// refused; nothing has been typed. `text` is the prompt: the helper refuses an empty one or a command.
+fn reenter_args(m: &Value, terminal_id: &str) -> Result<(String, String), String> {
+    let text = m["text"].as_str().unwrap_or("");
+    if let Some(why) = input_problem(text, MAX_SEND) {
+        return Err(why);
+    }
+    if text.trim().is_empty() {
+        return Err("reenter needs the prompt in text.".into());
+    }
+    match m["agent"].as_str().filter(|k| !k.is_empty()) {
+        None => return Err("reenter needs agent: the agent kind the page shows.".into()),
+        Some("claude") => {}
+        Some(_) => return Err("Clear & re-enter is for Claude Code tabs only.".into()),
+    }
+    // The page's `session` is the log's path, or the pane's own id while the agent has no log (as `send`): that one is no path.
+    let pane = m["pane"].as_str().unwrap_or("");
+    let Some(path) = m["session"].as_str().filter(|s| !s.is_empty() && *s != pane && *s != terminal_id) else {
+        return Err("reenter needs session: the log the prompt was read from.".into());
+    };
+    Ok((text.to_string(), path.to_string()))
+}
+
+/// The reply to `reenter` from the helper's one `done` (or `error`) line: the usual `done_reply`, with what the page
+/// needs to say whether anything was typed: `keys` (`none`, `yes`, `maybe`; absent: the line does not say) and `result`.
+fn reenter_reply(re: &str, line: &Value) -> Value {
+    let mut r = done_reply(re, std::slice::from_ref(line));
+    for k in ["keys", "result"] {
+        if line[k].is_string() {
+            r[k] = line[k].clone();
+        }
+    }
+    r
+}
+
 /// What one pane's conversation looks like on this connection (the mod's `feedstate.js`): the older rows read for
 /// `loadEarlier`, then the tail `feed` keeps current.
 #[derive(Default)]
@@ -569,7 +608,7 @@ impl Session {
         };
         let ty = m["type"].as_str().unwrap_or("");
         if !KEYS.contains(&ty) {
-            return vec![fail(&id, "badRequest", "POST /api takes approve, answer, send, pullQueued and attach.")];
+            return vec![fail(&id, "badRequest", "POST /api takes approve, answer, send, reenter, pullQueued and attach.")];
         }
         if self.cfg.read_only {
             return vec![fail(&id, "readOnly", "This helper was started with --read-only.")];
@@ -587,6 +626,15 @@ impl Session {
         let cache = self.cfg.cache.as_deref().map(std::path::Path::new);
         if ty == "pullQueued" {
             return pull_queued(&id, &pane, &p.terminal_id, cache);
+        }
+        if ty == "reenter" {
+            return vec![match reenter_args(&m, &p.terminal_id) {
+                Err(why) => fail(&id, "badRequest", &why),
+                Ok((text, path)) => {
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(REENTER_S);
+                    reenter_reply(&id, &cli::reenter_run(&p.terminal_id, &path, &text, cache, self.cfg.home.as_deref(), deadline).line())
+                }
+            }];
         }
         let mut sent_names: Vec<String> = vec![];
         let keys = match ty {
@@ -1036,6 +1084,46 @@ mod tests {
         assert_eq!(input_problem("a\u{1b}[2J", 100).as_deref(), Some("Text with control character U+001B."));
         assert!(input_problem("line\n\tok", 100).is_none());
         assert!(input_problem(&"x".repeat(11), 10).is_some());
+    }
+
+    #[test]
+    fn reenter_request_is_checked() {
+        let req = |v: Value| { let mut m = json!({"pane": "hc:t1", "text": "Continue the work.", "agent": "claude", "session": "/l/a.jsonl"}); for (k, x) in v.as_object().unwrap() { m[k] = x.clone(); } m };
+        assert_eq!(reenter_args(&req(json!({})), "t1"), Ok(("Continue the work.".into(), "/l/a.jsonl".into())));
+        // Each of these types nothing: the agent must be the one the page shows, and Claude Code; the log is needed.
+        for (what, m) in [
+            ("no agent", req(json!({"agent": null}))),
+            ("empty agent", req(json!({"agent": ""}))),
+            ("codex", req(json!({"agent": "codex"}))),
+            ("no session", req(json!({"session": null}))),
+            ("the pane id as session", req(json!({"session": "hc:t1"}))),
+            ("the terminal id as session", req(json!({"session": "t1"}))),
+            ("blank text", req(json!({"text": "  \n"}))),
+            ("control character", req(json!({"text": "a\u{1b}[2J"}))),
+            ("too long", req(json!({"text": "x".repeat(MAX_SEND + 1)}))),
+        ] {
+            assert!(reenter_args(&m, "t1").is_err(), "{what}");
+        }
+        // The reply carries what the helper said about the keys, so the page can say whether anything was typed.
+        let sent = reenter_reply("c1", &json!({"type": "done", "result": "sent", "keys": "yes", "cleared": true}));
+        assert!(sent["ok"] == true && sent["keys"] == "yes", "{sent}");
+        let late = reenter_reply("c2", &json!({"type": "done", "result": "prompt_unconfirmed", "message": "The prompt may not have gone.", "keys": "yes"}));
+        assert!(late["ok"] == false && late["keys"] == "yes" && late["error"]["message"] == "The prompt may not have gone.", "{late}");
+        let none = reenter_reply("c3", &json!({"type": "error", "code": "no-core", "message": "herdr-core is not running", "keys": "none"}));
+        assert!(none["ok"] == false && none["keys"] == "none", "{none}");
+        let silent = reenter_reply("c4", &json!({"type": "error", "code": "remote_failed", "message": "x"}));
+        assert!(silent.get("keys").is_none(), "no keys said: the page treats it as maybe: {silent}");
+    }
+
+    #[test]
+    fn reenter_is_read_only_and_post_only() {
+        std::env::set_var("HC_SOCKET", "/nonexistent/flockbook-test/hc.sock");
+        std::env::remove_var("HERDR_DESK_HC_SOCKET");
+        let m = r#"{"v":1,"id":"r1","type":"reenter","pane":"hc:t1","text":"Continue.","agent":"claude","session":"/l/a.jsonl"}"#;
+        let mut ro = Session::new(Config { cache: None, read_only: true, hub: "test".into(), home: None });
+        assert_eq!(ro.post(m)[0]["error"]["code"], "readOnly");
+        // The socket loop in socket_refuses_keys covers every KEYS entry: this one is among them.
+        assert!(KEYS.contains(&"reenter"));
     }
 
     #[test]

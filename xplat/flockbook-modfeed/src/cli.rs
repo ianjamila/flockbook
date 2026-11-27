@@ -470,6 +470,22 @@ pub enum Reentered {
     Error(&'static str, String),
 }
 
+impl Reentered {
+    /// The one `done` or `error` line (what `serve` answers the page with). Forwarded: the `done` line of the helper there
+    /// wins over its `error` line (it answered), and no line at all is an error that does not say what was typed.
+    pub fn line(self) -> serde_json::Value {
+        match self {
+            Reentered::Done(a) => serde_json::to_value(&a).unwrap_or_else(|_| json!({"type": "done", "result": "failed", "keys": "maybe"})),
+            Reentered::Error(code, message) => json!({"type": "error", "code": code, "message": message, "keys": "none"}),
+            Reentered::Forwarded(text) => {
+                let lines: Vec<serde_json::Value> = text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+                let pick = |t: &str| lines.iter().find(|l| l["type"] == t).cloned();
+                pick("done").or_else(|| pick("error")).unwrap_or_else(|| json!({"type": "error", "code": "remote_failed", "message": "The helper there gave no answer.", "keys": "maybe"}))
+            }
+        }
+    }
+}
+
 /// `reenter` for the CLI and for `serve` (the phone page): the same run, the same gates. `terminal` as given (`t1`,
 /// `hc:t1` or `machine/tN`); `expect_path`: the log the prompt was read from; `home`: as `--home`; `deadline`: the limit of
 /// the whole run. Another machine: the same command forwarded to the helper there. Here: the keys lock, a fresh find under
