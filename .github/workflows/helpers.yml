@@ -125,6 +125,50 @@ jobs:
           path: out
           if-no-files-found: error
 
+  # Windows (x86_64-pc-windows-msvc): flockbook-modfeed.exe for a Windows Herdr app, which reaches herdr-core over
+  # its named pipe. Not in the mod zip yet (its artifact name keeps it out of the package job's helper-* download).
+  windows:
+    name: Helper x86_64-pc-windows-msvc
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0   # the known-files table is made from the tags and main's history
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+      - name: The release version to bake in
+        shell: bash
+        run: |
+          v=$(node scripts/helper-release.mjs version "$FLOCKBOOK_REF")
+          echo "ref $FLOCKBOOK_REF: release ${v:-none}"
+          [ -z "$v" ] || echo "FLOCKBOOK_VERSION=$v" >> "$GITHUB_ENV"
+      - name: Build
+        working-directory: xplat
+        run: cargo build --release --locked -p flockbook-modfeed --target x86_64-pc-windows-msvc
+      - name: The named pipe and the helper tests on Windows
+        working-directory: xplat
+        run: cargo test --locked -p herdr-core -p flockbook-modfeed --target x86_64-pc-windows-msvc
+      - name: Runs
+        shell: bash
+        run: |
+          set -eu
+          exe=xplat/target/x86_64-pc-windows-msvc/release/flockbook-modfeed.exe
+          ls -l "$exe"
+          mkdir -p out/x86_64-pc-windows-msvc
+          cp "$exe" out/x86_64-pc-windows-msvc/flockbook-modfeed.exe
+          "$exe" version | tee out/x86_64-pc-windows-msvc/version.txt
+          (cd out/x86_64-pc-windows-msvc && sha256sum flockbook-modfeed.exe | tee SHA256SUMS)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-helper-x86_64-pc-windows-msvc
+          path: out
+          if-no-files-found: error
+
   # Same protocol everywhere, then the mod zip and the one-line install's assets from these helpers.
   package:
     name: Package and try the installs

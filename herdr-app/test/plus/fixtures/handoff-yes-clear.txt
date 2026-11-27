@@ -1,0 +1,51 @@
+  What was done
+  - The new cart sidebar is live: #1839 and #1853.
+  - The old Returns summary pages are now read-only: in the app (#1864) and on the live
+    database, where I applied and checked the change.
+  - Only admins who can view Orders can remove old receipts, and a single receipt can no longer
+    be logged as a cleanup removal (#1867).
+  - The fix for forms stuck on "Sending…" (#1863) passed 8 review rounds and CI, but needs this conflict
+    fixed before it can merge.
+
+  Recommended next step
+  In a fresh session, combine the main branch into #1863's branch. That keeps both #1838's shared-phone
+  behaviour and #1863's retry behaviour. Then re-test, have the conflict fix reviewed, and ask you to
+  merge again. If the pipeline counts that review as a new round, you'll need to type "extra round" once
+  more.
+
+  Also worth considering:
+  - #1878, so retries stop re-uploading photos over mobile data.
+  - A check that lists admin pages where who can see something differs from who can change it.
+  - The other follow-ups from #1863: #1866, #1879 and #1880.
+
+  yes, clear. This session holds a lot of history that is now spent. A fresh session reading the hand-off
+  note costs far less than continuing here.
+
+  Re-entry prompt:
+
+  Finish Webshop PR #1863 (offline "Sending…" lease + retry on schedule): read HAND-OFF (11-12 s5) in
+  memory note webshop-sidebar-cleanup. Repo acme/webshop, wt
+  .worktrees/agent-offline-sending-lease, branch agent/offline-sending-lease, head 02713795b (8 rounds, R8
+  clean, CI green, owner already said "merge" but the merge queue removed it: merge_conflict with #1838
+  Style Guide Part A, which rewrote lib/offline + components/offline). Steps: implementer merges
+  origin/main into the branch (no rebase/force), keeping BOTH #1838's account-owned offline data and
+  #1863's lease/Web Lock/retry-on-schedule/in-memory throttle; npm install; npm run test:run --
+  lib/offline components/offline + node scripts/verify.mjs --quick; push. Then run codex-review round 9 as a
+  resolution-only round (base 02713795b321dd0c49607e8791fc888133214e42); if it is counted, ask the owner
+  for an extra round. Then arbiter, review-complete, rescans, CI via ci-wait,
+  summary + agent-log, dry run, merge ask (ONE PR per ask), and remove the wt after merge. Also offer:
+  #1878 (stop re-uploading photos on retry, saves mobile data) as the next PR, an admin-page audit of view
+  vs edit permission mismatches, and follow-ups #1866 #1879 #1880. Merged today: #1839 #1853 #1864 #1867.
+  Effort high, Opus; Sonnet sub-agents (pipeline agents pin their own models).
+
+✻ Sautéed for 53s · done 4:21 PM
+Good moment to hand off now (context past 200K): type /handoff                                        [-]
+(Tab, then Enter takes the suggestion)
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ /handoff
+──────────────────────────────────────────────────────────────────────────────────────────────────────────
+  you:\~/notes | WORK work@example.com | pipeline 0.1.0+4ab8df4
+  Opus 5.5 | effort:high | ctx:38% ████░░░░░░ | 7d:23% ↻1d12h | cache:45m
+  ⎇ main | +707/-2 | ~$48.84
+  ⏵⏵ auto mode on (shift+tab to cycle)

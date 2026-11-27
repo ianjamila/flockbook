@@ -70,3 +70,160 @@ export function splitBlocks(text) {
   flush();
   return out;
 }
+
+// Owner 11-13 ("when an re entry prompt like this appears, can there be a copy all button"): the prompt a reply hands
+// to a fresh session, as written, or null. The prompt is a quote (every "> " line of it; blank lines between quoted
+// lines kept, one "> " taken off each) or a code fence (its body). A block counts when:
+//  (1) a line just above it names it ("Re-entry prompt (`--effort high`):", "**Resume prompt:**", "a prompt for a fresh
+//      session:"), or
+//  (2) a line just below it speaks of the prompt ("The prompt is ready to paste.", "Paste this into the new session"), or
+//  (3) it reads like one: starts with "Continue"/"Resume"/"Pick up"/"Finish" and is at least 200 characters, or
+//  (4) `ask` (the owner's message the reply answers) asked for a re-entry / resume / hand-off prompt.
+// Owner 11-13 follow-up: a reply that was only a fenced prompt + "The prompt is ready to paste" had no button. The
+// last block that counts wins; a later "the re-entry prompt above" names nothing below it and is passed over.
+const PROMPT_NAME = /\bre-?entry prompt\b|\bresume prompt\b|\bhand-?off prompt\b|\bprompt for (?:a |the )?(?:fresh|new|next) session\b/i;
+const PROMPT_AFTER = /\bprompt\b.*\b(?:paste|ready|copy|fresh|new session|re-?entry|resume)|\bpaste (?:it|this|that)\b.*\b(?:session|terminal|claude)/i;
+const PROMPT_START = /^(?:\*\*)?(?:continue|resume|pick up|finish)\s+[a-z]/i;
+// Owner 11-28: "▎" (the terminal's quote bar, copied into a reply) is a quote mark too.
+const QUOTED = /^\s{0,3}(?:>|▎)/;
+const BAR = /^\s{0,3}▎ ?/;
+// The quote or fence starting at line `i`: { body (as written), end (the line after it) }, or null.
+function blockAt(lines, i) {
+  const f = OPEN.exec(lines[i]) ?? TILDE_OPEN.exec(lines[i]);
+  if (f) {
+    let body = [];
+    let j = i + 1;
+    for (; j < lines.length && !closes(lines[j], f[1]); j++) body.push(lines[j]);
+    // A fence whose every line carries the quote bar: the bars are the terminal's, not the prompt's.
+    if (body.some((l) => l.trim()) && body.every((l) => !l.trim() || BAR.test(l))) body = body.map((l) => l.replace(BAR, ""));
+    return { body: body.join("\n").trim(), end: Math.min(j + 1, lines.length) };
+  }
+  if (!QUOTED.test(lines[i])) return null;
+  const body = [];
+  let j = i;
+  for (; j < lines.length; j++) {
+    if (QUOTED.test(lines[j])) { body.push(lines[j].replace(/^\s{0,3}(?:>|▎) ?/, "")); continue; }
+    let k = j;
+    while (k < lines.length && !lines[k].trim()) k++;
+    if (k > j && k < lines.length && QUOTED.test(lines[k])) { for (; j < k; j++) body.push(""); j--; continue; }
+    break;
+  }
+  return { body: body.join("\n").trim(), end: j };
+}
+const nonBlank = (lines, i, step) => { while (i >= 0 && i < lines.length && !lines[i].trim()) i += step; return i >= 0 && i < lines.length ? lines[i] : null; };
+// Owner 11-28 ("no copy prompt button here", twice): of 71 hand-off replies of a week, 17 gave no prompt. The shapes
+// they used, each read here:
+//  - a line introducing the prompt, with a plain paragraph or list under it (its lines up to a blank line, a rule or
+//    a heading): only its name ("**Re-entry prompt**", "## Resume prompt"); heading form (all bold, a "#" heading, or
+//    ending with ":") starting with the name ("**Re-entry prompt 2: master sheet check**", "Re-entry prompt (start it
+//    after 06:00):"); or a sentence whose last clause is the name and ends with ":" ("… cheaper. Re-entry (I can't clear
+//    it for you):"). A sentence that only speaks of the prompt ("The last line of the re-entry prompt stays:") is none;
+//  - a paragraph starting with the name as its label ("Re-entry: design step 2 …"), taken as written;
+//  - "Yes, clear" (CLAUDE.md "Clear vs continue") just above a quote or fence names it (never a plain paragraph).
+const YES_CLEAR = /\byes,\s*clear\b/i;
+const NAME_START = /^(?:(?:short|full)\s+)?(?:re-?entry(?:\s+prompt)?|resume prompt|hand-?off prompt)\b/i;
+const LABELLED = /^(?:\*\*)?(?:(?:short|full)\s+)?(?:re-?entry(?:\s+prompt)?|resume prompt|hand-?off prompt)(?:\*\*)?\s*:(?:\*\*)?\s+\S/i;
+// The line's words without a heading's "#" or bold marks.
+const plain = (line) => line.trim().replace(/^#{1,6}\s+/, "").replace(/\*\*|__/g, "").trim();
+function introduces(line) {
+  if (QUOTED.test(line)) return false;
+  const p = plain(line), t = line.trim();
+  if (/^(?:(?:short|full)\s+)?(?:re-?entry|resume|hand-?off) prompt$/i.test(p)) return true;
+  const form = /^#{1,6}\s/.test(t) || /^\*\*.*\*\*:?$/.test(t) || /:\s*$/.test(p);
+  if (form && NAME_START.test(p)) return true;
+  return /:\s*$/.test(p) && NAME_START.test(p.split(/(?<=[.!?])\s+/).pop());
+}
+const ENDS_PARA = /^\s*(?:#{1,6}\s|(?:-\s*){3,}$|(?:\*\s*){3,}$|(?:_\s*){3,}$)/;
+// The plain paragraph from line `from` (blank lines skipped first): { body, end }, or null when a quote, fence, rule
+// or heading comes first.
+function paragraphAt(lines, from) {
+  let j = from;
+  while (j < lines.length && !lines[j].trim()) j++;
+  if (j >= lines.length || ENDS_PARA.test(lines[j]) || blockAt(lines, j)) return null;
+  const body = [];
+  for (; j < lines.length && lines[j].trim() && !ENDS_PARA.test(lines[j]); j++) body.push(lines[j]);
+  return { body: body.join("\n").trim(), end: j };
+}
+export function reentryPrompt(text, ask = null) {
+  const lines = String(text ?? "").replace(/\r/g, "").split("\n");
+  const asked = PROMPT_NAME.test(String(ask ?? "")) || /\b(?:re-?entry|resume|hand-?off)\b.*\bprompt\b|\bprompt\b.*\b(?:re-?entry|fresh session|new session)\b/i.test(String(ask ?? ""));
+  let found = null;
+  for (let i = 0; i < lines.length; i++) {
+    const starts = (i === 0 || !lines[i - 1].trim()) && !QUOTED.test(lines[i]) && LABELLED.test(lines[i]);
+    const p = starts ? paragraphAt(lines, i) : introduces(lines[i]) ? paragraphAt(lines, i + 1) : null;
+    if (p?.body) { found = p.body; i = p.end - 1; continue; }
+    const b = blockAt(lines, i);
+    if (!b) continue;
+    const above = nonBlank(lines, i - 1, -1), below = nonBlank(lines, b.end, 1);
+    const named = above != null && !QUOTED.test(above) && (PROMPT_NAME.test(above) || YES_CLEAR.test(above) || introduces(above));
+    const after = below != null && !QUOTED.test(below) && PROMPT_AFTER.test(below);
+    const looks = PROMPT_START.test(b.body) && b.body.length >= 200;
+    if (b.body && (named || after || looks || asked)) found = b.body;
+    i = Math.max(i, b.end - 1);
+  }
+  return found;
+}
+// The owner's message (a user row not from another agent) that the reply ending before row `end` answers, or null.
+export function askBefore(rows, end) {
+  for (let j = end - 1; j >= 0; j--) {
+    if (rows[j].k === "footer") return null;
+    if (rows[j].k === "user" && rows[j].from == null) return rows[j].text ?? null;
+  }
+  return null;
+}
+// The re-entry prompt of the reply ending before row `end` of a chat feed (default: the newest reply, its closing
+// footer skipped): its last assistant text with one, back to the owner's message. The chat's Copy all and the
+// Overview's "Copy re-entry prompt" (s19) both read it here.
+export function replyPrompt(rows, end = null) {
+  return replyHandoff(rows, end)?.prompt ?? null;
+}
+// The same, with the hand-off file it names (s27, short re-entry prompts): { prompt, file } (file null when none is
+// named, in the prompt or in the reply text around it), or null when the reply has no prompt.
+// Owner 11-28: a reply that says "the re-entry prompt from my last message still applies" gives that reply's prompt.
+const STILL = /\bre-?entry prompt\b[^.]*\b(?:from|in) my (?:last|previous|earlier) (?:message|reply)/i;
+export function replyHandoff(rows, end = null) {
+  let at = end ?? rows.length;
+  if (end == null) while (at > 0 && rows[at - 1].k === "footer") at--;
+  const ask = askBefore(rows, at);
+  let still = false;
+  for (let j = at - 1; j >= 0; j--) {
+    const r = rows[j];
+    if (r.k === "footer" || (r.k === "user" && r.from == null)) {
+      if (!still) return null;
+      let k = j;
+      while (k > 0 && (rows[k].k === "footer" || (rows[k].k === "user" && rows[k].from == null))) k--;
+      return k < j ? replyHandoff(rows, k + 1) : null;
+    }
+    if (r.k === "assistant") {
+      const p = reentryPrompt(r.text, ask);
+      // The prompt's own file; else the reply's, only when it names one file (s28 Fable: with two, which is meant?).
+      if (p) return { prompt: p, file: handoffFile(p) ?? onlyHandoffFile(r.text) };
+      still ||= STILL.test(r.text ?? "");
+    }
+  }
+  return null;
+}
+
+// s27 (owner 11-14): a short re-entry prompt names the full one's file, `~/claude-notes/handoffs/<topic>.md`
+// (CLAUDE.md "Re-entry prompts"). The first such path in `text`: absolute or from ~, a .md file right in a folder named
+// "handoffs", no ".." on the way; null when there is none. Only such a file is ever read for "Copy full prompt".
+// s28 (Fable): never part of a URL ("https://…", "file:///…": ":" before it) or a "//host/…" network path, no empty
+// segment.
+const HANDOFF_FILE = /(?<![\w.~/:-])((?:~\/|\/)[^\s`'"<>()[\]*]*?\/handoffs\/[A-Za-z0-9][\w.-]*?\.md)(?=$|[^\w/.-]|\.(?![\w/]))/g;
+export function handoffFile(text) {
+  for (const m of String(text ?? "").matchAll(HANDOFF_FILE)) {
+    const p = m[1];
+    if (p.startsWith("//") || p.split("/").some((s, i) => s === ".." || s === "." || (i > 0 && s === ""))) continue;
+    return p;
+  }
+  return null;
+}
+// The one hand-off file `text` names (any number of times), or null when it names none or several different ones.
+function onlyHandoffFile(text) {
+  const all = new Set();
+  for (let rest = String(text ?? ""), f; (f = handoffFile(rest)); rest = rest.slice(rest.indexOf(f) + f.length)) all.add(f);
+  return all.size === 1 ? [...all][0] : null;
+}
+// `p` with a leading ~ read as `home` (null when it has one and no home is known).
+export const expandHome = (p, home) => (p.startsWith("~/") ? (home ? `${home}${p.slice(1)}` : null) : p);
+

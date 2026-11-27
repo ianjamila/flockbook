@@ -1,0 +1,120 @@
+  Read 1 file
+
+⏺ Still running; the Windows job is slow. Waiting again.
+
+  Ran 1 shell command
+
+⏺ Still waiting on CI for PR #316.
+
+✻ Churned for 24s · done 4:59 PM
+
+⏺ Background command "Keep waiting for CI on PR 316" completed (exit code 0)
+
+  Read 1 file
+
+⏺ CI passed on Linux and Windows. Checking that the real Windows test actually ran rather than being skipped:
+
+  Ran 1 shell command
+
+⏺ The Windows test passed on CI, with one whole-table query now at about 4.7 s, mostly PowerShell cold start. Next I'll
+  run the pipeline's wrap-up steps and the merge dry run. · summary
+
+  Read 1 file, ran 3 shell commands
+
+⏺ Dry run is clean, with no blockers. Checking dashboard PR #12's checks, then committing memory.
+
+  Ran 5 shell commands, searched memories, wrote 3 memories
+  ⎿  2 actions not run · permission denied
+
+⏺ I've finished everything I can do today: two PRs are ready for you to merge. Three of the follow-ups are blocked: two
+  on a step only you can take, one until tomorrow.
+
+  Where the five follow-ups stand
+  - Rerun on Webshop #1760 (round 6): blocked. The installed pipeline is still the copy from before #299, so it
+    doesn't have review leases yet. Running pipeline update is your step; tell me once it's done and I'll do the rerun.
+    I've kept the agent-browser-runner-2404 worktree for it.
+  - "Reviews running now" wallboard panel: built, as dashboard PR #12.
+  - #270 (merge script run from the PR's own branch): blocked. #242 is still open, and #270 has to be re-scoped against
+    it once it merges.
+  - Remove the agent-review-lease-hardening worktree: not before tomorrow, 11-13, because of the 24-hour rule.
+  - Faster Windows check: built, as acme-tools PR #316.
+
+  What was done
+  - Wallboard panel (PR #12): a new "Reviews running now" panel under the session cards, in both the all-projects view
+    and each project's view.
+    - It lists each review running on the Mac with its repo, PR link, which session or terminal is running it, and when
+      it last checked in.
+    - It says whether a pipeline update can install now or is waiting, and flags any review that can't be confirmed as
+      finished, with the exact file to delete.
+    - Clicking a review jumps to its session's card. Idle "also open" sessions can now be jumped to too, which also
+      fixes the existing jump buttons in the stats strip.
+    - Codex found three problems, all fixed, and its recheck came back clean. Type checks pass; all tests pass except
+      one that reads this machine's live usage data and fails the same way on main. CI is green.
+    - I opened it in a browser: it correctly shows "Installed pipeline predates review leases — run pipeline update"
+      with no console errors. I couldn't see it list real reviews yet, because that also needs pipeline update. Those
+      rows are covered by tests using the documented output format.
+  - Faster Windows check (PR #316): on Windows, the pipeline now reads the whole process list once per check. Before, it
+    started PowerShell again for every parent process, at 1–3 seconds each.
+    - Review rounds: in round 1, Codex and Fable found three ways an incomplete process list could be trusted. All three
+      now fall back safely to the old method, and round 2 was clean.
+    - CI is green on Linux and Windows. The new real-Windows test ran and passed; the single process-list query took
+      about 4.7 s on GitHub's Windows test machine.
+    - It touches pipeline code that only you can approve (the P-path area); your "merge" covers that.
+
+  Recommended next step
+  Merge #316, then run pipeline update (it brings in both #299 and #316), then tell me so I can do the #1760 rerun. Then
+  merge #12 and restart the wallboard (ccboard restart) to see the panel list real reviews.
+
+  Also worth considering
+  - Windows character-encoding follow-up (#317): on Chinese, Japanese or Korean Windows setups, one unusual process name
+    could break the fast check. It would still give the right answer, just at the old speed. The fix is one line.
+  - "Update blocked" alert: a badge in the wallboard's "needs you" strip when a review can't be confirmed as finished.
+    The panel shows this already, and the count it needs is already there.
+  - Update ready indicator: show in the panel when GitHub has a newer pipeline than the installed one, so you know an
+    update is waiting and not just possible.
+
+  The memory commit script was refused by a safety check, so the note updates stay uncommitted until tonight's automatic
+  commit.
+
+  Head 402c1757b7f8 · items none · repo acme/tools
+  PR #12 (wallboard panel) is ready too: say "merge #12" when you want it in.
+
+  Areas P-path
+  Head d36e09667389 · items ae1126c885ce · repo acme/tools
+  🔀 Ready to merge #316 — say "merge"
+
+✻ Sautéed for 3m 41s · done 5:09 PM
+
+❯ merge
+
+  Ran 2 shell commands, wrote 2 memories
+
+⏺ PR #316 is merged into acme-tools main. Your next pipeline update will install both the review leases (#299) and
+  the faster Windows check.
+
+  What was done
+  - On Windows, the pipeline now reads the process list once per check, instead of starting PowerShell again for every
+    parent process.
+  - If that list comes back broken or incomplete, the pipeline uses the old method, so the answer is the same either
+    way.
+
+  Recommended next step
+  Run pipeline update, then tell me so I can rerun the round-6 follow-ups on Webshop #1760.
+
+  Also worth considering
+  - Wallboard PR #12: it's still waiting; say "merge #12" when you want it in. After that, ccboard restart brings it to
+    the live wallboard. It will only list real reviews once pipeline update has run.
+  - Worktree cleanup: tomorrow (11-13) I can remove the #299 and #316 worktrees, once the 24-hour rule allows it.
+  - Merge script fix (#270): still waiting for #242 to merge.
+
+✻ Churned for 42s · done 5:11 PM
+Good moment to hand off now (context past 200K): type /handoff                                                      [-]
+(Tab, then Enter takes the suggestion)
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ /handoff
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  you:\~/Claude/acme-tools/.worktrees/agent-win-ancestry-one-query | WORK work@example.com | pipel…
+  Opus 5.5 | effort:high | ctx:22% ██░░░░░░░░ | 7d:30% ↻1d11h | cache:42m
+  ⎇ agent/win-ancestry-one-query (agent-win-ancestry-one-query) | +988/-14 | ~$11.11
+  ⏵⏵ auto mode on (shift+tab to cycle)

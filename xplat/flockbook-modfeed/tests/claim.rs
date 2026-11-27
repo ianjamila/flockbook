@@ -1,7 +1,7 @@
 //! Two sidecars that press Allow at the same moment: only
 //! one claim wins, and a claim file that another run is still writing is never removed.
 
-use modfeedkit::answered::{Claim, FeedAnswered};
+use modfeedkit::answered::{Claim, FeedAnswered, HELD_GUARD};
 use modfeedkit::protocol::fnv1a;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier};
@@ -158,6 +158,95 @@ fn many_runs_after_a_dead_run_one_claim_wins() {
             .sum();
         assert_eq!(wins, 1, "one claim wins of {n}, after a dead run's lock");
     }
+}
+
+// s35 (owner, 11-15): an agent applying five migrations one after another, each box too tall for the pane (clipped:
+// no tool, no command read). After Allow on the first, the second box showed "Answer sent. Waiting for the agent." for
+// the rest of the minute: every clipped box has the same empty tool and command, so the first claim matched it.
+// A box with no tool and no command read is known by its id alone.
+
+#[test]
+fn a_clipped_box_is_not_the_one_answered_before_it() {
+    let (_d, cache, _folder) = setup();
+    let a = FeedAnswered::new(Some(&cache));
+    assert!(claimed(a.claim(T, "screen-first", "", "", true, SystemTime::now())));
+    assert!(a.is_claimed(T, "screen-first", "", "", true, SystemTime::now()), "the box pressed is answered");
+    assert!(!a.is_claimed(T, "screen-second", "", "", true, SystemTime::now()), "the next clipped box is not");
+    assert!(claimed(a.claim(T, "screen-second", "", "", true, SystemTime::now())), "and can be answered");
+}
+
+#[test]
+fn seen_keeps_a_clipped_claim_only_while_its_own_box_shows() {
+    let (_d, cache, folder) = setup();
+    let a = FeedAnswered::new(Some(&cache));
+    assert!(claimed(a.claim(T, "screen-first", "", "", true, SystemTime::now())));
+    a.seen(T, Some(("screen-first", "", "")));
+    assert!(folder.join(fnv1a("screen-first")).exists(), "its own box still shows: kept");
+    a.seen(T, Some(("screen-second", "", "")));
+    assert!(!folder.join(fnv1a("screen-first")).exists(), "another clipped box shows: the first one left, its claim goes");
+}
+
+#[test]
+fn a_read_box_still_matches_by_tool_and_command_after_a_rewrap() {
+    let (_d, cache, folder) = setup();
+    let a = FeedAnswered::new(Some(&cache));
+    assert!(claimed(a.claim(T, "screen-wide", "Bash", "ls -la", true, SystemTime::now())));
+    a.seen(T, Some(("screen-narrow", "Bash", "ls\n-la")));
+    assert!(folder.join(fnv1a("screen-wide")).exists(), "the same box re-wrapped keeps its claim");
+    assert!(a.is_claimed(T, "screen-narrow", "Bash", "ls\n-la", true, SystemTime::now()));
+}
+
+// s35 review: a key that timed out (held) may still land. A resize re-wraps the clipped box under another id, so the
+// id-only rule above would let a second press go out and answer the NEXT prompt. For HELD_GUARD after a hold, another
+// clipped box refuses a press (Wait: nothing sent, press again); the card still shows its buttons.
+
+fn backdate_hold(folder: &Path, id: &str, by: Duration) {
+    let p = folder.join(fnv1a(id));
+    let body = std::fs::read_to_string(&p).unwrap();
+    let ms = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis() as u64 - by.as_millis() as u64;
+    let v = body.replace(&format!("\"held_at\":{}", held_at(&body)), &format!("\"held_at\":{ms}"));
+    std::fs::write(&p, v).unwrap();
+}
+
+fn held_at(body: &str) -> u64 {
+    let i = body.find("\"held_at\":").unwrap() + 10;
+    body[i..].chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap()
+}
+
+#[test]
+fn a_held_clipped_key_makes_another_clipped_box_wait() {
+    let (_d, cache, folder) = setup();
+    let a = FeedAnswered::new(Some(&cache));
+    assert!(claimed(a.claim(T, "screen-wide", "", "", true, SystemTime::now())));
+    a.hold(T, "screen-wide"); // the key timed out: it may still land
+    a.seen(T, Some(("screen-rewrapped", "", ""))); // a resize: the same box under another id
+    assert!(folder.join(fnv1a("screen-wide")).exists(), "a fresh held clipped claim outlives another clipped box");
+    assert!(!a.is_claimed(T, "screen-rewrapped", "", "", true, SystemTime::now()), "the card keeps its buttons");
+    assert_eq!(a.claim(T, "screen-rewrapped", "", "", true, SystemTime::now()), Claim::Wait, "but a press sends nothing yet");
+
+    backdate_hold(&folder, "screen-wide", HELD_GUARD + Duration::from_secs(1));
+    assert!(claimed(a.claim(T, "screen-rewrapped", "", "", true, SystemTime::now())), "after the guard the press goes");
+}
+
+#[test]
+fn a_held_clipped_key_does_not_stop_a_read_box_or_go_on_forever() {
+    let (_d, cache, folder) = setup();
+    let a = FeedAnswered::new(Some(&cache));
+    assert!(claimed(a.claim(T, "screen-wide", "", "", true, SystemTime::now())));
+    a.hold(T, "screen-wide");
+    assert!(claimed(a.claim(T, "screen-read", "Bash", "ls", true, SystemTime::now())), "a box with its command read is not held up");
+    backdate_hold(&folder, "screen-wide", HELD_GUARD + Duration::from_secs(1));
+    a.seen(T, Some(("screen-next", "", "")));
+    assert!(!folder.join(fnv1a("screen-wide")).exists(), "after the guard another clipped box clears it as before");
+}
+
+#[test]
+fn an_old_claim_file_without_a_hold_time_still_reads() {
+    let (_d, cache, folder) = setup();
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join(fnv1a(ID)), br#"{"id":"box-1","tool":"Bash","command":"ls","held":true}"#).unwrap();
+    let a = FeedAnswered::new(Some(&cache));
+    assert!(a.is_claimed(T, ID, "Bash", "ls", true, SystemTime::now()), "a claim written by the previous build counts");
 }
 
 fn claimed(c: Claim) -> bool {

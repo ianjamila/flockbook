@@ -32,6 +32,10 @@
     "cmd-shift-\\": "flockbook.overview",
     "cmd-alt--": "flockbook.text-smaller",
     "cmd-alt-=": "flockbook.text-larger",
-    "cmd-alt-0": "flockbook.text-default"
+    "cmd-alt-0": "flockbook.text-default",
+    "cmd-alt-b": "flockbook.tablist",
+    "cmd-shift-k": "flockbook.keep-name",
+    "cmd-shift-m": "flockbook.move-menu",
+    "cmd-shift-r": "flockbook.sessions"
   }
 }

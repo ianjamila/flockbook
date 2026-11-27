@@ -27,6 +27,8 @@ pub struct State {
     pub uname: Option<(i32, String)>,
     /// `machine.exec` answers that it ran out of time.
     pub exec_timed_out: bool,
+    /// Only a `version` ask there runs out of time (the helper asked first, s36 fail fast); the rest run.
+    pub version_timed_out: bool,
     /// A Windows machine: no `uname` (argv `uname` gives `spawn_failed`).
     pub windows: bool,
     /// `file.write` changes the bytes on the way (the sum there must catch it).
@@ -235,7 +237,8 @@ fn serve(mut s: std::os::unix::net::UnixStream, st: Arc<Mutex<State>>) {
                             Some(a) => Run::Argv(a.iter().map(|x| x.as_str().unwrap_or("").to_string()).collect()),
                             None => Run::Line(p["line"].as_str().unwrap_or("").to_string()),
                         };
-                        let (uname, timed_out, windows, in_root) = (g.uname.clone(), g.exec_timed_out, g.windows, g.exec_in_root);
+                        let is_version = matches!(&run, Run::Argv(a) if a.last().map(String::as_str) == Some("version"));
+                        let (uname, timed_out, windows, in_root) = (g.uname.clone(), g.exec_timed_out || (g.version_timed_out && is_version), g.windows, g.exec_in_root);
                         drop(g);
                         Some(match exec_there(&run, &home, &sock, uname, timed_out, windows, in_root) {
                             Ok(v) => reply(v),

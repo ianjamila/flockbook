@@ -1,0 +1,52 @@
+  Where to find the style guide as an admin: there's one Style Guide, and it covers both shoppers and managers.
+
+  - How to open it:
+    - Sidebar: in the Shopper group, click Style Guide (under Home, Order History and Returns
+      Report).
+    - Cmd-K: type "guide", "help" or "templates" and pick Style Guide.
+    - Direct link: /dashboard/reports/shopper/guide.
+  - What admins see by default: every section, including the manager-only ones, since managers and
+    editors see the same full guide.
+  - To see what a shopper sees: a small blue bar at the top says "Admin view". Click View as shopper to hide
+    the manager-only sections, and View all sections to switch back. The direct link for the shopper
+    view is /dashboard/reports/shopper/guide?audience=shopper. Only admins can switch views; a shopper can't
+    reach the manager sections this way.
+
+  The admin view is always open to you. Shoppers, managers and editors can only open the guide while the
+  on/off switch for it is turned on. While it's off, the blue bar also says "Shoppers can't see this guide
+  yet (STYLE_GUIDE_ENABLED is off)". Turning it on is a production setting, so tell me when you want it
+  on.
+
+  Recommended next step: run the 11-item phone check at the bottom of the plan on a real phone that two
+  shoppers share. After that I'll write the plan for Part B (the offline guide and form links). This
+  session's working folder can be cleaned up from tomorrow (11-13) once nothing else is using it.
+
+  Also worth considering
+  - "Refresh saved guide" button: lets a shopper update the offline guide whenever they have signal (Part
+    B).
+  - Saved-guide age on the shopper home page: shows how old the offline copy is (Part B).
+  - Offline search or a templates-only view: makes the saved guide quicker to use without signal (Part B).
+  - Count offline guide opens: shows whether shoppers actually use it offline (Part B).
+  - Blank form shells: a separate later PR, as decided earlier.
+  - Stale saved account details (issue #1872): a failed sign-out can leave a user's own saved account
+    details out of date for a while.
+  - Second review pass (issue #1873): round 5 didn't re-read every test file, if you want one.
+  - Order dates: one shopper has about 830 orders dated 24 hours after the purchase,
+    which looks like a date-default bug.
+  - Missing table: style_review_reports is missing in production.
+  - Audit spot-check: regenerating the 68 priority audit rows reads the production database, so I'll ask
+    yes or no before running it.
+
+✻ Brewed for 1m 30s · done 4:22 PM · 1 shell still running
+Context past 200K: plan a hand-off at the next checkpoint                                             [-]
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ turn on the shopper guide switch
+──────────────────────────────────────────────────────────────────────────────────────────────────────────
+  you:\~/code/webshop/.worktrees/agent-shopper-guide-offline | WORK work@example.com |…
+  Opus 5.5 | effort:high | ctx:29% ███░░░░░░░ | 7d:23% ↻1d12h | cache:45m
+  ⎇ agent/shopper-guide-offline (agent-shopper-guide-offline) | +559/-11 | ~$45.85
+  ⏵⏵ auto mode on · 1 shell
+
+  ⏺ main
+  ◯ implementer  Awaiting quick verify result                                   10m 28s · ↓ 82.5k tokens

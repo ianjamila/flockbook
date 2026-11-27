@@ -2,13 +2,21 @@
 // Flockbook (its own settings) and Settings.
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { theme, spaces, run, openOverlay, closeOverlay, props } from "herdr";
+import { theme, run, openOverlay, closeOverlay, props } from "herdr";
+import { spaces, withSnapshot } from "./parked.js";
 import { openMenu, spaceItems } from "./menu.js";
-import { needing, showNeeds, showOverview, showSettings, shownScreen, icon, showSpace, toggleSidebar, sidebarShown, peekClosed, PEEK_W, PEEK_GAP, SPRING } from "./state.js";
+import { watchGrace, needing, finished, showNeeds, showFinished, showOverview, showSettings, showSessions, shownScreen, icon, showSpace, toggleSidebar, sidebarShown, peekClosed, PEEK_W, PEEK_GAP, SPRING, tabLabel, subStatus, tabAgents, tabStatus, answerInTerminal, noteWidth, KEY_SIDE_W } from "./state.js";
+import { elicitOf } from "./asks.js";
+import { movedBadge, badgeTip } from "./automove.js";
 import { statusMark, lightsRoom, BAR_H } from "./top.js";
 import { updateLine } from "./settings.js";
-import { updateSeen } from "./config.js";
+import { updateSeen, setting } from "./config.js";
 import { dragger, dropPlace } from "./drag.js";
+import { machineGroups, machinesTick, machineHeader, machineEmpty, folded, MACHINES_MS } from "./machines.js";
+import { pollUsage, usageBlock, USAGE_MS } from "./usage.js";
+import { pollSpend, spendBlock } from "./cispend.js";
+import { awakeBlock, awakeText, AWAKE_MS } from "./awake.js";
+import { newMenuSpec } from "./newmenu.js";   // s43: the + menu sized for the account names
 
 // The workspace being dragged up or down (drag.js): one at a time, so the docked and the floating
 // sidebar draw from the same one.
@@ -35,6 +43,17 @@ export class SideView {
     this.floating = props()?.peek === true;
     // Slide in: the first frame left of its spot, then a spring to it.
     this.slid = !this.floating;
+    watchGrace(cx, this);   // the Needs you count once a blocked agent outlasts its grace
+    // The machines (owner 11-14): asked now and every 15 s (one copy asks for all), so a connected PC shows.
+    this.copiedLogin = null;
+    cx?.spawn?.(async (c2) => { await machinesTick(); c2?.notify?.(); });
+    cx?.timer?.every?.(MACHINES_MS, (c2) => c2?.spawn?.(async (c3) => { await machinesTick(); c3?.notify?.(); }));
+    // Weekly usage left (usage.js, owner 11-15 s35): asked now (after the machines are known) and every 60 s; one copy asks for all.
+    cx?.spawn?.(async (c2) => { await machinesTick(); await Promise.all([pollUsage(), pollSpend()]); c2?.notify?.(); });
+    cx?.timer?.every?.(USAGE_MS, (c2) => c2?.spawn?.(async (c3) => { await Promise.all([pollUsage(), pollSpend()]); c3?.notify?.(); }));
+    // Stay awake (awake.js): the top bar ticks; this copy redraws when its line's words changed.
+    this.awakeShown = awakeText();
+    cx?.timer?.every?.(AWAKE_MS, (c2) => { const w = awakeText(); if (w !== this.awakeShown) { this.awakeShown = w; c2?.notify?.(); } });
     if (!this.slid) cx?.timer?.after?.(16, (cx2) => { this.slid = true; cx2?.notify?.(); });
   }
 
@@ -47,7 +66,26 @@ export class SideView {
 
   close(_cx) { const id = props()?.overlay ?? this.peek; if (this.floating && id) peekClosed(id); }
 
-  render(_cx) {
+  // The workspace rows; once another machine is known, under a header per machine (machines.js), as Herdr's own
+  // sidebar draws them: a folded machine shows its header only, one with no workspace a row to make one there.
+  rows(list, space, t) {
+    const groups = machineGroups(list);
+    if (!groups) return list.map(space);
+    const shut = folded();
+    return groups.flatMap((g) => {
+      const head = machineHeader(g, t, this);
+      if (g.rebuilt || shut.has(g.name)) return head;
+      return [...head, ...(g.spaces.length ? g.spaces.map(space) : [machineEmpty(g, t)])];
+    });
+  }
+
+  // One snapshot of Herdr's agent and space lists per render (parked.js withSnapshot, as the Overview: every tab's
+  // status mark asked Herdr for the whole list again, and a loaded machine cut the render off with "interrupted").
+  render(cx) {
+    return withSnapshot(() => this.renderBody(cx));
+  }
+
+  renderBody(_cx) {
     const t = theme();
     const stop = (_e, cx) => cx.stop_propagation();
     const screen = shownScreen();
@@ -58,18 +96,29 @@ export class SideView {
       .child(div().flex_1().min_w(0).truncate().child(label))
       .when(Boolean(extra), (el) => el.child(extra));
 
+    const awake = awakeBlock(t);
+    const spend = spendBlock(t);
     const update = updateLine(t, this);
     // Drawn in the open sidebar (docked or floating): seen, so the top bar's dot goes (once per version).
     if (update && (this.floating || sidebarShown())) updateSeen();
     const waiting = needing().length;
     const badge = waiting ? div().px(6).h(18).rounded(9).flex().items_center().text_size(11).font_semibold()
       .bg(t.blocked).text_color(t.background).child(String(waiting)) : null;
+    // Finished (owner 11-27): the hand-off tabs, counted in the done colour. Only with hand-off marks on (Settings →
+    // Workflow): without them no tab is ever marked, so the row would always be empty.
+    const showFin = setting("handoff_marks") === "on";
+    const done = showFin ? finished().length : 0;
+    const finBadge = done ? div().px(6).h(18).rounded(9).flex().items_center().text_size(11).font_semibold()
+      .bg(t.done).text_color(t.background).child(String(done)) : null;
 
     // Every row: 10 px in, a 22 px icon or monogram column, then the label, so the labels, the
     // "Workspaces" heading and the right edges (badge, marks, +) line up.
     const list = spaces();
     const dragging = drag.shown;
-    const lineOn = dragging && dropPlace(list, dragging) >= 0 ? dragging.target : null;
+    // A workspace moves among its own machine's only (owner 11-14: the PC's workspaces sit under their own header).
+    const machineOfSpace = (id) => list.find((x) => x.id === id)?.machine ?? null;
+    const sameMachine = (d) => (d ? list.filter((x) => (x.machine ?? null) === machineOfSpace(d.id)) : list);
+    const lineOn = dragging && dropPlace(sameMachine(dragging), dragging) >= 0 ? dragging.target : null;
     const space = (s) => {
       const { shown, more } = tabMarks(s.tabs ?? []);
       const line = lineOn?.id === s.id ? lineOn : null;
@@ -94,7 +143,27 @@ export class SideView {
           .bg(t.raised).border(1).border_color(t.border).text_color(t.muted).child(monogram(s.name)))
         .child(div().flex_1().min_w(0).truncate().text_size(13).text_color(s.active ? t.foreground : t.muted).child(s.name))
         .child(h_flex().gap(4).items_center().flex_none()
-          .children(shown.map((tab) => statusMark(tab.status, t) ?? div().size(6).rounded(3).bg(t.dim)))
+          // Hovering a tab's mark names it: the session's topic, else its name ("Tab 2" for a bare number).
+          .children(shown.map((tab) => {
+            const label = tabLabel(tab);
+            // Background work: its words in the hover label, and a small dot on the mark when it waits
+            // on the owner (ready to merge, review results waiting).
+            const ss = subStatus(tab);
+            const name = /^\d+$/.test(label) ? `Tab ${label}` : label;
+            // Moved here by the auto-mover in the last few minutes: the tab bar's arrow, small, after the mark.
+            const moved = movedBadge(tabAgents(tab.id)[0]?.address);
+            // Blocked on an MCP server's input request (owner 11-12): 🔌 after the mark; a click opens its terminal to answer.
+            const mcp = tabAgents(tab.id).find((x) => x.status === "blocked" && elicitOf(x.address)) ?? null;
+            const tip = [name, mcp ? `MCP “${elicitOf(mcp.address).server}” asks for input: click to answer in its terminal` : ss?.hint, moved ? badgeTip(moved) : null].filter(Boolean).join(" — ");
+            return div().id(`mark-${s.id}-${tab.id}`).relative().flex_none().flex().gap(2).items_center().tooltip(tip)
+              .when(Boolean(mcp), (el) => el.cursor_pointer().on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); answerInTerminal(mcp); }))
+              .child(statusMark(tabStatus(tab), t) ?? div().size(6).rounded(3).bg(t.dim))
+              // A round or merge ask (owner 11-12): its 🔁 / 🔀 after the mark; other owner waits keep the dot.
+              .when(Boolean(mcp), (el) => el.child(div().flex_none().text_size(10).child("🔌")))
+              .when(Boolean(ss?.askGlyph) && !mcp, (el) => el.child(div().flex_none().text_size(10).child(ss.askGlyph)))
+              .when(Boolean(ss?.owner) && !ss?.askGlyph && !mcp, (el) => el.child(div().absolute().top(-2).right(-2).size(5).rounded(3).bg(t.accent)))
+              .when(Boolean(moved), (el) => el.child(svg(icon("moved")).size(10).flex_none().text_color(t.accent)));
+          }))
           .when(more > 0, (el) => el.child(div().text_size(11).text_color(t.muted).child(`+${more}`))));
     };
 
@@ -109,14 +178,17 @@ export class SideView {
         .text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
         .on_mouse_down("left", stop).on_click(() => toggleSidebar()).child(svg(icon("sidebar")).size(16)));
     const root = v_flex().id("side-root").size_full().px(8).pb(8).gap(2)
-      .on_hover((h) => { if (!h) this.leave(); });
+      .on_hover((h) => { if (!h) this.leave(); })
+      // The sidebar's width, for the terminal window's room (state.termRoom); the floating panel is not it.
+      .on_size_change((size) => { if (!this.floating) noteWidth(KEY_SIDE_W, size); });
     // Floating: the panel draws its own surface, as Herdr draws no frame around it.
     if (this.floating) root.on_mouse_down("left", stop).bg(t.chrome).rounded(14).border(1).border_color(t.border).shadow_lg()
       .relative().left(this.slid ? 0 : -PEEK_W).when(this.slid, (el) => el.spring("left", SPRING));
     return root
       .child(header)
-      .child(row("side-new", "plus", "New tab", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))
+      .child(row("side-new", "plus", "New tab", () => openOverlay(newMenuSpec())))
       .child(row("side-needs", "bell", "Needs you", () => showNeeds(), badge, screen === "needs"))
+      .when(showFin, (el) => el.child(row("side-finished", "check", "Finished", () => showFinished(), finBadge, screen === "finished")))
       .child(row("side-overview", "grid", "Overview", () => showOverview(), null, screen === "overview"))
       .child(h_flex().mt(14).mb(2).px(10).items_center()
         .child(div().flex_1().text_size(11.5).font_semibold().text_color(t.muted).child("Workspaces"))
@@ -130,12 +202,19 @@ export class SideView {
         // On the whole list, not the rows: a release between rows or below the last ends the press too.
         .on_mouse_up("left", (_e, cx) => {
           const d = drag.release(cx);
-          const to = d ? dropPlace(list, d) : -1;
-          if (to >= 0) run("space.move", { id: d.id, index: list[to].index });
+          const mine = sameMachine(d);
+          const to = d ? dropPlace(mine, d) : -1;
+          if (to >= 0) run("space.move", { id: d.id, index: mine[to].index });
         })
-        .children(list.map(space)))
+        .children(this.rows(list, space, t)))
       .when(Boolean(update), (el) => el.child(div().pb(4).child(update)))
+      // Stay awake (awake.js, owner 11-15 s36): its line, above the bottom rows (the usage block stays the last thing); nothing when this computer can't.
+      .when(Boolean(awake), (el) => el.child(div().pb(4).child(awake)))
+      .child(row("side-sessions", "refresh", "Resume sessions", () => showSessions(), null, false))
       .child(row("side-flockbook", "sliders", "Flockbook", () => showSettings(), null, false))
-      .child(row("side-settings", "gear", "Settings", () => run("app.settings")));
+      .child(row("side-settings", "gear", "Settings", () => run("app.settings")))
+      // CI spending this month (cispend.js, owner 11-15 s39), above the weekly usage; nothing until a reading exists.
+      .when(Boolean(spend), (el) => el.child(spend))
+      .child(usageBlock(t));
   }
 }

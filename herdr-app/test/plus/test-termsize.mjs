@@ -1,0 +1,21 @@
+// Tests for state.js nextTermSize (the terminal window's size buttons).
+import { MOD } from "./paths.mjs";
+import fs from "node:fs";
+const src = fs.readFileSync(MOD + "state.js", "utf8");
+const a = src.indexOf("export const TERM_SIZES"), b = src.indexOf("function terminalWindow");
+const c = src.indexOf("export function nextTermSize"), d = src.indexOf("export async function resizeTerminal");
+const { nextTermSize } = new Function(src.slice(a, b).replaceAll("export ", "") + src.slice(c, d).replaceAll("export ", "") + "; return { nextTermSize };")();
+let bad = 0;
+const eq = (n, got, want) => { const ok = got === want; if (!ok) bad++; console.log(ok ? "PASS" : "FAIL", n, ok ? "" : `→ ${got}`); };
+eq("default + larger", nextTermSize("default", "larger"), "large");
+eq("large + larger", nextTermSize("large", "larger"), "full");
+eq("full + larger stays", nextTermSize("full", "larger"), "full");
+eq("small + smaller stays", nextTermSize("small", "smaller"), "small");
+eq("default + smaller", nextTermSize("default", "smaller"), "small");
+eq("toggle from default", nextTermSize("default", "toggle"), "full");
+eq("toggle from full", nextTermSize("full", "toggle"), "default");
+eq("unknown + larger", nextTermSize("weird", "larger"), "default");
+eq("reset from custom → default", nextTermSize("custom", "reset", 0.5, null), "default");
+eq("reset from full → default", nextTermSize("full", "reset", null, "large"), "default");
+eq("reset at default stays (button off)", nextTermSize("default", "reset"), "default");
+process.exit(bad ? 1 : 0);

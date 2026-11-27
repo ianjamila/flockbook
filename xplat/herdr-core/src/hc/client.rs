@@ -56,17 +56,30 @@ fn connector_for(session: &HcSession) -> Box<dyn Connector> {
     Box::new(crate::transport::UnixConnector { path: session.socket_path.clone() })
 }
 
-/// TODO(windows): herdr-core's endpoint on Windows is not documented upstream (docs/security.md names Unix sockets
-/// only). Until it is, every call fails closed with a socket error.
+/// Windows: the named pipe the session names (`\\.\pipe\herdr-core-…`, see `HcSession::resolve`).
+#[cfg(windows)]
+fn connector_for(session: &HcSession) -> Box<dyn Connector> {
+    if session.socket_path.starts_with(crate::transport::PIPE_PREFIX) {
+        return Box::new(crate::transport::PipeConnector { path: session.socket_path.clone() });
+    }
+    no_endpoint(&session.socket_path)
+}
+
+/// No endpoint kind herdr-core has here: every call fails closed with a socket error.
 #[cfg(not(unix))]
-fn connector_for(_session: &HcSession) -> Box<dyn Connector> {
+fn no_endpoint(what: &str) -> Box<dyn Connector> {
     struct NoEndpoint(String);
     impl Connector for NoEndpoint {
         fn connect(&self, _timeout: Option<Duration>) -> Result<Box<dyn Transport>, HerdrError> {
-            Err(HerdrError::Socket(format!("connect {} failed: herdr-core sockets are not supported on this OS yet", self.0)))
+            Err(HerdrError::Socket(format!("connect {} failed: no herdr-core endpoint here (set HC_SOCKET)", self.0)))
         }
     }
-    Box::new(NoEndpoint("herdr-core".into()))
+    Box::new(NoEndpoint(what.into()))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn connector_for(session: &HcSession) -> Box<dyn Connector> {
+    no_endpoint(&session.socket_path)
 }
 
 impl HcClient {

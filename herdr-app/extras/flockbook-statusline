@@ -1,0 +1,57 @@
+#!/usr/bin/env node
+// flockbook-statusline --dir <folder> -- <your status line command...>
+//
+// Claude Code's statusLine command, in front of your own. It prints exactly what your command prints,
+// then saves, per session, the JSON Claude Code sent (<session_id>.json) and that output (<session_id>.out) in
+// <folder>. flockbook-modfeed's `status` reads them (status.rs: the settings' statusLine command must contain
+// "flockbook-statusline" and "--dir <folder>") and the chat header shows them as tags. The Mac Flockbook app ships
+// this wrapper; the Herdr mod does not, so this is a stand-in that writes the same folder format
+// (herdr-core statusline.rs StatusLineFolder). Saving never changes what Claude Code shows; a failed save is ignored.
+"use strict";
+const { spawnSync } = require("node:child_process");
+const fs = require("node:fs");
+const pathJoin = require("node:path").join;
+
+const args = process.argv.slice(2);
+let dir = null;
+while (args.length) {
+  if (args[0] === "--dir") { dir = args[1] ?? null; args.splice(0, 2); }
+  else if (args[0] === "--") { args.shift(); break; }
+  else break;
+}
+
+let input = Buffer.alloc(0);
+try { input = fs.readFileSync(0); } catch {}
+
+let out = Buffer.alloc(0), code = 0;
+if (args.length) {
+  const r = spawnSync(args[0], args.slice(1), { input, stdio: ["pipe", "pipe", "inherit"], maxBuffer: 1 << 20 });
+  out = r.stdout ?? Buffer.alloc(0);
+  code = r.status ?? 1;
+}
+process.stdout.write(out);
+
+// The reader takes a session id that is a plain name (letters, digits, _ and -), records up to 256 KB of input and
+// 64 KB of output, and none older than a day.
+try {
+  const sid = JSON.parse(input.toString("utf8"))?.session_id;
+  if (dir && typeof sid === "string" && /^[A-Za-z0-9_-]+$/.test(sid)) {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const save = (data, name) => {
+      const tmp = pathJoin(dir, `.tmp.${process.pid}`);
+      fs.writeFileSync(tmp, data, { mode: 0o600 });
+      fs.renameSync(tmp, pathJoin(dir, name));
+    };
+    save(input.subarray(0, 262144), `${sid}.json`);
+    save(out.subarray(0, 65536), `${sid}.out`);
+    if (Math.random() < 0.02) {
+      const old = Date.now() - 24 * 3600 * 1000;
+      for (const n of fs.readdirSync(dir)) {
+        if (!/\.(json|out)$|^\.tmp\./.test(n)) continue;
+        const p = pathJoin(dir, n);
+        try { if (fs.statSync(p).mtimeMs < old) fs.unlinkSync(p); } catch {}
+      }
+    }
+  }
+} catch {}
+process.exitCode = code;
