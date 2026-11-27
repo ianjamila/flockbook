@@ -471,6 +471,11 @@ export function needing() {
 export function finished() {
   return agents().filter((a) => !needReason(a) && overlays(a).some((o) => o.group === "handoff"));
 }
+// Clear & re-enter (finished.js): the tabs a run is typing into (the chat's Send waits for them), and each tab's run
+// record { id, state: "running" | "done", result, message, at, prompt, ... }, here so a rebuilt Finished view keeps them.
+export const reentering = new Set();
+export const isReentering = (address) => reentering.has(address);
+export const reenterRuns = new Map();
 
 // Shows a space's chat. The pick is cleared, so the chat starts at the space's focused or first agent.
 export function showSpace(id) {

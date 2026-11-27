@@ -583,3 +583,19 @@ test("the status tags row scrolls sideways with no scrollbar", async () => {
   const row = byId(c.render(fake.agents[0], new Proxy({}, { get: (_t, k) => `#${k}` })), "tags");
   assert.ok("overflow_x_scroll" in row._a && !("overflow_x_scrollbar" in row._a));
 });
+
+test("send_waits_while_reentering: Clear & re-enter is typing into the tab, so Send sends nothing and keeps the text", async () => {
+  const { reentering } = await import("../mods/flockbook/state.js");
+  const cx = fakeCx(); const c = new Composer(cx);
+  const b = c.box(fake.agents[0]);
+  reentering.add("t1");
+  try {
+    b.input.set_value("hello"); await c.submit(cx);
+    assert.equal(sent.length, 0, "nothing sent");
+    assert.equal(b.input.value(), "hello", "the text stays in the box");
+    assert.equal(c.note.text, "Clear & re-enter is running in this tab. Wait a moment.");
+    assert.equal(c.note.bad, true);
+  } finally { reentering.delete("t1"); }
+  await c.submit(cx);
+  assert.equal(sent.length, 1, "after the run: the same text goes");
+});

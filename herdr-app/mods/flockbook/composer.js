@@ -29,7 +29,7 @@ export function refocusWanted(f, born) {
   return Boolean(f && (f.on || born - f.at < BLUR_GRACE_MS));
 }
 // </refocus>
-import { agentName, icon, SPIN_MS } from "./state.js";
+import { agentName, icon, SPIN_MS, isReentering } from "./state.js";
 import { answered } from "./asks.js";
 import * as sidecar from "./sidecar.js";
 import { setting } from "./config.js";
@@ -463,6 +463,8 @@ export class Composer {
     const now = b.input.value();
     const text = withoutEnter(now, now === this.typed[1] ? this.typed[0] : this.typed[1]).replace(/\s+$/, "");
     if (!text.trim() && !b.files.length) { b.setText(""); return; }
+    // The Finished screen's Clear & re-enter is typing into this tab: a send now would land in the middle of it.
+    if (isReentering(a)) { b.setText(text); this.note = { text: "Clear & re-enter is running in this tab. Wait a moment.", bad: true }; cx.notify(); return; }
     // A screen command alone ("/model", "/status"): not sent; the text stays for a value to be added.
     const had = this.cmds.get(a);
     const blocked = b.files.length ? null : screenNote(had?.list, had?.screens, text);

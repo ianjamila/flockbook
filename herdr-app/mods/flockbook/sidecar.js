@@ -86,6 +86,11 @@ export const send = (terminal, text, files = [], seen = null, over = null) => ca
   ...(seen?.agent ? ["--expect-kind", seen.agent] : []), ...(seen?.path ? ["--expect-path", seen.path] : []),
   "--cache", cachePath()]);
 
+// Clear & re-enter (finished.js): the helper where the terminal runs types /clear, waits for the new conversation, checks
+// again and types `text`. `seen`: the agent and log the Finished screen showed (only .path is sent: --expect-path).
+export const reenter = (terminal, text, seen) => call("reenter", ["--terminal", terminal, "--expect-path", seen.path,
+  "--cache", cachePath(), "--text", text]);
+
 // The sidecar's "changed" reply when another agent took the pane: nothing was sent.
 export const AGENT_CHANGED = "Another agent is in this pane now. Nothing was sent.";
 export const agentChanged = (done) => done?.result === "changed" && /another agent/i.test(done?.message ?? "");

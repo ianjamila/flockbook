@@ -1,17 +1,57 @@
 // The "finished" view (owner 11-27: "a new tab after Needs you titled Finished … completed terminals with re-entry
 // prompts"): the tabs the Overview files under "Hand-off given" on the left (state.js finished()), the picked one's
-// re-entry prompt on the right with Copy prompt / Copy full / Open tab. The owner then types /clear in that tab and
-// pastes; its new turn takes it off the list. Nothing here types into a terminal.
+// re-entry prompt on the right with Clear & re-enter / Copy prompt / Copy full / Open tab. Clear & re-enter has the helper
+// where the tab runs type /clear and then the prompt (sidecar.reenter: every check and key happens there); without it
+// (an older helper, another agent) the owner types /clear in that tab and pastes. The tab's new turn takes it off the list.
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { theme, notify } from "herdr";
-import { finished, agentName, showAgent, icon, watchEdge } from "./state.js";
+import { finished, agentName, showAgent, icon, watchEdge, reentering, reenterRuns } from "./state.js";
+import { agents } from "./parked.js";
+import * as sidecar from "./sidecar.js";
 import { readHandoff, readFull } from "./handoff-read.js";
 import { startTop, overBar, barOver, barRoom, noteScreenHeight } from "./top.js";
 import { withSnapshot } from "./parked.js";
 
 // A read that gave no prompt (the helper failed, or the reply was not logged yet) is tried again after this long.
 export const RETRY_MS = 5000;
+// After a run that sent, its row stays this long, then goes and the pick moves on.
+export const DROP_MS = 5000;
+
+const NO_ANSWER = "No answer from the helper: the tab may have been cleared and the prompt may or may not have gone. Check the tab.";
+const SENT = "Re-entered: the new conversation has its prompt.";
+const CHANGED = "The re-entry prompt changed. Check it, then press again.";
+const COPY_FAILED = "Couldn't put the prompt on your clipboard: use Copy again.";
+const TAIL_PASTE = "The prompt is on your clipboard: open the tab and paste.";
+const TAIL_UNCONFIRMED = "The prompt may already be in the tab. Check it before pasting.";
+const TAIL_CLEAR = "Check the tab shows a new conversation before pasting; if it does not, type /clear first.";
+const HINT = "Types /clear in this tab, then the prompt above. If the tab's box has text in it, nothing is typed.";
+
+// What the helper's answer means (reenter.rs): its one `done` line (result, message, keys) or its `error` line; a
+// `done` line wins, because a helper that answered but lost its end line comes back with both. `keys` says whether a key
+// went to the tab: "none" (nothing typed), "yes", "maybe"; a line without it, no line at all, or a helper that was killed
+// or never answered counts as "maybe". → { keys, result, lead, tail }: `tail` null when there is nothing to paste.
+export function readAnswer(answer) {
+  const done = answer?.lines?.find((l) => l?.type === "done");
+  const line = done ?? answer?.error ?? null;
+  if (!line) return { keys: "maybe", result: "no_answer", lead: NO_ANSWER, tail: TAIL_PASTE };
+  const result = line.result ?? line.code ?? "failed";
+  const keys = line.keys === "none" || line.keys === "yes" ? line.keys : "maybe";
+  // An error that does not say what was typed (the helper's own failure, a kill by the exec timeout) is no answer.
+  if (!done && line.keys === undefined) return { keys: "maybe", result: "no_answer", lead: NO_ANSWER, tail: TAIL_PASTE };
+  const message = String(line.message ?? "").trim();
+  if (keys === "none") {
+    // Some refusals already say it (cards::refused: "Nothing was sent."): one such sentence is enough.
+    const lead = /nothing was (sent|typed)/i.test(message) ? message : `${message} Nothing was typed.`.trim();
+    return { keys, result, lead, tail: null };
+  }
+  if (result === "sent") return { keys, result, lead: SENT, tail: null };
+  const tail = result === "prompt_unconfirmed" ? TAIL_UNCONFIRMED
+    : result === "clear_unknown" || result === "clear_unconfirmed" ? TAIL_CLEAR : TAIL_PASTE;
+  return { keys, result, lead: message || "The tab may have been cleared.", tail };
+}
+
+let runs = 0;   // run ids: only the run with the matching id may change or clear its record
 
 export class FinishedView {
   constructor(cx) {
@@ -25,22 +65,51 @@ export class FinishedView {
     this.copied = null;         // { address, what } for 2 s after a copy
     this.reader = readHandoff;  // how a tab's prompt is read (tests hand in a fake)
     this.fullReader = readFull;
+    this.reenterer = sidecar.reenter;   // how Clear & re-enter runs (tests hand in a fake)
+    this.hasCommand = sidecar.hasCommand;
+    this.runs = reenterRuns;    // address → the tab's Clear & re-enter run (state.js; a rebuilt view keeps them)
+    this.canReenter = null;     // whether the helper has `reenter`: null until asked; asked again after a failed ask
+    this.asking = false; this.askedAt = 0;
+    this.note = null;           // { address, text }: a click that typed nothing (the prompt changed)
+    cx.spawn((cx2) => this.askHelper(cx2));
     cx.timer.every(500, (cx) => this.tick(cx));
+  }
+
+  // The helper's commands (sidecar.hasCommand asks once and keeps the answer; a failed ask is asked again next time).
+  async askHelper(cx) {
+    if (this.asking) return;
+    this.asking = true; this.askedAt = Date.now();
+    try { this.canReenter = Boolean(await this.hasCommand("reenter")); } catch { this.canReenter = null; } finally { this.asking = false; }
+    cx.notify?.();
+  }
+
+  // The tabs on screen: those Finished lists, and the tabs whose run is on (or just ended), which stay until the owner picks
+  // another (the /clear takes the tab off finished() within ~15 s, but its prompt and result should stay beside each other).
+  listed() {
+    const list = finished();
+    for (const address of this.runs.keys()) {
+      if (list.some((a) => a.address === address)) continue;
+      const a = agents().find((x) => x.address === address);
+      if (a) list.push(a);
+    }
+    return list;
   }
 
   // Every half second: which tab shows on the right; its prompt is read the first time it shows.
   tick(cx) { withSnapshot(() => this.tickBody(cx)); }
 
   tickBody(cx) {
-    const list = finished();
+    const list = this.listed();
     const cur = list.find((a) => a.address === this.picked) ?? list[0] ?? null;
     if ((cur?.address ?? null) !== this.shown) cx.notify?.();
     this.shown = cur?.address ?? null;
-    // A tab that left the list is read afresh if it comes back (a new hand-off, a new prompt).
-    for (const k of [...this.read.keys()]) if (!list.some((a) => a.address === k)) this.read.delete(k);
+    // A tab that left the list is read afresh if it comes back (a new hand-off, a new prompt). A tab with a run is not
+    // read again: after its /clear the feed shows the new conversation, not the prompt that was sent.
+    for (const k of [...this.read.keys()]) if (!list.some((a) => a.address === k) && !this.runs.has(k)) this.read.delete(k);
     const r = cur ? this.read.get(cur.address) : null;
     const due = !r || (!r.prompt && Date.now() - (r.at ?? 0) >= RETRY_MS);
-    if (cur && due && !this.reading.has(cur.address)) cx.spawn((cx) => this.load(cx, cur.address));
+    if (cur && due && !this.runs.has(cur.address) && !this.reading.has(cur.address)) cx.spawn((cx) => this.load(cx, cur.address));
+    if (this.canReenter !== true && !this.asking && Date.now() - this.askedAt >= RETRY_MS) cx.spawn((cx2) => this.askHelper(cx2));
   }
 
   async load(cx, address) {
@@ -92,6 +161,89 @@ export class FinishedView {
     cx.notify?.();
   }
 
+  // Clear & re-enter. The click's synchronous part: a run already on in this tab → nothing; else the prompt and log the
+  // screen shows are taken, and the tab's run and its lock (which holds the chat's Send) are set before any await.
+  begin(address) {
+    if (this.runs.get(address)?.state === "running") return null;
+    const r = this.read.get(address) ?? this.runPrompt(address);
+    if (!r?.prompt || !r.seen?.path) return null;
+    const id = ++runs;
+    const shown = { prompt: r.prompt, path: r.seen.path };
+    this.runs.set(address, { id, state: "running", prompt: shown.prompt, seen: r.seen, at: Date.now() });
+    reentering.add(address);
+    this.note = null;
+    return { id, shown, seen: r.seen };
+  }
+
+  // The prompt of a tab whose run is on or done, when this view has not read it (the view was rebuilt mid-run).
+  runPrompt(address) {
+    const run = this.runs.get(address);
+    return run ? { prompt: run.prompt, file: null, seen: run.seen ?? null, problem: null } : null;
+  }
+
+  // Both end a run's hold on its tab, and only while the run still owns it: `release` also drops the record (nothing
+  // was typed), `settle` keeps it with its result (the lock goes, the result stays on screen).
+  release(address, id) {
+    if (this.runs.get(address)?.id !== id) return;
+    this.runs.delete(address); reentering.delete(address);
+  }
+  settle(address, id) {
+    if (this.runs.get(address)?.id === id) reentering.delete(address);
+  }
+
+  async reenter(cx, address, started = this.begin(address)) {
+    if (!started) return;
+    const { id, shown, seen } = started;
+    const own = () => this.runs.get(address)?.id === id;
+    try {
+      // The reply is read again: a prompt or log other than the one the owner is looking at types nothing.
+      let again;
+      try { again = await this.reader(address); } catch (e) { again = { prompt: null, problem: String(e?.message ?? e) }; }
+      if (!again.prompt || again.problem || again.prompt !== shown.prompt || again.seen?.path !== shown.path) {
+        if (again.prompt) this.read.set(address, { ...again, at: Date.now() });
+        this.release(address, id);
+        this.note = { address, text: CHANGED };
+        notify({ title: CHANGED, level: "warning", timeout: 4000 });
+        return;
+      }
+      let answer;
+      try { answer = await this.reenterer(address, shown.prompt, seen); } catch { answer = null; }
+      const a = readAnswer(answer);
+      let text = a.lead, copyFailed = false;
+      if (a.tail) {
+        // A key may have gone: the prompt goes on the clipboard whatever else happens (the owner pastes it).
+        try { cx.write_to_clipboard(shown.prompt); text = `${a.lead} ${a.tail}`; }
+        catch { copyFailed = true; text = `${a.lead} ${COPY_FAILED}`; }
+      }
+      const line = (answer?.lines ?? []).find((l) => l?.type === "done") ?? answer?.error ?? null;
+      if (own()) Object.assign(this.runs.get(address), { state: "done", result: a.result, message: line?.message ?? null, at: Date.now(), lead: a.lead, tail: a.tail, note: text, bad: a.result !== "sent", copyFailed });
+      notify({ title: text, level: a.result === "sent" ? "info" : "warning", timeout: a.result === "sent" ? 3000 : 8000 });
+      if (a.result === "sent") cx.timer?.after?.(DROP_MS, (cx2) => this.drop(cx2, address, id));
+    } finally { this.settle(address, id); cx.notify?.(); }
+  }
+
+  // 5 s after a run that sent: its row goes and the pick moves to the next tab.
+  drop(cx, address, id) {
+    if (this.runs.get(address)?.id !== id) return;
+    this.runs.delete(address);
+    if (this.picked === address || this.shown === address) this.picked = this.listed().find((a) => a.address !== address)?.address ?? null;
+    cx?.notify?.();
+  }
+
+  // Copy again, after a clipboard that would not take the prompt: the run's own prompt, never a re-read (after the
+  // /clear the feed shows the new conversation).
+  copyAgain(cx, address) {
+    const run = this.runs.get(address);
+    if (!run?.prompt) return;
+    try {
+      cx.write_to_clipboard(run.prompt);
+      notify({ title: "Re-entry prompt copied to the clipboard", level: "info", timeout: 2000 });
+      run.note = `${run.lead} ${run.tail}`; run.copyFailed = false;
+      this.flashCopied(cx, address, "again");
+    } catch { notify({ title: COPY_FAILED, level: "warning", timeout: 4000 }); }
+    cx.notify?.();
+  }
+
   flashCopied(cx, address, what) {
     const mark = { address, what };
     this.copied = mark;
@@ -106,7 +258,7 @@ export class FinishedView {
     const t = theme();
     const stop = (_e, cx) => cx.stop_propagation();
     return v_flex().id("finished-screen").relative().size_full().bg(t.background).on_size_change((size) => noteScreenHeight(size, this.barOver))
-      .child(div().size_full().pt(barRoom(this.barOver)).when(this.barOver, (el) => el.on_mouse_down("left", stop)).child(this.content(t)))
+      .child(div().size_full().pt(barRoom(this.barOver)).when(this.barOver, (el) => el.on_mouse_down("left", stop)).child(this.content(t, cx)))
       .when(this.barOver, (el) => el.child(overBar(t)));
   }
 
@@ -117,8 +269,8 @@ export class FinishedView {
       .on_click(onClick).child(label);
   }
 
-  content(t) {
-    const list = finished();
+  content(t, cx) {
+    const list = this.listed();
     if (!list.length) {
       return v_flex().size_full().items_center().justify_center().gap(8).text_color(t.muted)
         .child(svg(icon("check")).size(28).text_color(t.done))
@@ -131,15 +283,18 @@ export class FinishedView {
       const p = a.program;
       return h_flex().id(`fin-${a.address}`).h(52).px(12).gap(10).items_center().rounded(8)
         .bg(on ? t.selected : t.background).hover((s) => s.bg(on ? t.selected : t.hover))
-        .on_click((_e, cx) => { this.picked = a.address; cx.notify(); })
+        .on_click((_e, cx) => { this.pick(a.address); cx.notify(); })
         .when(Boolean(p?.icon), (el) => el.child(p.tint ? svg(p.icon).size(18).text_color(t.muted) : image(p.icon).size(18)))
         .child(v_flex().flex_1().min_w(0)
           .child(div().truncate().text_size(13.5).text_color(t.foreground).child(agentName(a)))
           .child(div().truncate().text_size(11.5).text_color(t.muted).child(`${a.space_name} · hand-off given`)))
         .child(div().size(8).flex_none().rounded(4).bg(t.done));
     };
-    const r = this.read.get(cur.address);
     const addr = cur.address;
+    const r = this.read.get(addr) ?? this.runPrompt(addr);
+    const run = this.runs.get(addr);
+    const canRe = Boolean(r?.prompt) && r.seen?.agent === "claude" && Boolean(r.seen?.path) && this.canReenter === true
+      && typeof cx?.write_to_clipboard === "function";
     const copied = (what) => this.copied?.address === addr && this.copied.what === what;
     let body;
     if (!r) body = div().text_size(13).text_color(t.muted).child("Reading its re-entry prompt…");
@@ -158,11 +313,22 @@ export class FinishedView {
         .child(div().text_size(13).text_color(t.muted).child(cur.title || `${cur.space_name} · ${cur.tab_name}`))
         .child(body)
         .child(h_flex().gap(8).items_center()
-          .when(hasPrompt, (el) => el.child(this.button("fin-copy", this.busy === "copy" ? "Copying…" : copied("copy") ? "Copied" : "Copy prompt", true, t,
+          .when(canRe, (el) => el.child(this.button("fin-reenter", run?.state === "running" ? "Re-entering…" : "Clear & re-enter", true, t,
+            () => { const s = this.begin(addr); if (s) cx.spawn((cx2) => this.reenter(cx2, addr, s)); })))
+          .when(hasPrompt, (el) => el.child(this.button("fin-copy", this.busy === "copy" ? "Copying…" : copied("copy") ? "Copied" : "Copy prompt", !canRe, t,
             (_e, cx) => { if (!this.busy) cx.spawn((cx2) => this.copy(cx2, addr)); })))
           .when(hasPrompt && Boolean(r?.file), (el) => el.child(this.button("fin-full", this.busy === "full" ? "Copying…" : copied("full") ? "Copied" : "Copy full", false, t,
             (_e, cx) => { if (!this.busy) cx.spawn((cx2) => this.copyFull(cx2, addr)); })))
+          .when(run?.copyFailed, (el) => el.child(this.button("fin-copy-again", copied("again") ? "Copied" : "Copy again", false, t, (_e, cx2) => this.copyAgain(cx2, addr))))
           .child(this.button("fin-open", "Open tab", false, t, () => showAgent(addr))))
-        .when(hasPrompt, (el) => el.child(div().text_size(12).text_color(t.muted).child("Then type /clear in the tab and paste."))));
+        .when(hasPrompt, (el) => el.child(div().id("fin-hint").text_size(12).text_color(t.muted).child(canRe ? HINT : "Then type /clear in the tab and paste.")))
+        .when(Boolean(run?.note), (el) => el.child(div().id("fin-note").whitespace_normal().text_size(13).text_color(run.bad ? t.blocked : t.foreground).child(run.note)))
+        .when(this.note?.address === addr, (el) => el.child(div().id("fin-note").whitespace_normal().text_size(13).text_color(t.blocked).child(this.note.text))));
+  }
+
+  // Picking another tab drops the finished runs of the others (a result stays only until the owner looks elsewhere).
+  pick(address) {
+    this.picked = address; this.note = null;
+    for (const [k, run] of [...this.runs]) if (k !== address && run.state === "done") this.runs.delete(k);
   }
 }

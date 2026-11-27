@@ -6,17 +6,19 @@ import { emptyFeed, applyFeed } from "./feedstate.js";
 import { replyHandoff } from "./blocks.js";
 import { readFullPrompt } from "./where.js";
 
-// { prompt, file, problem }: prompt null when the newest reply gives none; file null when it names no
-// ~/claude-notes/handoffs/… file; problem: why the chat could not be read (prompt and file null then).
+// { prompt, file, seen, problem }: prompt null when the newest reply gives none; file null when it names no
+// ~/claude-notes/handoffs/… file; seen { agent, path }: the agent and log the chat read (as chat.js builds the composer's
+// `seen`; Clear & re-enter sends only when the log is still that one); problem: why the chat could not be read (prompt
+// and file null then, seen empty).
 export async function readHandoff(address) {
   try {
     const f = emptyFeed(address);
     applyFeed(f, await sidecar.feed(address));
-    if (f.error) return { prompt: null, file: null, problem: f.error.message || "the helper could not read its chat" };
+    if (f.error) return { prompt: null, file: null, seen: { agent: null, path: null }, problem: f.error.message || "the helper could not read its chat" };
     const h = replyHandoff(f.rows);
-    return { prompt: h?.prompt ?? null, file: h?.file ?? null, problem: null };
+    return { prompt: h?.prompt ?? null, file: h?.file ?? null, seen: { agent: f.agent ?? null, path: f.path ?? null }, problem: null };
   } catch (e) {
-    return { prompt: null, file: null, problem: String(e?.message ?? e) };
+    return { prompt: null, file: null, seen: { agent: null, path: null }, problem: String(e?.message ?? e) };
   }
 }
 

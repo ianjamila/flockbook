@@ -240,3 +240,15 @@ test("readHandoff: the newest prompt, the hand-off file it names, or the problem
   assert.equal(c.prompt, null);
   assert.ok(c.problem, "a helper error is reported, not swallowed");
 });
+
+// Clear & re-enter: the Finished screen sends only into the log it showed, so readHandoff also gives the agent and log.
+test("readHandoff: seen has the feed's agent and log; empty when the chat could not be read", async () => {
+  const { readHandoff } = await import("../mods/flockbook/handoff-read.js");
+  const jl = (...lines) => ({ code: 0, stdout: lines.map((l) => JSON.stringify(l)).join("\n") + "\n", stderr: "" });
+  const head = { type: "header", protocol: 1, sidecar: "0.1.0", command: "feed" }, end = { type: "end", ok: true };
+  const logLine = { type: "log", agent: "claude", path: "/logs/seen.jsonl", start: 0, size: 10, cursor: "c1", model: "m" };
+  fake.exec = () => jl(head, logLine, { type: "splice", at: 0, count: 1 }, { type: "row", id: "a1", k: "assistant", text: "Re-entry prompt:\n\n> Go.", ts: 1 }, end);
+  assert.deepEqual((await readHandoff("t2")).seen, { agent: "claude", path: "/logs/seen.jsonl" });
+  fake.exec = () => ({ code: 0, stdout: JSON.stringify({ type: "error", message: "no such terminal" }) + "\n" + JSON.stringify(end) + "\n", stderr: "" });
+  assert.deepEqual((await readHandoff("t2")).seen, { agent: null, path: null });
+});
