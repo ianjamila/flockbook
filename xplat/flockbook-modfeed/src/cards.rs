@@ -106,7 +106,13 @@ pub const LOOK_LIMIT: std::time::Duration = std::time::Duration::from_millis(500
 /// reads the same text, all dim, with the cursor at the box start. Any error or doubt: false (refused as before).
 fn dim_suggestion(client: &HcClient, pane_id: &str, screen: &str) -> bool {
     let Some(text) = crate::queue::claude_slash_row(screen) else { return false };
-    client.first_paint(pane_id, LOOK_LIMIT).is_ok_and(|p| crate::queue::claude_suggestion_in_paint(&p, &text))
+    dim_row(client, pane_id, &text)
+}
+
+/// One watch-only first paint (`LOOK_LIMIT` at most): true only when the box row there reads `row`, every character
+/// dim, the cursor at the box start (`claude_suggestion_in_paint`). Any error or doubt: false.
+pub fn dim_row(client: &HcClient, pane_id: &str, row: &str) -> bool {
+    client.first_paint(pane_id, LOOK_LIMIT).is_ok_and(|p| crate::queue::claude_suggestion_in_paint(&p, row))
 }
 
 pub const BOX_NOT_EMPTY: &str = "The agent's box has text in it. Clear it in the terminal first. Nothing was sent.";

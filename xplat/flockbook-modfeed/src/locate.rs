@@ -41,6 +41,12 @@ pub struct Found {
     pub path: Option<String>,
     /// The cache was used (no process scan).
     pub cached: bool,
+    /// The resolver's log before `continued-in` was followed (a cached find: the cached path as it was written).
+    /// `path` is `latest(raw)`; the two differ when the conversation went on in another log.
+    pub raw: Option<String>,
+    /// The pid record the resolver matched this Claude pane by: `(pid, sessions folder)`, read again with
+    /// `read_pid_record`. None on a cached find, an unmatched pane, a fallback pid, a `bg` or parked record.
+    pub pid_record: Option<(i32, String)>,
 }
 
 /// A cached path is checked again after this long.
@@ -157,7 +163,7 @@ fn look(terminal: &str, ws: &[Workspace], resolver: &mut SessionResolver, cache_
     if let Some(e) = cache.entries.get(&pane.terminal_id).filter(|_| use_cache) {
         if fresh(Some(e), &pane, &kind, now_s) {
             let path = latest(e.path.clone(), &kind);
-            return Ok(Found { pane, path, cached: true });
+            return Ok(Found { pane, path, cached: true, raw: e.path.clone(), pid_record: None });
         }
     }
     let agents: Vec<&Pane> = herdr_core::all_panes(ws).into_iter().filter(|p| p.agent.is_some() && !p.terminal_id.contains('/')).collect();
@@ -175,6 +181,8 @@ fn look(terminal: &str, ws: &[Workspace], resolver: &mut SessionResolver, cache_
         next.entries.insert(p.terminal_id.clone(), Entry { kind: k.clone(), cwd: p.cwd.clone(), pids: p.process_ids.clone(), path, checked: now_s, sid, config });
     }
     write_cache(&next, cache_path);
-    let path = latest(absolute(found.get(&pane.id), &kind), &kind);
-    Ok(Found { pane, path, cached: false })
+    let raw = absolute(found.get(&pane.id), &kind);
+    let path = latest(raw.clone(), &kind);
+    let pid_record = if kind == "claude" { resolver.claude_pid_record(&pane.id) } else { None };
+    Ok(Found { pane, path, cached: false, raw, pid_record })
 }

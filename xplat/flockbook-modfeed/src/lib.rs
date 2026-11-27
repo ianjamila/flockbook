@@ -15,6 +15,7 @@ pub mod parked;
 pub mod paste;
 pub mod protocol;
 pub mod queue;
+pub mod reenter;
 pub mod remote;
 pub mod rows;
 pub mod serve;

@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex};
 pub type OnKeys = Arc<dyn Fn(&str, &[String], &mut State) + Send + Sync>;
 /// Called as a `terminal.send` is delivered, before it answers: (address, text).
 pub type OnSend = Arc<dyn Fn(&str, &str, &mut State) + Send + Sync>;
+/// Called for every plain-mode call, after it is recorded and before it answers: (method).
+pub type OnCall = Arc<dyn Fn(&str, &mut State) + Send + Sync>;
 
 #[derive(Default)]
 pub struct State {
@@ -19,6 +21,15 @@ pub struct State {
     pub calls: Vec<(String, Value)>,
     pub on_keys: Option<OnKeys>,
     pub on_send: Option<OnSend>,
+    pub on_call: Option<OnCall>,
+    /// Per `terminal.send`, in order (the Nth send is the Nth entry; missing: false): the request is read and recorded,
+    /// then the connection is closed with no reply (what the sender sees when the core dies mid-send).
+    pub send_close: Vec<bool>,
+    /// Per `terminal.send`, in order: `Some(kind)` answers an error reply whose `data.kind` is `kind`; nothing is taken
+    /// (no `on_send`), as the core refuses `status_mismatch` or `blocked`.
+    pub send_refuse: Vec<Option<String>>,
+    /// Seconds a watch-only attach waits before it gives its paint.
+    pub paint_delay: f64,
     /// Seconds `terminal.send` takes before it answers (0: at once; negative: never).
     pub send_delay: f64,
     /// Seconds `terminal.keys` takes before it answers (hc's typing-quiet rule can hold keys this long).
@@ -110,6 +121,22 @@ impl FakeHc {
     }
     pub fn on_send(&self, f: Option<OnSend>) {
         self.state.lock().unwrap().on_send = f;
+    }
+    pub fn on_call(&self, f: Option<OnCall>) {
+        self.state.lock().unwrap().on_call = f;
+    }
+    pub fn send_close(&self, v: Vec<bool>) {
+        self.state.lock().unwrap().send_close = v;
+    }
+    pub fn send_refuse(&self, v: Vec<Option<&str>>) {
+        self.state.lock().unwrap().send_refuse = v.into_iter().map(|k| k.map(String::from)).collect();
+    }
+    pub fn paint_delay(&self, secs: f64) {
+        self.state.lock().unwrap().paint_delay = secs;
+    }
+    /// The texts of every `terminal.send` so far, in order.
+    pub fn sent_texts(&self) -> Vec<String> {
+        self.calls("terminal.send").iter().map(|p| p["text"].as_str().unwrap_or("").to_string()).collect()
     }
     pub fn keys(&self) -> Vec<Vec<String>> {
         self.state
@@ -207,6 +234,9 @@ fn serve(mut s: std::os::unix::net::UnixStream, st: Arc<Mutex<State>>) {
         let out = {
             let mut g = st.lock().unwrap();
             g.calls.push((m.clone(), p.clone()));
+            if let Some(cb) = g.on_call.clone() {
+                cb(&m, &mut g);
+            }
             match m.as_str() {
                 "terminal.list" => Some(reply(json!({"terminals": g.terminals, "hidden_finished": 0, "machines": []}))),
                 "doc.get" => {
@@ -270,8 +300,14 @@ fn serve(mut s: std::os::unix::net::UnixStream, st: Arc<Mutex<State>>) {
                     Some(reply(json!({"turn": 0, "status": "idle", "started": true})))
                 }
                 "terminal.send" => {
+                    let nth = g.calls.iter().filter(|(m, _)| m == "terminal.send").count() - 1;
+                    if g.send_close.get(nth).copied().unwrap_or(false) {
+                        return;
+                    }
                     let d = g.send_delay;
-                    if d < 0.0 {
+                    if let Some(Some(kind)) = g.send_refuse.get(nth).cloned() {
+                        Some(json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32000, "message": "refused", "data": {"kind": kind}}}))
+                    } else if d < 0.0 {
                         None
                     } else {
                         if let Some(cb) = g.on_send.clone() {
@@ -337,8 +373,14 @@ fn serve_framed(mut s: std::os::unix::net::UnixStream, mut r: BufReader<std::os:
         let a = o["params"]["terminal"].as_str().unwrap_or("").to_string();
         let ok = json!({"jsonrpc": "2.0", "id": o["id"], "result": {"channel": 3, "terminal": {"cols": 80, "rows": 24}}});
         let _ = s.write_all(&frame(0, 0, ok.to_string().as_bytes()));
-        if let Some(paint) = g.paints.get(&a) {
-            let _ = s.write_all(&frame(3, 0, paint));
+        let (delay, paint) = (g.paint_delay, g.paints.get(&a).cloned());
+        if delay > 0.0 {
+            drop(g);
+            std::thread::sleep(std::time::Duration::from_secs_f64(delay));
+            g = st.lock().unwrap();
+        }
+        if let Some(paint) = paint {
+            let _ = s.write_all(&frame(3, 0, &paint));
         }
         if let Some(t) = g.after_attach.take() {
             g.terminals = t;

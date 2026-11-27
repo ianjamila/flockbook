@@ -751,21 +751,43 @@ pub fn claude_suggestion_in_paint(paint: &[u8], text: &str) -> bool {
         return false;
     }
     let (cells, cursor) = paint_cells(&String::from_utf8_lossy(paint));
-    // The box row: the last row whose first visible character is "❯".
-    let mut rows: Vec<u32> = cells.keys().map(|&(r, _)| r).collect();
-    rows.dedup();
-    let Some((row, mark)) = rows.into_iter().rev().find_map(|r| {
-        let (&(_, c), &(ch, _)) = cells.range((r, 0)..(r + 1, 0)).find(|(_, &(c, _))| c != ' ' && c != '\u{a0}')?;
-        (ch == '❯').then_some((r, c))
-    }) else {
-        return false;
-    };
+    let Some((row, mark)) = paint_box_row(&cells) else { return false };
     if cursor != (row, mark + 2) {
         return false;
     }
     let after: Vec<&(char, bool)> = cells.range((row, mark + 2)..(row + 1, 0)).map(|(_, v)| v).collect();
     let shown: String = after.iter().map(|(c, _)| if *c == '\u{a0}' { ' ' } else { *c }).collect();
     shown.trim() == text && after.iter().all(|(c, dim)| *dim || c.is_whitespace())
+}
+
+/// The box row of a paint: the last row whose first visible character is "❯", and that character's column. The
+/// last one, so the `❯ /clear` echo row that stays above the box after `/clear` is never taken for it.
+fn paint_box_row(cells: &Cells) -> Option<(u32, u32)> {
+    let mut rows: Vec<u32> = cells.keys().map(|&(r, _)| r).collect();
+    rows.dedup();
+    rows.into_iter().rev().find_map(|r| {
+        let (&(_, c), &(ch, _)) = cells.range((r, 0)..(r + 1, 0)).find(|(_, &(c, _))| c != ' ' && c != '\u{a0}')?;
+        (ch == '❯').then_some((r, c))
+    })
+}
+
+/// Whether the cursor in `paint` stands right after "❯ " on the box's first row: an empty box. Typed text, even
+/// spaces, or a second line moves it. No box row in the paint: false.
+pub fn cursor_at_box_start(paint: &[u8]) -> bool {
+    let (cells, cursor) = paint_cells(&String::from_utf8_lossy(paint));
+    paint_box_row(&cells).is_some_and(|(row, mark)| cursor == (row, mark + 2))
+}
+
+/// Claude Code's ruled "❯" input box as the screen shows it, BEFORE any placeholder is taken for empty: the rows
+/// between the last two rule lines (`raw_box`: nothing trimmed or dropped, so one blank row and two look different).
+/// None: no ruled box whose first row starts with "❯" (a dialog, a menu, nothing on screen).
+pub fn claude_box_raw(screen: &str) -> Option<Vec<String>> {
+    let lines = lines_of(screen);
+    let (a, b) = box_edges(&lines)?;
+    if b <= a + 1 || !lines[a + 1].replace('\u{a0}', " ").starts_with('❯') {
+        return None;
+    }
+    Some(raw_box(screen))
 }
 
 /// Cells by (row, col): the character and whether it is dim.

@@ -147,3 +147,38 @@ fn send_anyway_clears_the_lone_word_then_sends() {
     assert_eq!(d["result"], "box_not_empty", "a plain send of that text ({d})");
     assert_eq!(fake.keys().len(), k1, "no keys");
 }
+
+const FX_DIM: &[u8] = include_bytes!("fixtures/claude-dim-suggestion.paint");
+const FX_EMPTY: &[u8] = include_bytes!("fixtures/claude-empty-box.paint");
+const FX_CLEAR_02: &[u8] = include_bytes!("fixtures/claude-after-clear-0s2.paint");
+const FX_CLEAR_3S: &[u8] = include_bytes!("fixtures/claude-after-clear-3s.paint");
+
+/// Clear & re-enter lets a one-row box that is not a "/…" line through only when its paint proves it is Claude's dim
+/// placeholder. The paint is the one recorded from a throwaway tab (Claude Code 2.1.332), not a hand-made one.
+/// Catches: the real dim row not read as dim (the button would refuse every fresh tab), and a changed character, or
+/// text that is no longer dim, still passing.
+#[test]
+fn throwaway_paint_fixture_reads_as_dim() {
+    use modfeedkit::queue::claude_suggestion_in_paint as dim;
+    let row = "Try \"how does flockbook-helper-fixes.patch work?\"";
+    assert!(dim(FX_DIM, row), "the recorded row");
+    assert!(!dim(FX_DIM, &row.replace("work", "walk")), "one character changed");
+    let typed = String::from_utf8_lossy(FX_DIM).replace("\x1b[2mTry", "Try").into_bytes();
+    assert!(!dim(&typed, row), "the same text, not dim");
+    assert!(!dim(FX_EMPTY, row), "an empty box shows no such text");
+}
+
+/// Catches: an empty box not recognised by its cursor (the button would refuse every cleared tab), the `❯ /clear` echo
+/// row above the box taken for the box, and typed spaces or a second line passing for an empty box.
+#[test]
+fn cursor_at_box_start_on_the_empty_fixtures() {
+    use modfeedkit::queue::cursor_at_box_start as at_start;
+    for (name, p) in [("empty", FX_EMPTY), ("0.2 s after /clear", FX_CLEAR_02), ("3 s after /clear", FX_CLEAR_3S), ("dim placeholder", FX_DIM)] {
+        assert!(at_start(p), "{name}");
+    }
+    let moved = String::from_utf8_lossy(FX_EMPTY).replace("\x1b[115;3H", "\x1b[115;6H").into_bytes();
+    assert!(!at_start(&moved), "typed spaces moved the cursor");
+    let second_row = String::from_utf8_lossy(FX_EMPTY).replace("\x1b[115;3H", "\x1b[116;3H").into_bytes();
+    assert!(!at_start(&second_row), "a second line");
+    assert!(!at_start(b"\x1b[2J\x1b[1;1Hno box here"), "no box row at all");
+}
