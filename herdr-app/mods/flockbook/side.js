@@ -5,12 +5,12 @@ import { v_flex, h_flex } from "gpui-base";
 import { theme, run, openOverlay, closeOverlay, props } from "herdr";
 import { spaces, withSnapshot } from "./parked.js";
 import { openMenu, spaceItems } from "./menu.js";
-import { watchGrace, needing, showNeeds, showOverview, showSettings, showSessions, shownScreen, icon, showSpace, toggleSidebar, sidebarShown, peekClosed, PEEK_W, PEEK_GAP, SPRING, tabLabel, subStatus, tabAgents, tabStatus, answerInTerminal, noteWidth, KEY_SIDE_W } from "./state.js";
+import { watchGrace, needing, finished, showNeeds, showFinished, showOverview, showSettings, showSessions, shownScreen, icon, showSpace, toggleSidebar, sidebarShown, peekClosed, PEEK_W, PEEK_GAP, SPRING, tabLabel, subStatus, tabAgents, tabStatus, answerInTerminal, noteWidth, KEY_SIDE_W } from "./state.js";
 import { elicitOf } from "./asks.js";
 import { movedBadge, badgeTip } from "./automove.js";
 import { statusMark, lightsRoom, BAR_H } from "./top.js";
 import { updateLine } from "./settings.js";
-import { updateSeen } from "./config.js";
+import { updateSeen, setting } from "./config.js";
 import { dragger, dropPlace } from "./drag.js";
 import { machineGroups, machinesTick, machineHeader, machineEmpty, folded, MACHINES_MS } from "./machines.js";
 import { pollUsage, usageBlock, USAGE_MS } from "./usage.js";
@@ -104,6 +104,12 @@ export class SideView {
     const waiting = needing().length;
     const badge = waiting ? div().px(6).h(18).rounded(9).flex().items_center().text_size(11).font_semibold()
       .bg(t.blocked).text_color(t.background).child(String(waiting)) : null;
+    // Finished (owner 11-27): the hand-off tabs, counted in the done colour. Only with hand-off marks on (Settings →
+    // Workflow): without them no tab is ever marked, so the row would always be empty.
+    const showFin = setting("handoff_marks") === "on";
+    const done = showFin ? finished().length : 0;
+    const finBadge = done ? div().px(6).h(18).rounded(9).flex().items_center().text_size(11).font_semibold()
+      .bg(t.done).text_color(t.background).child(String(done)) : null;
 
     // Every row: 10 px in, a 22 px icon or monogram column, then the label, so the labels, the
     // "Workspaces" heading and the right edges (badge, marks, +) line up.
@@ -182,6 +188,7 @@ export class SideView {
       .child(header)
       .child(row("side-new", "plus", "New tab", () => openOverlay(newMenuSpec())))
       .child(row("side-needs", "bell", "Needs you", () => showNeeds(), badge, screen === "needs"))
+      .when(showFin, (el) => el.child(row("side-finished", "check", "Finished", () => showFinished(), finBadge, screen === "finished")))
       .child(row("side-overview", "grid", "Overview", () => showOverview(), null, screen === "overview"))
       .child(h_flex().mt(14).mb(2).px(10).items_center()
         .child(div().flex_1().text_size(11.5).font_semibold().text_color(t.muted).child("Workspaces"))

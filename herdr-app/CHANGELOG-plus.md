@@ -38,6 +38,7 @@ New files:
 | `automove.js` | Move to <workspace> (tab menu), automatic moves to project workspaces and the wrong-workspace badge, from the `projects` setting. |
 | `history.js` | "Since you last looked": per-tab snapshots and events (finished, needs you, waiting on CI, waiting on a review, hand-off, About, PR merged/closed), Copy and Mark seen, "waiting 2 h". 11-13: grouped by what each tab does now (`SINCE_GROUPS`), a card per tab (`nowText`, About line, change chips), times name their day (`whenText`); `overview.js` draws it, click opens the tab, every group folded at first + Expand all / Collapse all, Copy = the grouped text with a notice. |
 | `hover.js` | The hover box on cards, tab pills and tab-list rows. |
+| `finished.js`, `handoff-read.js` (11-27) | The **Finished** screen (`finished` view; sidebar row under Needs you, `state.js` `finished()` / `showFinished`): the tabs the Overview files under "Hand-off given", with the picked one's re-entry prompt and Copy prompt / Copy full / Open tab. `handoff-read.js` `readHandoff` is the prompt read the Overview's copy buttons used inline, now shared by both. Nothing types into a terminal. |
 | `patchcheck.js` | Warns once when an official update replaced the patched helper (only after a patched one was seen here). |
 | `machines.js` | Other machines in the sidebar, as Herdr's own sidebar groups them: a header per machine once one besides this computer is known (`hc machine ls` every 15 s, `machines()`, the spaces' `machine`), with fold, + for a new workspace there, a New workspace there / Loading… row, its state, the login command with Copy, Connect for a rebuilt machine; `spaceTitle` ("api on pc-wsl"). |
 | `parked.js` | Parked Claude tabs (their conversation went on in Claude Code's background service, so Herdr lists no agent there): a 3 s tick asks the helper's `parked` command while a Claude terminal reports no status, and `agents()` / `spaces()` (which every module now imports from here, not from "herdr") add them back with their job's status, "done" until you look, as Herdr does. |
@@ -83,7 +84,7 @@ Changed files:
 
 | File | Change |
 |---|---|
-| `layouts/flockbook.json` | A top bar per screen, the tab-list column, the terminal grips. |
+| `layouts/flockbook.json` | A top bar per screen, the tab-list column, the terminal grips; the `finished` screen (11-27). |
 | `themes/flockbook.json`, `themes/flockbook-light.json` | VS Code–style palette; a visible `selection` colour. |
 | `install.sh` | From a git checkout: builds the helper (`--build-helper`, asks in a terminal) or copies over an existing install (`--copy-only`, which backs up the mod, layout and each theme it replaces first and stops if a backup fails); switches to the layout (`--no-layout`); copies the status-line wrapper. `--dry-run` never builds. The release-zip path is unchanged. |
 | `keys.json` | ⌥⌘B tab list, ⌘⇧K keep the tab's name, ⌘⇧M its Move to … rows. |

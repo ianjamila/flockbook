@@ -72,6 +72,10 @@ Enter sends); the vertical tab list on the right shows each tab's program, statu
   a small card: its name and account, how long ago it changed, what it does now, its About line, and its changes as
   time chips that name the day where it changes ("yesterday 10:15 pm"). A click opens the tab; **Copy** puts the
   same layout on the clipboard as text (with a "Copied" notice); **Mark seen** clears it.
+- **Finished**, under Needs you in the sidebar (with a count; shown when Settings → Workflow → hand-off marks is on):
+  every tab that finished with a hand-off, from every workspace. Pick one to see its re-entry prompt, then
+  **Copy prompt** (or **Copy full** for the hand-off file it names), type `/clear` in that tab and paste. The tab
+  leaves the list once its new turn starts. **Open tab** goes to it.
 - A tab that finished with a **hand-off** ("Hand-off given") gets **Copy prompt** on its Overview card and its
   "Since you last looked" card: it copies the re-entry prompt from that tab's last reply without opening the tab.
 - Times say their day when it isn't today: "paused until tomorrow 1:00 am", "yesterday 9:10 pm", "Sat 1:00 am".

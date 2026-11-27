@@ -146,3 +146,21 @@ test("finished screen: Copy prompt reads the reply again and copies (and shows) 
   assert.doesNotMatch(textOf(byId(el, "finished-detail")), /OLD prompt/);
   assert.match(textOf(byId(el, "fin-copy")), /Copied/);
 });
+
+// The sidebar's Finished row (owner 11-27): right under Needs you, with a count; hidden when hand-off marks are off
+// (Settings → Workflow), since nothing could ever show there.
+test("side: Finished row under Needs you with its count, opens the Finished screen; none with hand-off marks off", () => {
+  fake.agents = [agent("t1", "blocked"), agent("t4", "done"), agent("t6", "done")];
+  const ids = (el, out = []) => { if (el?._a?.id) out.push(el._a.id); for (const k of el?.kids ?? []) ids(k, out); return out; };
+  fake.shared["flockbook.config"] = { file: { handoff_marks: "on" } };
+  fake.shared["flockbook.handoff"] = { t4: true, t6: true };
+  let el = new SideView(fakeCx()).render(fakeCx());
+  assert.match(textOf(byId(el, "side-finished")), /Finished 2/);
+  const order = ids(el).filter((i) => ["side-needs", "side-finished", "side-overview"].includes(i));
+  assert.deepEqual(order, ["side-needs", "side-finished", "side-overview"]);
+  byId(el, "side-finished")._h.on_click({}, fakeCx());
+  assert.deepEqual(log.run.at(-1), ["layout.select", { stack: "screen", child: "finished" }]);
+  fake.shared["flockbook.config"] = { file: { handoff_marks: "off" } };
+  el = new SideView(fakeCx()).render(fakeCx());
+  assert.equal(byId(el, "side-finished"), null);
+});
