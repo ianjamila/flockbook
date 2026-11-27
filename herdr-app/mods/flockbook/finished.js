@@ -6,62 +6,22 @@
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { theme, notify } from "herdr";
-import { finished, agentName, showAgent, icon, watchEdge, reentering, reenterRuns } from "./state.js";
+import { finished, agentName, showAgent, icon, watchEdge, reenterRuns } from "./state.js";
 import { agents } from "./parked.js";
 import * as sidecar from "./sidecar.js";
 import { readHandoff, readFull } from "./handoff-read.js";
+import { readAnswer, joinNote, begin, runPrompt, reenter, canReenterRead, DROP_MS, CHANGED, COPY_FAILED } from "./reenter-run.js";
 import { startTop, overBar, barOver, barRoom, noteScreenHeight } from "./top.js";
 import { withSnapshot } from "./parked.js";
 
 // A read that gave no prompt (the helper failed, or the reply was not logged yet) is tried again after this long.
 export const RETRY_MS = 5000;
 // After a run that sent, its row stays this long, then goes and the pick moves on.
-export const DROP_MS = 5000;
+export { DROP_MS };
+// The run itself (reenter-run.js) is shared with the Overview and the chat; these were here first.
+export { readAnswer, joinNote };
 
-const NO_ANSWER = "No answer from the helper: the tab may have been cleared and the prompt may or may not have gone. Check the tab.";
-const SENT = "Re-entered: the new conversation has its prompt.";
-const CHANGED = "The re-entry prompt changed. Check it, then press again.";
-const COPY_FAILED = "Couldn't put the prompt on your clipboard: use Copy again.";
-const TAIL_PASTE = "The prompt is on your clipboard: open the tab and paste.";
-const TAIL_UNCONFIRMED = "The prompt may already be in the tab. Check it before pasting.";
-const ON_CLIPBOARD = "It is on your clipboard.";
-const TAIL_CLEAR = "Check the tab shows a new conversation before pasting; if it does not, type /clear first.";
 const HINT = "Types /clear in this tab, then the prompt above. If the tab's box has text in it, nothing is typed.";
-
-// What the helper's answer means (reenter.rs): its one `done` line (result, message, keys) or its `error` line; a
-// `done` line wins, because a helper that answered but lost its end line comes back with both. `keys` says whether a key
-// went to the tab: "none" (nothing typed), "yes", "maybe"; a line without it, no line at all, or a helper that was killed
-// or never answered counts as "maybe". → { keys, result, lead, tail }: `tail` null when there is nothing to paste.
-// The no-answer note and a forward's `maybe` error say what they can: the tab may have been cleared, so the owner is told
-// to check that it shows a new conversation before pasting (TAIL_CLEAR), never just to paste.
-export function readAnswer(answer) {
-  const done = answer?.lines?.find((l) => l?.type === "done");
-  const line = done ?? answer?.error ?? null;
-  if (!line) return { keys: "maybe", result: "no_answer", lead: NO_ANSWER, tail: TAIL_CLEAR };
-  const result = line.result ?? line.code ?? "failed";
-  const keys = line.keys === "none" || line.keys === "yes" ? line.keys : "maybe";
-  // An error that does not say what was typed (the helper's own failure, a kill by the exec timeout) is no answer.
-  if (!done && (line.keys === undefined || line.keys === "maybe")) return { keys: "maybe", result: "no_answer", lead: NO_ANSWER, tail: TAIL_CLEAR };
-  const message = String(line.message ?? "").trim();
-  if (keys === "none") {
-    // Some refusals already say it (cards::refused: "Nothing was sent."): one such sentence is enough.
-    const lead = /nothing was (sent|typed)/i.test(message) ? message : `${message} Nothing was typed.`.trim();
-    return { keys, result, lead, tail: null };
-  }
-  if (result === "sent") return { keys, result, lead: SENT, tail: null };
-  const tail = result === "prompt_unconfirmed" ? TAIL_UNCONFIRMED
-    : result === "clear_unknown" || result === "clear_unconfirmed" ? TAIL_CLEAR : TAIL_PASTE;
-  return { keys, result, lead: message || "The tab may have been cleared.", tail };
-}
-
-// A lead and its tail as one note: a period between them when the message has no closing punctuation (a forward's
-// "pc did not answer in 21 s"), and, for an unconfirmed prompt, that it is on the clipboard (only once it was copied).
-export function joinNote(lead, tail, result) {
-  const l = /[.!?]$/.test(lead) ? lead : `${lead}.`;
-  return `${l} ${tail}${result === "prompt_unconfirmed" ? ` ${ON_CLIPBOARD}` : ""}`;
-}
-
-let runs = 0;   // run ids: only the run with the matching id may change or clear its record
 
 export class FinishedView {
   constructor(cx) {
@@ -218,65 +178,25 @@ export class FinishedView {
   // Clear & re-enter. The click's synchronous part: a run already on in this tab → nothing; else the prompt and log the
   // screen shows are taken, and the tab's run and its lock (which holds the chat's Send) are set before any await.
   begin(address) {
-    if (this.runs.get(address)?.state === "running") return null;
-    const r = this.read.get(address) ?? this.runPrompt(address);
-    if (!r?.prompt || !r.seen?.path) return null;
-    const id = ++runs;
-    const shown = { prompt: r.prompt, path: r.seen.path };
-    this.runs.set(address, { id, state: "running", prompt: shown.prompt, seen: r.seen, at: Date.now() });
+    const s = begin(address, this.read.get(address));
+    if (!s) return null;
     this.picked = address;
-    reentering.add(address);
     this.note = null;
-    return { id, shown, seen: r.seen };
+    return s;
   }
 
   // The prompt of a tab whose run is on or done, when this view has not read it (the view was rebuilt mid-run).
-  runPrompt(address) {
-    const run = this.runs.get(address);
-    return run ? { prompt: run.prompt, file: null, seen: run.seen ?? null, problem: null } : null;
-  }
-
-  // Both end a run's hold on its tab, and only while the run still owns it: `release` also drops the record (nothing
-  // was typed), `settle` keeps it with its result (the lock goes, the result stays on screen).
-  release(address, id) {
-    if (this.runs.get(address)?.id !== id) return;
-    this.runs.delete(address); reentering.delete(address);
-  }
-  settle(address, id) {
-    if (this.runs.get(address)?.id === id) reentering.delete(address);
-  }
+  runPrompt(address) { return runPrompt(address); }
 
   async reenter(cx, address, started = this.begin(address), clip = cx) {
-    if (!started) return;
-    const { id, shown, seen } = started;
-    const own = () => this.runs.get(address)?.id === id;
-    try {
-      // The reply is read again: a prompt or log other than the one the owner is looking at types nothing.
-      let again;
-      const n = this.startRead(address);
-      try { again = await this.reader(address); } catch (e) { again = { prompt: null, problem: String(e?.message ?? e) }; }
-      if (!again.prompt || again.problem || again.prompt !== shown.prompt || again.seen?.path !== shown.path) {
-        // The new read is shown (the button and the old prompt go with a reply that has none); a read that failed keeps the old one.
-        if (!again.problem) this.store(address, n, again);
-        this.release(address, id);
-        this.note = { address, text: CHANGED };
-        notify({ title: CHANGED, level: "warning", timeout: 4000 });
-        return;
-      }
-      let answer;
-      try { answer = await this.reenterer(address, shown.prompt, seen); } catch { answer = null; }
-      const a = readAnswer(answer);
-      let text = a.lead, copyFailed = false;
-      if (a.tail) {
-        // A key may have gone: the prompt goes on the clipboard whatever else happens (the owner pastes it).
-        try { clip.write_to_clipboard(shown.prompt); text = joinNote(a.lead, a.tail, a.result); }
-        catch { copyFailed = true; text = `${a.lead} ${COPY_FAILED}`; }
-      }
-      const line = (answer?.lines ?? []).find((l) => l?.type === "done") ?? answer?.error ?? null;
-      if (own()) Object.assign(this.runs.get(address), { state: "done", result: a.result, keys: a.keys, message: line?.message ?? null, at: Date.now(), lead: a.lead, tail: a.tail, note: text, bad: a.result !== "sent", copyFailed });
-      notify({ title: text, level: a.result === "sent" ? "info" : "warning", timeout: a.result === "sent" ? 3000 : 8000 });
-      if (a.result === "sent") cx.timer?.after?.(DROP_MS, (cx2) => this.drop(cx2, address, id));
-    } finally { this.settle(address, id); cx.notify?.(); }
+    return reenter(cx, address, started, clip, {
+      reader: (a) => this.reader(a),
+      reenterer: (...args) => this.reenterer(...args),
+      startRead: (a) => this.startRead(a),
+      // The new read is shown (the button and the old prompt go with a reply that has none); a read that failed keeps the old one.
+      changed: (again, n) => { if (!again.problem) this.store(address, n, again); this.note = { address, text: CHANGED }; },
+      drop: (cx2, a, id) => this.drop(cx2, a, id),
+    });
   }
 
   // 5 s after a run that sent: its row goes and the pick moves to the next tab.
@@ -353,7 +273,7 @@ export class FinishedView {
     // Not again after a run that may have typed (also "sent": its row stays 5 s): the pre-clear read is stale, the tab shows
     // a new conversation now. A refusal that typed nothing (keys "none") leaves the button, to press again.
     const typed = run?.state === "done" && run.keys !== "none";
-    const canRe = Boolean(r?.prompt) && r.seen?.agent === "claude" && Boolean(r.seen?.path) && this.canReenter === true && !typed;
+    const canRe = canReenterRead(r, run, this.canReenter);
     const copied = (what) => this.copied?.address === addr && this.copied.what === what;
     let body;
     if (!r) body = div().text_size(13).text_color(t.muted).child("Reading its re-entry prompt…");
