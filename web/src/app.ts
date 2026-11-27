@@ -1354,7 +1354,9 @@ function reenterCard(pane: string, v: PaneView, agent?: Pane["agent"]): HTMLElem
   if (!finder || !helper?.post.includes("reenter") || !canInput() || agent?.kind !== "claude" || (agent.status !== "idle" && agent.status !== "done")) return null;
   const session = v.session;
   if (!session || session === pane) return null;
-  const found = finder(v.items.map((i) => ({ ...i, k: i.kind })));
+  // A turn's end (`turnEnd`, the helper's footer rows) goes back in as a footer row, which is where the finder stops: a reply
+  // with no message of the owner before it (a hook's, a wake-up's) must not show an older reply's prompt.
+  const found = finder(v.items.flatMap((i) => (i.turnEnd ? [{ ...i, k: i.kind }, { id: `${i.id}-end`, k: "footer" }] : [{ ...i, k: i.kind }])));
   if (!found || state.reentered.get(pane) === `${session}\n${found.prompt}`) return null;
   const go = async (): Promise<void> => {
     if (state.busy) return;

@@ -24,13 +24,17 @@ export interface ToolChip { symbol: string; text: string; calls: ToolCall[] }
 /** A picture of an item: its size in the log. The client asks for it with `picture` when it comes into view. */
 export interface Picture { width: number; height: number }
 
-export type Item =
+export type Item = (
   | { id: string; time?: string; kind: "user" | "assistant" | "status"; text: string; images?: Picture[];
       /** A user item that is a note from another agent (`hc send`): its sender as hc wrote it ("t2 docs-worker", or ""). */
       from?: string }
   | { id: string; time?: string; kind: "tools"; tools: ToolChip[]; images?: Picture[] }
   | { id: string; time?: string; kind: "approval"; approval: Approval }
-  | { id: string; time?: string; kind: "question"; question: QuestionRequest };
+  | { id: string; time?: string; kind: "question"; question: QuestionRequest }
+) & {
+  /** The Rust helper only: a turn ended after this item (the log's footer row, which is no item). The re-entry prompt finder needs the boundary. */
+  turnEnd?: boolean;
+};
 
 export interface HubError { code: string; message?: string }
 export interface Device { id: string; name: string; level: Level }

@@ -422,8 +422,21 @@ impl Feed {
         }
         self.older_start.or(self.start)
     }
+    /// The rows as items. A `footer` row (a turn's end) is no item, but the item before it says `turnEnd`: the page's
+    /// re-entry prompt finder (the mod's `replyHandoff`) stops at a turn's end, so a reply without a message of the owner
+    /// (a hook's or a wake-up's) does not show an older reply's prompt.
     fn items(&self) -> Vec<Value> {
-        self.older.iter().chain(&self.rows).filter_map(item).collect()
+        let mut out: Vec<Value> = Vec::new();
+        for row in self.older.iter().chain(&self.rows) {
+            if row["k"] == "footer" {
+                if let Some(last) = out.last_mut() {
+                    last["turnEnd"] = json!(true);
+                }
+            } else if let Some(i) = item(row) {
+                out.push(i);
+            }
+        }
+        out
     }
 }
 
@@ -1071,6 +1084,23 @@ mod tests {
         // An item gone or another first item: replace.
         assert_eq!(update(Some(&vec![a("1", "x"), a("2", "y")]), &[a("1", "x")]).unwrap().0, "replace");
         assert_eq!(update(Some(&vec![a("1", "x")]), &[a("0", "w"), a("1", "x")]).unwrap().0, "replace");
+    }
+
+    /// A turn's end (the log's footer row) is no item, but the item before it says `turnEnd`: without it the phone's finder
+    /// ran back past a reply with no owner message (a hook's) and offered an older reply's re-entry prompt.
+    #[test]
+    fn a_footer_marks_the_turn_end_on_the_item_before_it() {
+        let row = |id: &str, k: &str| json!({"type": "row", "id": id, "k": k, "text": "t"});
+        let feed = Feed {
+            older: vec![row("u0", "user"), row("a0", "assistant"), row("f0", "footer")],
+            rows: vec![row("a1", "assistant"), row("s1", "sep"), row("f1", "footer"), row("a2", "assistant")],
+            ..Feed::default()
+        };
+        let items = feed.items();
+        assert_eq!(items.iter().map(|i| i["id"].as_str().unwrap()).collect::<Vec<_>>(), ["u0", "a0", "a1", "a2"], "footers are not items");
+        let ends: Vec<bool> = items.iter().map(|i| i["turnEnd"] == true).collect();
+        assert_eq!(ends, [false, true, true, false], "the item before each footer ends a turn; the open turn's last item does not");
+        assert!(Feed { rows: vec![row("f", "footer"), row("a", "assistant")], ..Feed::default() }.items()[0].get("turnEnd").is_none(), "a footer with no item before it marks nothing");
     }
 
     #[test]
