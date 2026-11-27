@@ -239,11 +239,15 @@ pub fn run(argv: &[String]) -> String {
             let budget = match first("--budget-ms") {
                 None => Duration::from_secs(27),
                 Some(n) => match n.parse::<u64>() {
-                    Ok(ms) if ms > 0 => Duration::from_millis(ms),
-                    _ => return r.fail_none("usage", "reenter --budget-ms needs a positive number of milliseconds"),
+                    // An hour is far past the mod's 30 s exec; a value this large is a typo, and one near u64::MAX could
+                    // overflow the clock addition below.
+                    Ok(ms) if (1..=3_600_000).contains(&ms) => Duration::from_millis(ms),
+                    _ => return r.fail_none("usage", "reenter --budget-ms needs a number of milliseconds from 1 to 3600000"),
                 },
             };
-            let deadline = r.t0 + budget;
+            let Some(deadline) = r.t0.checked_add(budget) else {
+                return r.fail_none("usage", "reenter --budget-ms is too large");
+            };
             let cache_path = first("--cache").map(PathBuf::from);
             let split = remote::split(&terminal);
             if matches!(split, Ok(Some(_))) && config::load(config::dir(home().as_deref()).as_deref()).remote_never {

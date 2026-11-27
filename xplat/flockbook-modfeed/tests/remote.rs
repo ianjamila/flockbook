@@ -652,6 +652,11 @@ fn reenter_forwards_typed_values() {
     let n: u64 = argv[10].parse().unwrap();
     assert!((21_000..=23_000).contains(&n), "25 s from the start, less the 2 s for the launch and the time already spent: {n}");
     assert_eq!(&argv[11..], ["--text", text], "{argv:?}");
+    // The forward answers itself before the mod's 30 s exec ends: the version ask and the run get what is left of the
+    // deadline (+1 s), the platform look and every other command keep 30 s.
+    let timeouts: Vec<u64> = exec.iter().map(|e| e["timeout"].as_u64().unwrap()).collect();
+    assert_eq!(timeouts[0], 30, "{timeouts:?}");
+    assert!(timeouts[1..].iter().all(|t| (24..=25).contains(t)), "version ask and run: {timeouts:?}");
     // No cache asked for: the script adds none, and the budget is still typed.
     there_reenter(&w, remote::helper_version(), WITH, &reenter_ok());
     w.run(&reenter_cmd("25000", "hi"));
@@ -762,9 +767,9 @@ fn slow_preflight_leaves_no_time() {
     assert_eq!(v.last().unwrap()["ok"], true);
     assert_eq!(calls_there(&w), vec!["version"], "no reenter ran there");
     assert!(w.here.calls("terminal.send").is_empty() && w.there.calls("terminal.send").is_empty(), "nothing typed anywhere");
-    // The same budget with a quick ask has the time (19 s): it goes there.
+    // A quick ask with 22 s (20 s after the launch, 2 s of margin over the 18 s it needs): it goes there.
     w.here.state.lock().unwrap().version_delay = 0.0;
-    let v = w.run(&reenter_cmd("21000", "hi"));
+    let v = w.run(&reenter_cmd("22000", "hi"));
     assert_eq!(v.iter().find(|l| l["type"] == "done").unwrap()["result"], "sent", "{v:?}");
     assert_eq!(calls_there(&w), vec!["version", "version", "reenter"]);
 }

@@ -193,7 +193,9 @@ fn reenter_needs_expect_path_and_text() {
 fn reenter_refuses_dash_values_before_text() {
     let fake = FakeHc::start();
     fake.set_terminals(vec![claude("t1", "done", "done")]);
-    let cases: [&[&str]; 8] = [
+    let cases: [&[&str]; 9] = [
+        // Too large to add to the start time: usage, not a panic that leaves no answer line.
+        &["reenter", "--terminal", "t1", "--expect-path", "P", "--budget-ms", "99999999999999999", "--text", "hi"],
         &["reenter", "--terminal", "-t", "--expect-path", "P", "--text", "hi"],
         &["reenter", "--terminal", "t1", "--expect-path", "-P", "--text", "hi"],
         &["reenter", "--terminal", "t1", "--expect-path", "P", "--cache", "-c", "--text", "hi"],

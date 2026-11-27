@@ -111,14 +111,24 @@ enum Run<'a> {
 }
 
 fn exec(client: &HcClient, machine: &str, run: Run) -> Result<Ran, Fail> {
+    exec_within(client, machine, run, EXEC_TIMEOUT_S)
+}
+
+/// The seconds a `reenter`'s exec may take: what is left of its deadline plus one, never more than `EXEC_TIMEOUT_S`, so
+/// the forward answers itself before the mod's own exec gives up. Other commands (no deadline) keep `EXEC_TIMEOUT_S`.
+fn exec_secs(deadline: Option<Instant>) -> u64 {
+    deadline.map_or(EXEC_TIMEOUT_S, |d| (d.saturating_duration_since(Instant::now()).as_secs() + 1).min(EXEC_TIMEOUT_S))
+}
+
+fn exec_within(client: &HcClient, machine: &str, run: Run, timeout_s: u64) -> Result<Ran, Fail> {
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD;
-    let mut p = json!({"on": machine, "timeout": EXEC_TIMEOUT_S});
+    let mut p = json!({"on": machine, "timeout": timeout_s});
     match run {
         Run::Argv(a) => p["argv"] = json!(a),
         Run::Line(l) => p["line"] = json!(l),
     }
-    let r = match client.call("machine.exec", p, Some(Duration::from_secs(EXEC_TIMEOUT_S + 5))) {
+    let r = match client.call("machine.exec", p, Some(Duration::from_secs(timeout_s + 5))) {
         Ok(r) => r,
         Err(HerdrError::Server { code, .. }) if code == "spawn_failed" => {
             return Ok(Ran { code: None, stdout: vec![], stderr: String::new(), no_program: true });
@@ -126,7 +136,7 @@ fn exec(client: &HcClient, machine: &str, run: Run) -> Result<Ran, Fail> {
         Err(e) => return Err(fail("remote_failed", format!("{machine}: {e}"))),
     };
     if r.get("timed_out").and_then(Value::as_bool) == Some(true) {
-        return Err(fail("remote_failed", format!("{machine} did not answer in {EXEC_TIMEOUT_S} s")));
+        return Err(fail("remote_failed", format!("{machine} did not answer in {timeout_s} s")));
     }
     if r.get("truncated").and_then(Value::as_bool) == Some(true) {
         return Err(fail("remote_failed", format!("{machine} answered more than hc passes on (8 MB)")));
@@ -381,7 +391,7 @@ pub fn forward(client: &HcClient, cmd: &str, args: &[String], machine: &str, ter
     // s34 (owner, item 12): what changes something there (approve, answer, send) is checked there first, so a helper
     // of another version runs none of it. A Send anyway also needs its ability (s32 review P1/P2).
     if let Some(needs) = checked_first(cmd, args) {
-        if let Some(stop) = lacks(client, cmd, machine, needs, &mut memo) {
+        if let Some(stop) = lacks(client, cmd, machine, needs, &mut memo, deadline) {
             return stop;
         }
     }
@@ -446,7 +456,7 @@ pub fn forward(client: &HcClient, cmd: &str, args: &[String], machine: &str, ter
     let there = [vec!["sh".to_string(), "-c".into(), forward_script(cached), "sh".into()], there].concat();
     // From here the command may have started there: its failures say `maybe`, except that the program was not there.
     let after = keys_of(cmd, "maybe");
-    let ran = match exec(client, machine, Run::Argv(&there)) {
+    let ran = match exec_within(client, machine, Run::Argv(&there), exec_secs(deadline)) {
         Ok(r) => r,
         Err(f) => return error_lines(cmd, f, after),
     };
@@ -515,15 +525,16 @@ fn checked_first(cmd: &str, args: &[String]) -> Option<&'static [&'static str]> 
 /// s36 (owner 11-15, "fail fast"): an ask that fails or runs out of time stops here too, with "<machine> did not
 /// answer", and nothing runs there (before, the command went on and could wait out a second timeout); no helper
 /// there gets the install card at once, without trying the command.
-fn lacks(client: &HcClient, cmd: &str, machine: &str, needs: &[&str], memo: &mut Memo) -> Option<String> {
+fn lacks(client: &HcClient, cmd: &str, machine: &str, needs: &[&str], memo: &mut Memo, deadline: Option<Instant>) -> Option<String> {
     let silent = |why: String| {
         let f = fail("remote_failed", format!("{machine} did not answer{why}. Nothing was sent there; try again."));
         Some(error_lines(cmd, f, keys_of(cmd, "none")))
     };
     let argv: Vec<String> = ["sh", "-c", &forward_script(false), "sh", "version"].iter().map(|a| a.to_string()).collect();
-    let ran = match exec(client, machine, Run::Argv(&argv)) {
+    let secs = exec_secs(deadline);
+    let ran = match exec_within(client, machine, Run::Argv(&argv), secs) {
         Ok(r) => r,
-        Err(f) if f.message.starts_with(&format!("{machine} did not answer")) => return silent(format!(" in {EXEC_TIMEOUT_S} s")),
+        Err(f) if f.message.starts_with(&format!("{machine} did not answer")) => return silent(format!(" in {secs} s")),
         Err(f) => return silent(format!(" ({})", f.message)),
     };
     if ran.no_program || matches!(ran.code, Some(126 | 127)) {

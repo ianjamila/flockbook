@@ -787,7 +787,6 @@ impl Live {
         };
         let live = Live { fake, cfg, locks: tempfile::tempdir().unwrap(), child, start };
         live.record("old", "idle");
-        eprintln!("DBG {:?} rec={:?}", live.child.id(), herdr_core::resolver::read_pid_record(live.cfg.path().join("sessions").to_str().unwrap(), live.child.id() as i32, &herdr_core::resolver::processes()).map(|r| r.session));
         live.fake.set_terminals(vec![live.tab("done")]);
         live.fake.set_screen("t1", &empty_screen());
         live.fake.set_paint("t1", EMPTY);
@@ -857,7 +856,7 @@ fn local_arm_reaches_clear_and_the_prompt_with_the_mods_argv() {
 }
 
 /// Catches: `--budget-ms` ignored (the run needs 18 s: 17 s left must refuse, after every check, with nothing typed),
-/// and the default not being the 27 s the mod's 30 s exec leaves (a run with 27 s has the time).
+/// and a run with no `--budget-ms` having no time at all (it has enough for a whole run: the 27 s default).
 #[test]
 fn budget_ms_sets_the_deadline() {
     let live = Live::new();
@@ -868,10 +867,13 @@ fn budget_ms_sets_the_deadline() {
     assert_eq!(d["result"], "sent", "no --budget-ms: 27 s, enough: {d}");
 }
 
-
 /// Not a test: the stand-in process `Live` starts (this test binary, named `claude`), so `ps -E` shows its environment.
 #[test]
 #[ignore]
 fn stand_in_sleeper() {
+    // Only the rig sets this: a general `--include-ignored` run returns at once.
+    if std::env::var_os("CLAUDE_CONFIG_DIR").is_none() {
+        return;
+    }
     std::thread::sleep(Duration::from_secs(120));
 }
