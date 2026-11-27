@@ -192,8 +192,8 @@ test("finished screen: a failed read is retried; a failed Copy keeps the prompt 
 // Clear & re-enter (finished.js): the button, the run, its notes and the clipboard. No key goes anywhere: the run is a
 // fake `reenterer` that returns the helper's answer (reenter.rs: one `done` or `error` line, with `keys`).
 const SEEN = { agent: "claude", path: "/logs/t4.jsonl" };
-const doneLine = (result, o = {}) => ({ lines: [{ type: "done", result, message: `msg ${result}`, cleared: false, keys: "yes", ...o }], error: null });
-const errorLine = (code, o = {}) => ({ lines: [], error: { type: "error", code, message: `msg ${code}`, ...o } });
+const doneLine = (result, o = {}) => ({ lines: [{ type: "done", result, message: `msg ${result}.`, cleared: false, keys: "yes", ...o }], error: null });
+const errorLine = (code, o = {}) => ({ lines: [], error: { type: "error", code, message: `msg ${code}.`, ...o } });
 // A cx that can write to the clipboard (the button needs one at render time).
 const clipCx = () => { const cx = fakeCx(); cx.clip = []; cx.write_to_clipboard = (t) => { cx.clip.push(t); }; return cx; };
 // A view with the button available: a Claude tab t4 with prompt "P4.", `answer` the helper's reply (or a function).
@@ -321,18 +321,18 @@ test("finished screen: each_result_maps_to_its_note", async () => {
   const rows = [
     // [answer, expected note, prompt copied?]
     [doneLine("sent", { cleared: true }), "Re-entered: the new conversation has its prompt.", false],
-    [doneLine("prompt_unconfirmed", { cleared: true }), "msg prompt_unconfirmed The prompt may already be in the tab. Check it before pasting.", true],
-    [doneLine("cleared_not_sent", { cleared: true }), `msg cleared_not_sent ${TAIL}`, true],
-    [doneLine("failed", { cleared: "maybe", keys: "maybe" }), `msg failed ${TAIL}`, true],
-    [doneLine("clear_unknown", { cleared: "maybe", keys: "maybe" }), `msg clear_unknown ${CHECK}`, true],
-    [doneLine("clear_unconfirmed", { cleared: "maybe", keys: "maybe" }), `msg clear_unconfirmed ${CHECK}`, true],
-    [doneLine("changed", { keys: "none" }), "msg changed Nothing was typed.", false],
-    [doneLine("tab_busy", { keys: "none" }), "msg tab_busy Nothing was typed.", false],
+    [doneLine("prompt_unconfirmed", { cleared: true }), "msg prompt_unconfirmed. The prompt may already be in the tab. Check it before pasting. It is on your clipboard.", true],
+    [doneLine("cleared_not_sent", { cleared: true }), `msg cleared_not_sent. ${TAIL}`, true],
+    [doneLine("failed", { cleared: "maybe", keys: "maybe" }), `msg failed. ${TAIL}`, true],
+    [doneLine("clear_unknown", { cleared: "maybe", keys: "maybe" }), `msg clear_unknown. ${CHECK}`, true],
+    [doneLine("clear_unconfirmed", { cleared: "maybe", keys: "maybe" }), `msg clear_unconfirmed. ${CHECK}`, true],
+    [doneLine("changed", { keys: "none" }), "msg changed. Nothing was typed.", false],
+    [doneLine("tab_busy", { keys: "none" }), "msg tab_busy. Nothing was typed.", false],
     [doneLine("no_time", { keys: "none", message: "Not enough time. Nothing was sent." }), "Not enough time. Nothing was sent.", false],
     [doneLine("busy", { keys: "none", message: "Another run holds this tab; nothing was typed." }), "Another run holds this tab; nothing was typed.", false],
-    [errorLine("remote_helper_outdated", { keys: "none" }), "msg remote_helper_outdated Nothing was typed.", false],
-    [errorLine("send_failed", { keys: "maybe" }), `msg send_failed ${TAIL}`, true],
-    [doneLine("cleared_not_sent", { cleared: true, keys: undefined }), `msg cleared_not_sent ${TAIL}`, true],
+    [errorLine("remote_helper_outdated", { keys: "none" }), "msg remote_helper_outdated. Nothing was typed.", false],
+    [errorLine("send_failed", { keys: "maybe" }), `${NOANS} ${CHECK}`, true],
+    [doneLine("cleared_not_sent", { cleared: true, keys: undefined }), `msg cleared_not_sent. ${TAIL}`, true],
   ];
   for (const [answer, note, copied] of rows) {
     reenterRuns.clear(); reentering.clear();
@@ -356,14 +356,14 @@ test("finished screen: no_answer_is_maybe_cleared (a throw, no line, an error wi
     ["no done or error line", () => ({ lines: [{ type: "log" }], error: null })],
     ["error without keys", () => errorLine("bad_thing")],
     ["a helper killed by the 30 s timeout", () => ({ lines: [], error: { code: "sidecar", message: "The Flockbook sidecar did not answer: exit 137" } })],
-    ["the end line missing but a done line came", () => ({ lines: [{ type: "done", result: "cleared_not_sent", message: "msg cleared_not_sent", cleared: true, keys: "yes" }], error: { code: "sidecar", message: "no end" } })],
+    ["the end line missing but a done line came", () => ({ lines: [{ type: "done", result: "cleared_not_sent", message: "msg cleared_not_sent.", cleared: true, keys: "yes" }], error: { code: "sidecar", message: "no end" } })],
   ];
   for (const [name, answer] of cases) {
     reenterRuns.clear(); reentering.clear();
     const cx = clipCx();
     const v = await reenterView(answer);
     await press(v, cx);
-    const want = name.startsWith("the end line") ? `msg cleared_not_sent ${TAIL}` : `${NOANS} ${TAIL}`;
+    const want = name.startsWith("the end line") ? `msg cleared_not_sent. ${TAIL}` : `${NOANS} ${CHECK}`;
     assert.equal(textOf(byId(paintWith(v, cx), "fin-note")), want, name);
     assert.deepEqual(cx.clip, ["P4."], `${name}: the prompt is on the clipboard`);
     assert.equal(reentering.has("t4"), false, `${name}: the lock is released`);
@@ -384,7 +384,7 @@ test("finished screen: clipboard_throw_is_reported (Copy again copies the run's 
   let fail = true; cx.write_to_clipboard = (t) => { if (fail) throw new Error("no clipboard"); cx.clip.push(t); };
   const v = await reenterView(doneLine("cleared_not_sent", { cleared: true }));
   await press(v, cx);
-  assert.equal(textOf(byId(paintWith(v, cx), "fin-note")), "msg cleared_not_sent Couldn't put the prompt on your clipboard: use Copy again.");
+  assert.equal(textOf(byId(paintWith(v, cx), "fin-note")), "msg cleared_not_sent. Couldn't put the prompt on your clipboard: use Copy again.");
   assert.doesNotMatch(detail(v, cx), /open the tab and paste/);
   assert.equal(byId(paintWith(v, cx), "fin-reenter"), null, "no second Clear & re-enter on the stale pre-clear read");
   assert.ok(byId(paintWith(v, cx), "fin-copy"), "Copy prompt stays");
@@ -461,7 +461,7 @@ test("finished screen: pinned_tab_keeps_its_prompt_beside_its_result (A16: the v
   const el = paintWith(v2, cx);
   assert.ok(byId(el, "fin-t4") && byId(el, "fin-t6"), "still listed");
   assert.match(textOf(byId(el, "finished-detail")), /P4\./, "its prompt (from the run record)");
-  assert.equal(textOf(byId(el, "fin-note")), `msg cleared_not_sent ${TAIL}`, "its result");
+  assert.equal(textOf(byId(el, "fin-note")), `msg cleared_not_sent. ${TAIL}`, "its result");
   assert.equal(v2.shown, "t4");
   // a run that started in another view finishes: this view repaints at its next tick (and not when nothing changed)
   const run = reenterRuns.get("t4"); run.state = "running";
@@ -479,4 +479,94 @@ test("sidecar.reenter: the helper gets the terminal, the log the screen showed, 
   fake.exec = (_c, a) => { args = a; return { code: 0, stdout: "", stderr: "" }; };
   await reenter("t4", "Continue --home x.", { agent: "claude", path: "/logs/t4.jsonl" });
   assert.deepEqual(args, ["reenter", "--terminal", "t4", "--expect-path", "/logs/t4.jsonl", "--cache", "/home/test/.config/herdr-app/flockbook/cache.json", "--text", "Continue --home x.", "--home", "/home/test/.config/herdr-app"]);
+});
+
+// ---- Final fix wave (final-review.md I1–I3, M1, M2, M4, M5)
+
+// Catches (I2): a refusal that typed nothing hid the button for good (a finished tab with no other row never got it
+// back); a run that sent showed it again on the stale pre-clear read for the 5 s before the row goes.
+test("finished screen: ffw_button_back_after_nothing_typed_gone_after_keys_went", async () => {
+  const cx = clipCx();
+  let v = await reenterView(errorLine("remote_helper_outdated", { keys: "none" }));
+  await press(v, cx);
+  assert.ok(byId(paintWith(v, cx), "fin-reenter"), "none refusal (forward): the button stays");
+  v.reenterer = async () => doneLine("sent", { cleared: true });
+  await press(v, cx);
+  assert.equal(v.calls.length, 1, "the second press never reached the fake (replaced reenterer)");
+  assert.equal(byId(paintWith(v, cx), "fin-reenter"), null, "after sent: gone");
+  reenterRuns.clear(); reentering.clear();
+  v = await reenterView(doneLine("box_not_empty", { keys: "none" }));
+  await press(v, cx);
+  assert.ok(byId(paintWith(v, cx), "fin-reenter"), "box_not_empty: the owner empties the box and presses again");
+  reenterRuns.clear(); reentering.clear();
+  v = await reenterView(doneLine("cleared_not_sent", { cleared: true }));
+  await press(v, cx);
+  assert.equal(byId(paintWith(v, cx), "fin-reenter"), null, "cleared_not_sent: gone");
+});
+
+// Catches (I3): after /clear the feed shows the new conversation, so a re-read finds no prompt and Copy prompt copied
+// nothing while the old prompt still showed. After a nothing-typed refusal it still re-reads.
+test("finished screen: ffw_copy_prompt_after_a_cleared_run_copies_the_runs_own_prompt", async () => {
+  const cx = clipCx();
+  let v = await reenterView(doneLine("cleared_not_sent", { cleared: true }));
+  await press(v, cx);
+  cx.clip.length = 0;
+  v.reader = async () => { throw new Error("must not re-read"); };
+  await press(v, cx, "fin-copy");
+  assert.deepEqual(cx.clip, ["P4."]);
+  reenterRuns.clear(); reentering.clear();
+  v = await reenterView(doneLine("tab_busy", { keys: "none" }));
+  await press(v, cx);
+  cx.clip.length = 0;
+  v.reader = async () => ({ prompt: "P4 NEWER.", file: null, seen: SEEN, problem: null });
+  await press(v, cx, "fin-copy");
+  assert.deepEqual(cx.clip, ["P4 NEWER."], "nothing typed: the newest read, as before");
+});
+
+// Catches (M2): "Then type /clear in the tab and paste." under a run note that says the tab was cleared.
+test("finished screen: ffw_no_step1_hint_while_a_run_that_typed_is_shown", async () => {
+  const cx = clipCx();
+  let v = await reenterView(doneLine("cleared_not_sent", { cleared: true }));
+  await press(v, cx);
+  assert.doesNotMatch(detail(v, cx), /Then type \/clear in the tab and paste\./);
+  reenterRuns.clear(); reentering.clear();
+  v = await reenterView(doneLine("tab_busy", { keys: "none" }));
+  await press(v, cx);
+  assert.match(detail(v, cx), /Types \/clear in this tab/, "nothing typed: the button's own hint");
+});
+
+// Catches (M1): the clipboard write through a spawn cx that has none (the event cx has it): the owner got "Couldn't
+// put the prompt on your clipboard" for a prompt the click's cx could have copied.
+test("finished screen: ffw_clipboard_falls_back_to_the_event_cx", async () => {
+  const ev = clipCx();
+  const sp = fakeCx();   // no write_to_clipboard
+  ev.spawn = (f) => { const p = f(sp); ev.tasks.push(p); return p; };
+  const v = await reenterView(doneLine("cleared_not_sent", { cleared: true }));
+  await press(v, ev);
+  assert.deepEqual(ev.clip, ["P4."]);
+  assert.equal(textOf(byId(paintWith(v, ev), "fin-note")), `msg cleared_not_sent. ${TAIL}`);
+});
+
+// Catches (M4): a forward's message has no closing period: "pc did not answer in 21 s The prompt is on your clipboard".
+test("finished screen: ffw_a_period_joins_a_bare_message_and_its_tail", async () => {
+  const cx = clipCx();
+  const v = await reenterView(doneLine("cleared_not_sent", { cleared: true, message: "pc did not answer in 21 s" }));
+  await press(v, cx);
+  assert.equal(textOf(byId(paintWith(v, cx), "fin-note")), `pc did not answer in 21 s. ${TAIL}`);
+});
+
+// Catches (M5): a re-read that finds no prompt kept the old prompt and the button, so every press said "changed".
+test("finished screen: ffw_changed_with_no_prompt_shows_the_new_read", async () => {
+  const cx = clipCx();
+  const v = await reenterView(doneLine("sent"));
+  paintWith(v, cx);
+  v.reader = async () => ({ prompt: null, file: null, seen: SEEN, problem: "helper restarting" });
+  await press(v, cx);
+  assert.ok(byId(paintWith(v, cx), "fin-reenter"), "a read problem keeps the old read and the button");
+  v.reader = async () => ({ prompt: null, file: null, seen: SEEN, problem: null });
+  await press(v, cx);
+  assert.equal(v.calls.length, 0);
+  assert.equal(byId(paintWith(v, cx), "fin-reenter"), null, "no prompt now: the button goes");
+  assert.match(detail(v, cx), /No re-entry prompt in its last reply\./);
+  assert.match(detail(v, cx), /The re-entry prompt changed\./);
 });

@@ -24,6 +24,7 @@ const CHANGED = "The re-entry prompt changed. Check it, then press again.";
 const COPY_FAILED = "Couldn't put the prompt on your clipboard: use Copy again.";
 const TAIL_PASTE = "The prompt is on your clipboard: open the tab and paste.";
 const TAIL_UNCONFIRMED = "The prompt may already be in the tab. Check it before pasting.";
+const ON_CLIPBOARD = "It is on your clipboard.";
 const TAIL_CLEAR = "Check the tab shows a new conversation before pasting; if it does not, type /clear first.";
 const HINT = "Types /clear in this tab, then the prompt above. If the tab's box has text in it, nothing is typed.";
 
@@ -31,14 +32,16 @@ const HINT = "Types /clear in this tab, then the prompt above. If the tab's box 
 // `done` line wins, because a helper that answered but lost its end line comes back with both. `keys` says whether a key
 // went to the tab: "none" (nothing typed), "yes", "maybe"; a line without it, no line at all, or a helper that was killed
 // or never answered counts as "maybe". → { keys, result, lead, tail }: `tail` null when there is nothing to paste.
+// The no-answer note and a forward's `maybe` error say what they can: the tab may have been cleared, so the owner is told
+// to check that it shows a new conversation before pasting (TAIL_CLEAR), never just to paste.
 export function readAnswer(answer) {
   const done = answer?.lines?.find((l) => l?.type === "done");
   const line = done ?? answer?.error ?? null;
-  if (!line) return { keys: "maybe", result: "no_answer", lead: NO_ANSWER, tail: TAIL_PASTE };
+  if (!line) return { keys: "maybe", result: "no_answer", lead: NO_ANSWER, tail: TAIL_CLEAR };
   const result = line.result ?? line.code ?? "failed";
   const keys = line.keys === "none" || line.keys === "yes" ? line.keys : "maybe";
   // An error that does not say what was typed (the helper's own failure, a kill by the exec timeout) is no answer.
-  if (!done && line.keys === undefined) return { keys: "maybe", result: "no_answer", lead: NO_ANSWER, tail: TAIL_PASTE };
+  if (!done && (line.keys === undefined || line.keys === "maybe")) return { keys: "maybe", result: "no_answer", lead: NO_ANSWER, tail: TAIL_CLEAR };
   const message = String(line.message ?? "").trim();
   if (keys === "none") {
     // Some refusals already say it (cards::refused: "Nothing was sent."): one such sentence is enough.
@@ -49,6 +52,13 @@ export function readAnswer(answer) {
   const tail = result === "prompt_unconfirmed" ? TAIL_UNCONFIRMED
     : result === "clear_unknown" || result === "clear_unconfirmed" ? TAIL_CLEAR : TAIL_PASTE;
   return { keys, result, lead: message || "The tab may have been cleared.", tail };
+}
+
+// A lead and its tail as one note: a period between them when the message has no closing punctuation (a forward's
+// "pc did not answer in 21 s"), and, for an unconfirmed prompt, that it is on the clipboard (only once it was copied).
+export function joinNote(lead, tail, result) {
+  const l = /[.!?]$/.test(lead) ? lead : `${lead}.`;
+  return `${l} ${tail}${result === "prompt_unconfirmed" ? ` ${ON_CLIPBOARD}` : ""}`;
 }
 
 let runs = 0;   // run ids: only the run with the matching id may change or clear its record
@@ -138,6 +148,14 @@ export class FinishedView {
   async copy(cx, address) {
     if (typeof cx?.write_to_clipboard !== "function") { notify({ title: "Couldn't copy: no clipboard here. Open the tab and use Copy all.", level: "warning", timeout: 3000 }); return; }
     if (this.busy) return;
+    // A tab whose run typed keys shows the new conversation now: a re-read finds no prompt, so its own prompt is copied.
+    const run = this.runs.get(address);
+    if (run?.state === "done" && run.keys !== "none" && run.prompt) {
+      cx.write_to_clipboard(run.prompt);
+      notify({ title: "Re-entry prompt copied to the clipboard", level: "info", timeout: 2000 });
+      this.flashCopied(cx, address, "copy"); cx.notify?.();
+      return;
+    }
     this.busy = "copy"; cx.notify?.();
     let r;
     try { r = await this.reader(address); if (r.prompt) this.read.set(address, { ...r, at: Date.now() }); } finally { this.busy = null; }
@@ -207,7 +225,7 @@ export class FinishedView {
     if (this.runs.get(address)?.id === id) reentering.delete(address);
   }
 
-  async reenter(cx, address, started = this.begin(address)) {
+  async reenter(cx, address, started = this.begin(address), clip = cx) {
     if (!started) return;
     const { id, shown, seen } = started;
     const own = () => this.runs.get(address)?.id === id;
@@ -216,7 +234,8 @@ export class FinishedView {
       let again;
       try { again = await this.reader(address); } catch (e) { again = { prompt: null, problem: String(e?.message ?? e) }; }
       if (!again.prompt || again.problem || again.prompt !== shown.prompt || again.seen?.path !== shown.path) {
-        if (again.prompt) this.read.set(address, { ...again, at: Date.now() });
+        // The new read is shown (the button and the old prompt go with a reply that has none); a read that failed keeps the old one.
+        if (!again.problem) this.read.set(address, { ...again, at: Date.now() });
         this.release(address, id);
         this.note = { address, text: CHANGED };
         notify({ title: CHANGED, level: "warning", timeout: 4000 });
@@ -228,11 +247,11 @@ export class FinishedView {
       let text = a.lead, copyFailed = false;
       if (a.tail) {
         // A key may have gone: the prompt goes on the clipboard whatever else happens (the owner pastes it).
-        try { cx.write_to_clipboard(shown.prompt); text = `${a.lead} ${a.tail}`; }
+        try { clip.write_to_clipboard(shown.prompt); text = joinNote(a.lead, a.tail, a.result); }
         catch { copyFailed = true; text = `${a.lead} ${COPY_FAILED}`; }
       }
       const line = (answer?.lines ?? []).find((l) => l?.type === "done") ?? answer?.error ?? null;
-      if (own()) Object.assign(this.runs.get(address), { state: "done", result: a.result, message: line?.message ?? null, at: Date.now(), lead: a.lead, tail: a.tail, note: text, bad: a.result !== "sent", copyFailed });
+      if (own()) Object.assign(this.runs.get(address), { state: "done", result: a.result, keys: a.keys, message: line?.message ?? null, at: Date.now(), lead: a.lead, tail: a.tail, note: text, bad: a.result !== "sent", copyFailed });
       notify({ title: text, level: a.result === "sent" ? "info" : "warning", timeout: a.result === "sent" ? 3000 : 8000 });
       if (a.result === "sent") cx.timer?.after?.(DROP_MS, (cx2) => this.drop(cx2, address, id));
     } finally { this.settle(address, id); cx.notify?.(); }
@@ -254,7 +273,7 @@ export class FinishedView {
     try {
       cx.write_to_clipboard(run.prompt);
       notify({ title: "Re-entry prompt copied to the clipboard", level: "info", timeout: 2000 });
-      run.note = `${run.lead} ${run.tail}`; run.copyFailed = false;
+      run.note = joinNote(run.lead, run.tail, run.result); run.copyFailed = false;
       this.flashCopied(cx, address, "again");
     } catch { notify({ title: COPY_FAILED, level: "warning", timeout: 4000 }); }
     cx.notify?.();
@@ -309,9 +328,10 @@ export class FinishedView {
     const addr = cur.address;
     const r = this.read.get(addr) ?? this.runPrompt(addr);
     const run = this.runs.get(addr);
-    // Not again after a result that is not "sent": the pre-clear read is stale (the tab shows a new conversation now).
-    const canRe = Boolean(r?.prompt) && r.seen?.agent === "claude" && Boolean(r.seen?.path) && this.canReenter === true
-      && !(run?.state === "done" && run.result !== "sent");
+    // Not again after a run that may have typed (also "sent": its row stays 5 s): the pre-clear read is stale, the tab shows
+    // a new conversation now. A refusal that typed nothing (keys "none") leaves the button, to press again.
+    const typed = run?.state === "done" && run.keys !== "none";
+    const canRe = Boolean(r?.prompt) && r.seen?.agent === "claude" && Boolean(r.seen?.path) && this.canReenter === true && !typed;
     const copied = (what) => this.copied?.address === addr && this.copied.what === what;
     let body;
     if (!r) body = div().text_size(13).text_color(t.muted).child("Reading its re-entry prompt…");
@@ -334,7 +354,7 @@ export class FinishedView {
             (_e, cx) => {
               if (typeof cx?.write_to_clipboard !== "function") { notify({ title: "Couldn't re-enter: no clipboard here. Open the tab and use Copy all.", level: "warning", timeout: 3000 }); return; }
               const s = this.begin(addr);
-              if (s) cx.spawn((cx2) => this.reenter(cx2, addr, s));
+              if (s) cx.spawn((cx2) => this.reenter(cx2, addr, s, typeof cx2?.write_to_clipboard === "function" ? cx2 : cx));
             })))
           .when(hasPrompt, (el) => el.child(this.button("fin-copy", this.busy === "copy" ? "Copying…" : copied("copy") ? "Copied" : "Copy prompt", !canRe, t,
             (_e, cx) => { if (!this.busy) cx.spawn((cx2) => this.copy(cx2, addr)); })))
@@ -342,7 +362,7 @@ export class FinishedView {
             (_e, cx) => { if (!this.busy) cx.spawn((cx2) => this.copyFull(cx2, addr)); })))
           .when(run?.copyFailed, (el) => el.child(this.button("fin-copy-again", copied("again") ? "Copied" : "Copy again", false, t, (_e, cx2) => this.copyAgain(cx2, addr))))
           .child(this.button("fin-open", "Open tab", false, t, () => showAgent(addr))))
-        .when(hasPrompt, (el) => el.child(div().id("fin-hint").text_size(12).text_color(t.muted).child(canRe ? HINT : "Then type /clear in the tab and paste.")))
+        .when(hasPrompt && !(typed && run.note), (el) => el.child(div().id("fin-hint").text_size(12).text_color(t.muted).child(canRe ? HINT : "Then type /clear in the tab and paste.")))
         .when(Boolean(run?.note), (el) => el.child(div().id("fin-note").whitespace_normal().text_size(13).text_color(run.bad ? t.blocked : t.foreground).child(run.note)))
         .when(this.note?.address === addr, (el) => el.child(div().id("fin-changed").whitespace_normal().text_size(13).text_color(t.blocked).child(this.note.text))));
   }
