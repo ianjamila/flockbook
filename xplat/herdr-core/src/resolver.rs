@@ -145,6 +145,11 @@ struct Entry {
     stamp_pid: Option<i32>,
     stamp_dir: String,
     need_pids: Vec<i32>,
+    /// hc Claude panes: the pid whose `<pid>.json` the resolver validated (`find`'s pid); never the `agent.pid` fallback.
+    matched_pid: Option<i32>,
+    /// `matched_pid` is a record `/clear` typed into this pane can change: not a `bg` or parked-job record, and the
+    /// process is in the pane's process tree.
+    identity_ok: bool,
 }
 
 /// `mate` None: undecided. `fin`: decided, or undecided after `verdict_cap` bytes; read again only if it shrinks.
@@ -494,6 +499,11 @@ impl SessionResolver {
                 // Unresolved: watch the agent's own file, where a new session id would most likely appear.
                 let stamp_pid = found.as_ref().and_then(|f| f.1).or(agent.as_ref().map(|a| a.pid));
                 let stamp_dir = self.claude_sessions_dir(agent.as_ref());
+                let matched_pid = found.as_ref().and_then(|f| f.1);
+                let identity_ok = match (&agent, matched_pid) {
+                    (Some(a), Some(pid)) => claude_hc && own_record(pid, a.pid, &n.pids, procs, &stamp_dir),
+                    _ => false,
+                };
                 let entry = Entry {
                     pid: agent.as_ref().map(|a| a.pid),
                     path: found.and_then(|f| f.0),
@@ -502,6 +512,8 @@ impl SessionResolver {
                     stamp_pid: if claude_hc { stamp_pid } else { None },
                     stamp_dir,
                     need_pids: n.pids.clone(),
+                    matched_pid,
+                    identity_ok,
                 };
                 self.cache.insert(n.pane_id.clone(), entry);
             }
@@ -548,6 +560,16 @@ impl SessionResolver {
         let sid = e.path.as_ref().filter(|p| !p.is_empty() && !p.contains('/') && !p.contains('\\'))?;
         let config = Path::new(&e.stamp_dir).parent()?.to_string_lossy().into_owned();
         Some((sid.clone(), config))
+    }
+
+    /// The pid record a Claude pane was matched by, for a caller that types `/clear` and then waits for the record to
+    /// name a new session: `(pid, sessions folder)`, read again with [`read_pid_record`]. None when the pane was not
+    /// matched by a validated record (the `agent.pid` fallback is no identity), or when the match is a `bg` record or
+    /// a process outside the pane's tree (a parked tab's background job): `/clear` in the pane cannot change those.
+    pub fn claude_pid_record(&self, pane_id: &str) -> Option<(i32, String)> {
+        let e = self.cache.get(pane_id)?;
+        let pid = e.matched_pid.filter(|_| e.identity_ok)?;
+        Some((pid, e.stamp_dir.clone()))
     }
 
     fn waits_for_log(&self, e: &Entry) -> bool {
@@ -924,6 +946,8 @@ struct PidFile {
     name: Option<String>,
     job: Option<String>,
     parked: Option<String>,
+    /// `procStart` as the file wrote it.
+    proc_start: String,
 }
 
 fn pid_file(pid: i32, by_pid: &HashMap<i32, &Proc>, read: &impl Fn(i32) -> Option<Vec<u8>>) -> Option<PidFile> {
@@ -940,12 +964,51 @@ fn pid_file(pid: i32, by_pid: &HashMap<i32, &Proc>, read: &impl Fn(i32) -> Optio
     if sid.is_empty() || sid.contains('/') {
         return None;
     }
-    let ps = proc_start(o.get("procStart").and_then(|v| v.as_str())?)?;
+    let raw_start = o.get("procStart").and_then(|v| v.as_str())?;
+    let ps = proc_start(raw_start)?;
     if (ps - proc_.start).num_milliseconds().abs() > 2000 {
         return None;
     }
     let text = |k: &str| o.get(k).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(String::from);
-    Some(PidFile { pid, session: sid.to_string(), kind: text("kind"), status: text("status"), name: text("name"), job: text("jobId"), parked: text("parkedJobId") })
+    Some(PidFile {
+        pid,
+        session: sid.to_string(),
+        kind: text("kind"),
+        status: text("status"),
+        name: text("name"),
+        job: text("jobId"),
+        parked: text("parkedJobId"),
+        proc_start: raw_start.to_string(),
+    })
+}
+
+/// One validated `<pid>.json` (see [`read_pid_record`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PidRecord {
+    pub session: String,
+    pub status: Option<String>,
+    /// `procStart` as the file wrote it.
+    pub proc_start: String,
+    pub kind: Option<String>,
+    /// `parkedJobId`: the client's conversation went on as that background job.
+    pub parked: Option<String>,
+}
+
+/// `<dir>/<pid>.json`, when it belongs to the live process `pid` in `procs`: the same checks as the resolver's own
+/// (`pid` field, session id, `procStart` within 2 s of the process's start, either `procStart` format).
+pub fn read_pid_record(dir: &str, pid: i32, procs: &[Proc]) -> Option<PidRecord> {
+    let by_pid = procs_by_pid(procs);
+    let f = pid_file(pid, &by_pid, &|p| std::fs::read(format!("{dir}/{p}.json")).ok())?;
+    Some(PidRecord { session: f.session, status: f.status, proc_start: f.proc_start, kind: f.kind, parked: f.parked })
+}
+
+/// `pid`'s record is a conversation of this pane: in the process tree of the agent or the terminal's pids, and
+/// neither a `bg` job's record nor a parked client's.
+fn own_record(pid: i32, agent_pid: i32, pane_pids: &[i32], procs: &[Proc], dir: &str) -> bool {
+    let mut roots = vec![agent_pid];
+    roots.extend(pane_pids);
+    claude_search_order(&roots, procs).contains(&pid)
+        && read_pid_record(dir, pid, procs).is_some_and(|r| r.kind.as_deref() != Some("bg") && r.parked.is_none())
 }
 
 /// A Claude Code client whose conversation went on in Claude Code's background service ("parked", owner 11-13): the

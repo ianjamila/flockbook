@@ -7,5 +7,5 @@ pub mod mapper;
 pub mod observe;
 pub mod session;
 
-pub use client::HcClient;
+pub use client::{HcClient, SendOutcome};
 pub use session::HcSession;

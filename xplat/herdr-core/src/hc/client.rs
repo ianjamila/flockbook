@@ -12,6 +12,14 @@ use serde_json::{json, Value};
 use std::cell::Cell;
 use std::time::Duration;
 
+/// What became of a `send_sure`: `NotSent` is proven (nothing can have been dispatched), `Maybe` is not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SendOutcome {
+    Sent,
+    NotSent,
+    Maybe,
+}
+
 pub struct HcClient {
     pub session: HcSession,
     connector: Box<dyn Connector>,
@@ -96,17 +104,23 @@ impl HcClient {
     /// One plain-mode call on its own connection. Skips notifications until the reply with our id.
     /// `Timeout` once the request was written: it may still take effect.
     pub fn call(&self, method: &str, params: Value, timeout: Option<Duration>) -> Result<Value, HerdrError> {
+        self.call_staged(method, params, timeout).map_err(|(_, e)| e)
+    }
+
+    /// `call`, with the error telling whether it came before any byte was written (true: the call cannot have taken
+    /// effect).
+    fn call_staged(&self, method: &str, params: Value, timeout: Option<Duration>) -> Result<Value, (bool, HerdrError)> {
         let id = self.seq.get() + 1;
         self.seq.set(id);
         let body = serde_json::to_vec(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))
-            .map_err(|e| HerdrError::Protocol(e.to_string()))?;
-        let mut sock = LineSocket::connect(self.connector.as_ref(), Some(timeout.unwrap_or(self.call_timeout)))?;
-        sock.write_line(&body)?;
+            .map_err(|e| (true, HerdrError::Protocol(e.to_string())))?;
+        let mut sock = LineSocket::connect(self.connector.as_ref(), Some(timeout.unwrap_or(self.call_timeout))).map_err(|e| (true, e))?;
+        sock.write_line(&body).map_err(|e| (false, e))?;
         loop {
-            let line = sock.read_line()?;
+            let line = sock.read_line().map_err(|e| (false, e))?;
             let Ok(o) = serde_json::from_slice::<Value>(&line) else { continue };
             if o.is_object() && o.get("id").and_then(Value::as_i64) == Some(id) {
-                return rpc_result(&o);
+                return rpc_result(&o).map_err(|e| (false, e));
             }
         }
     }
@@ -127,6 +141,44 @@ impl HcClient {
     pub fn send(&self, text: &str, pane_id: &str) -> Result<(), HerdrError> {
         self.call("terminal.send", json!({"terminal": Self::address(pane_id)?, "text": text}), Some(self.send_timeout))?;
         Ok(())
+    }
+
+    /// `send` for a caller that must know whether the text may have gone (re-entry types `/clear`, then a prompt).
+    /// `timeout`: how long to wait for the core's reply; `if_status`: the terminal's status the core must see
+    /// (`terminal.send` param `"if"`, omitted when None), else it refuses.
+    ///
+    /// Measured on the core: it holds a send while a person's unsent draft is in the input box, and pastes it onto
+    /// the draft only 60 s after their last key; closing the connection withdraws a held send. So a `timeout` well
+    /// under 60 s means a held send never lands glued to a draft, but a timeout is still `Maybe` (not proven).
+    ///
+    /// `NotSent` only when nothing can have been dispatched: a bad address, a connect error (before any byte was
+    /// written), or the core's refusals made before dispatch (`status_mismatch`, `blocked`). `Maybe` for a write
+    /// error, a read error, `Closed`, a timeout and any other error reply. `Sent` for a result reply.
+    pub fn send_sure(&self, text: &str, pane_id: &str, timeout: Duration, if_status: Option<&str>) -> SendOutcome {
+        let Ok(address) = Self::address(pane_id) else { return SendOutcome::NotSent };
+        let mut params = json!({"terminal": address, "text": text});
+        if let Some(s) = if_status {
+            params["if"] = json!(s);
+        }
+        match self.call_staged("terminal.send", params, Some(timeout)) {
+            Ok(_) => SendOutcome::Sent,
+            Err((true, _)) => SendOutcome::NotSent,
+            Err((false, HerdrError::Server { code, .. })) if code == "status_mismatch" || code == "blocked" => SendOutcome::NotSent,
+            Err(_) => SendOutcome::Maybe,
+        }
+    }
+
+    /// `snapshot` with its own call timeout.
+    pub fn snapshot_within(&self, timeout: Duration) -> Result<Vec<Workspace>, HerdrError> {
+        let list = self.call("terminal.list", json!({}), Some(timeout))?;
+        let terms = list.get("terminals").and_then(Value::as_array).cloned().unwrap_or_default();
+        Ok(mapper::workspaces(&terms))
+    }
+
+    /// `visible_text` with its own call timeout.
+    pub fn visible_text_within(&self, pane_id: &str, timeout: Duration) -> Result<String, HerdrError> {
+        let r = self.call("terminal.read", json!({"terminal": Self::address(pane_id)?}), Some(timeout))?;
+        r.get("text").and_then(Value::as_str).map(String::from).ok_or_else(|| HerdrError::Protocol("terminal.read has no text".into()))
     }
 
     /// `send`, as the composer needs it: a timeout is `Unconfirmed`, anything else that fails is `Failed`.
@@ -194,15 +246,12 @@ impl PaneScreen for HcClient {
 
     /// `terminal.list`, mapped by the mapper (live terminals only).
     fn snapshot(&self) -> Result<Vec<Workspace>, HerdrError> {
-        let list = self.call("terminal.list", json!({}), None)?;
-        let terms = list.get("terminals").and_then(Value::as_array).cloned().unwrap_or_default();
-        Ok(mapper::workspaces(&terms))
+        self.snapshot_within(self.call_timeout)
     }
 
     /// `terminal.read` with no history: the visible screen as text. Read-only.
     fn visible_text(&self, pane_id: &str) -> Result<String, HerdrError> {
-        let r = self.call("terminal.read", json!({"terminal": Self::address(pane_id)?}), None)?;
-        r.get("text").and_then(Value::as_str).map(String::from).ok_or_else(|| HerdrError::Protocol("terminal.read has no text".into()))
+        self.visible_text_within(pane_id, self.call_timeout)
     }
 
     /// Claude's permission prompt: `1` allows once, `esc` denies.
@@ -330,6 +379,121 @@ mod socket_tests {
         let keys: Vec<Value> = calls.iter().filter(|(m, _)| m == "terminal.keys").map(|(_, p)| p["keys"].clone()).collect();
         assert_eq!(keys, vec![json!(["esc"]), json!(["1"]), json!(["down", "enter"])]);
         assert_eq!(calls.last().unwrap().1, json!({"terminal":"t1","text":"hi"}));
+    }
+
+    /// A herdr-core that reads one request line per connection and hands `(request, stream)` to `act`; records the
+    /// requests. For the replies `fake_core` cannot give (an error reply, a close after the write).
+    fn raw_core(act: impl Fn(&Value, std::os::unix::net::UnixStream) + Send + 'static) -> (HcClient, std::sync::Arc<std::sync::Mutex<Vec<Value>>>, tempfile::TempDir) {
+        use std::io::{BufRead, BufReader};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hc.sock").to_string_lossy().to_string();
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(vec![]));
+        let seen2 = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(s) = stream else { continue };
+                let mut line = String::new();
+                if BufReader::new(s.try_clone().unwrap()).read_line(&mut line).is_err() {
+                    continue;
+                }
+                let o: Value = serde_json::from_str(&line).unwrap();
+                seen2.lock().unwrap().push(o.clone());
+                act(&o, s);
+            }
+        });
+        (HcClient::new(HcSession::new(&path), 2, 2), seen, dir)
+    }
+
+    fn error_reply(kind: Option<&str>) -> impl Fn(&Value, std::os::unix::net::UnixStream) + Send + 'static {
+        use std::io::Write;
+        let data = kind.map(|k| json!({"kind": k}));
+        move |o, mut s| {
+            let mut err = json!({"code": -32000, "message": "refused"});
+            if let Some(d) = &data {
+                err["data"] = d.clone();
+            }
+            let _ = s.write_all(format!("{}\n", json!({"jsonrpc": "2.0", "id": o["id"], "error": err})).as_bytes());
+        }
+    }
+
+    const SEND: Duration = Duration::from_millis(400);
+
+    /// Catches: a send that never left being reported as possibly delivered (the caller would then not retry or
+    /// would stop its re-entry), and a send that may have gone being reported as not sent (a double paste).
+    #[test]
+    fn send_sure_connect_error_is_not_sent() {
+        let c = HcClient::new(HcSession::new("/nonexistent/hc.sock"), 1, 1);
+        assert_eq!(c.send_sure("hi", "hc:t1", SEND, None), SendOutcome::NotSent, "no connection: nothing was written");
+        assert_eq!(c.send_sure("hi", "w1:p1", SEND, None), SendOutcome::NotSent, "an address that is no hc pane");
+    }
+
+    /// Catches: `Closed` after the request was written counted as not sent (the core may already have pasted).
+    #[test]
+    fn send_sure_closed_after_write_is_maybe() {
+        let (c, seen, _d) = raw_core(|_, s| drop(s));
+        assert_eq!(c.send_sure("hi", "hc:t1", SEND, None), SendOutcome::Maybe);
+        assert_eq!(seen.lock().unwrap().len(), 1, "the request did reach the core");
+    }
+
+    /// Catches: a held send (the core waits for the person's draft) counted as not sent.
+    #[test]
+    fn send_sure_timeout_is_maybe() {
+        let (c, _seen, _d) = raw_core(|_, s| {
+            std::thread::sleep(Duration::from_secs(2)); // holds the connection past the caller's timeout
+            drop(s);
+        });
+        let t = std::time::Instant::now();
+        assert_eq!(c.send_sure("hi", "hc:t1", Duration::from_millis(150), None), SendOutcome::Maybe);
+        assert!(t.elapsed() < Duration::from_secs(2), "the explicit timeout was used, not the 2 s call timeout");
+    }
+
+    /// Catches: a refusal before dispatch (status mismatch, blocked) reported as `Maybe`, which would stop a retry
+    /// that is safe; and an unknown error reported as `NotSent`, which would paste twice.
+    #[test]
+    fn send_sure_status_mismatch_is_not_sent() {
+        for kind in ["status_mismatch", "blocked"] {
+            let (c, _s, _d) = raw_core(error_reply(Some(kind)));
+            assert_eq!(c.send_sure("hi", "hc:t1", SEND, Some("idle")), SendOutcome::NotSent, "{kind}");
+        }
+        for kind in [Some("weird"), None] {
+            let (c, _s, _d) = raw_core(error_reply(kind));
+            assert_eq!(c.send_sure("hi", "hc:t1", SEND, None), SendOutcome::Maybe, "{kind:?}");
+        }
+        let (c, _s, _d) = raw_core(|o, mut s| {
+            use std::io::Write;
+            let _ = s.write_all(format!("{}\n", json!({"jsonrpc": "2.0", "id": o["id"], "result": {}})).as_bytes());
+        });
+        assert_eq!(c.send_sure("hi", "hc:t1", SEND, None), SendOutcome::Sent);
+    }
+
+    /// Catches: the idle guard not reaching the core (a `/clear` typed into a busy tab), or an `if` key sent when
+    /// none was asked for.
+    #[test]
+    fn send_sure_passes_if() {
+        let (c, seen, _d) = raw_core(|o, mut s| {
+            use std::io::Write;
+            let _ = s.write_all(format!("{}\n", json!({"jsonrpc": "2.0", "id": o["id"], "result": {}})).as_bytes());
+        });
+        assert_eq!(c.send_sure("hi", "hc:t1", SEND, Some("idle")), SendOutcome::Sent);
+        assert_eq!(c.send_sure("hi", "hc:t1", SEND, None), SendOutcome::Sent);
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen[0]["method"], "terminal.send");
+        assert_eq!(seen[0]["params"], json!({"terminal": "t1", "text": "hi", "if": "idle"}));
+        assert_eq!(seen[1]["params"], json!({"terminal": "t1", "text": "hi"}), "no `if` key when none is given");
+    }
+
+    /// Catches: the `_within` reads ignoring their own timeout (a read that must come back fast waits the 2 s default).
+    #[test]
+    fn reads_within_use_their_own_timeout() {
+        let (c, _seen, _d) = raw_core(|_, s| {
+            std::thread::sleep(Duration::from_secs(2));
+            drop(s);
+        });
+        let t = std::time::Instant::now();
+        assert!(matches!(c.snapshot_within(Duration::from_millis(150)), Err(HerdrError::Timeout(_))));
+        assert!(matches!(c.visible_text_within("hc:t1", Duration::from_millis(150)), Err(HerdrError::Timeout(_))));
+        assert!(t.elapsed() < Duration::from_millis(1500));
     }
 
     #[test]

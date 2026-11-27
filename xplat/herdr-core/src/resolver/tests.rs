@@ -920,6 +920,112 @@ fn claude_bare_session_names_the_config_folder() {
     assert_eq!(res.claude_bare_session("hc:t1"), None, "the log is found: a path, not a bare id");
 }
 
+/// The re-enter step types `/clear` into a Claude tab and must tell the new conversation by the pid record the
+/// resolver validated: `read_pid_record` accepts what `pid_file` accepts and nothing else.
+/// Catches: a record of another pid, a path-like session id or a reused pid's stale start being taken as identity.
+#[test]
+fn pid_record_validated_like_pid_file() {
+    let procs = parse_ps(
+        "  500     1 Sat Oct 31 10:00:00 2026     -zsh HC_TERMINAL_ID=t1
+  501   500 Sat Oct 31 10:01:00 2026     claude HC_TERMINAL_ID=t1
+  502   500 Sat Oct 31 10:02:00 2026     claude HC_TERMINAL_ID=t1
+  503   500 Sat Oct 31 10:03:00 2026     claude HC_TERMINAL_ID=t1
+  504   500 Sat Oct 31 10:04:00 2026     claude HC_TERMINAL_ID=t1
+  505   500 Sat Oct 31 10:05:00 2026     claude HC_TERMINAL_ID=t1",
+    );
+    let (_t, dir) = tmp();
+    let start = |pid| procs.iter().find(|p| p.pid == pid).unwrap().start;
+    write_pid_json(&dir, 501, start(501), serde_json::json!({"sessionId": "sid-501", "status": "idle", "kind": "interactive", "parkedJobId": "J1"}));
+    write_pid_json(&dir, 502, start(502), serde_json::json!({"sessionId": "sid-502", "pid": 999})); // names another pid
+    write_pid_json(&dir, 503, start(503), serde_json::json!({"sessionId": "a/b"}));
+    write_pid_json(&dir, 504, start(504) + Duration::seconds(3), serde_json::json!({"sessionId": "sid-504"})); // 3 s off
+    let ok = read_pid_record(&dir, 501, &procs).expect("a good record");
+    assert_eq!(ok.session, "sid-501");
+    assert_eq!(ok.status.as_deref(), Some("idle"));
+    assert_eq!(ok.kind.as_deref(), Some("interactive"));
+    assert_eq!(ok.parked.as_deref(), Some("J1"));
+    assert_eq!(ok.proc_start, lstart_utc(start(501)), "the raw procStart text is kept");
+    assert_eq!(read_pid_record(&dir, 502, &procs), None, "the pid field names another process");
+    assert_eq!(read_pid_record(&dir, 503, &procs), None, "a session id with a slash");
+    assert_eq!(read_pid_record(&dir, 504, &procs), None, "procStart 3 s off the live process: a reused pid");
+    assert_eq!(read_pid_record(&dir, 505, &procs), None, "no record file");
+    assert_eq!(read_pid_record(&dir, 777, &procs), None, "no such live process");
+    write_pid_json(&dir, 504, start(504) + Duration::milliseconds(1500), serde_json::json!({"sessionId": "sid-504"}));
+    assert_eq!(read_pid_record(&dir, 504, &procs).map(|r| r.session), Some("sid-504".into()), "within 2 s still counts");
+}
+
+/// Catches: the `agent.pid` fallback (a process whose record was never validated) passing as the pane's identity,
+/// so `/clear` would be judged against a file that is not this conversation's.
+#[test]
+fn fallback_pid_is_no_identity() {
+    let procs = parse_ps("  500     1 Sat Oct 31 10:00:00 2026     -zsh HC_TERMINAL_ID=t1\n  501   500 Sat Oct 31 10:01:00 2026     claude HC_TERMINAL_ID=t1\n");
+    let (_t, dir) = tmp();
+    let start = procs.iter().find(|p| p.pid == 501).unwrap().start;
+    write_pid_file(&dir, 501, "a/b", start); // invalid record: the resolver keeps only the agent pid as its stamp pid
+    let mut res = resolver(|r| r.claude_dir = dir.clone());
+    let need = Need::new("hc:t1", "claude", "/w", vec![501, 500]);
+    assert!(!res.resolve_with(&[need], &set(&[]), &HashMap::new(), Some(&procs)).contains_key("hc:t1"), "unresolved");
+    assert_eq!(res.claude_pid_record("hc:t1"), None);
+    assert_eq!(res.claude_pid_record("hc:t9"), None, "no such pane");
+}
+
+/// Catches: the matched pid or its config folder not reaching the caller once the pane has a log (the common case).
+#[test]
+fn matched_pid_record_known_with_a_log() {
+    let (_t, cfg) = tmp();
+    let (_d, default_dir) = tmp();
+    fs::create_dir_all(format!("{cfg}/sessions")).unwrap();
+    fs::create_dir_all(format!("{cfg}/projects/-w")).unwrap();
+    fs::write(format!("{cfg}/projects/-w/sid-cfg.jsonl"), "{}\n").unwrap();
+    let procs = parse_ps(&format!(
+        "  500     1 Sat Oct 31 10:00:00 2026     -zsh HC_TERMINAL_ID=t1\n  501   500 Sat Oct 31 10:01:00 2026     claude CLAUDE_CONFIG_DIR={cfg} HC_TERMINAL_ID=t1\n"
+    ));
+    let start = procs.iter().find(|p| p.pid == 501).unwrap().start;
+    write_pid_json(&format!("{cfg}/sessions"), 501, start, serde_json::json!({"sessionId": "sid-cfg", "kind": "interactive"}));
+    let mut res = resolver(|r| r.claude_dir = default_dir.clone());
+    let need = Need::new("hc:t1", "claude", "/w", vec![501, 500]);
+    let out = res.resolve_with(&[need], &set(&[]), &HashMap::new(), Some(&procs));
+    assert!(out.get("hc:t1").is_some_and(|p| p.ends_with("sid-cfg.jsonl")), "resolved to the log");
+    assert_eq!(res.claude_pid_record("hc:t1"), Some((501, format!("{cfg}/sessions"))));
+}
+
+/// A4: a `bg` record, or a record of a process outside the pane's tree (a parked tab's background job), is not
+/// something `/clear` typed into the pane can flip. Catches: re-enter waiting on a record that never changes.
+#[test]
+fn bg_or_outside_tree_is_no_identity() {
+    let procs = parse_ps(
+        "  500     1 Sat Oct 31 10:00:00 2026     -zsh HC_TERMINAL_ID=t1
+  501   500 Sat Oct 31 10:01:00 2026     claude HC_TERMINAL_ID=t1
+  502   501 Sat Oct 31 10:02:00 2026     /x/claude.exe --session-id j1
+  600     1 Sat Oct 31 10:00:00 2026     -zsh HC_TERMINAL_ID=t2
+  601   600 Sat Oct 31 10:01:00 2026     claude HC_TERMINAL_ID=t2
+  900     1 Sat Oct 31 10:00:00 2026     /x/claude.exe --session-id j3
+  700     1 Sat Oct 31 10:00:00 2026     -zsh HC_TERMINAL_ID=t3
+  701   700 Sat Oct 31 10:01:00 2026     claude HC_TERMINAL_ID=t3",
+    );
+    let (_t, dir) = tmp();
+    let start = |pid| procs.iter().find(|p| p.pid == pid).unwrap().start;
+    // t1: the only record is a bg job inside the tree
+    write_pid_json(&dir, 502, start(502), serde_json::json!({"sessionId": "sid-bg", "kind": "bg", "status": "busy", "jobId": "J1"}));
+    // t2: parked; the job's record is outside the tree and not marked bg
+    write_pid_json(&dir, 601, start(601), serde_json::json!({"sessionId": "sid-old", "kind": "interactive", "parkedJobId": "J3"}));
+    write_pid_json(&dir, 900, start(900), serde_json::json!({"sessionId": "sid-far", "kind": "interactive", "status": "idle", "jobId": "J3"}));
+    // t3: an ordinary pane, for contrast
+    write_pid_json(&dir, 701, start(701), serde_json::json!({"sessionId": "sid-own", "kind": "interactive", "status": "idle"}));
+    let mut res = resolver(|r| r.claude_dir = dir.clone());
+    let needs = [
+        Need::new("hc:t1", "claude", "/w", vec![501, 500]),
+        Need::new("hc:t2", "claude", "/w", vec![601, 600]),
+        Need::new("hc:t3", "claude", "/w", vec![701, 700]),
+    ];
+    let out = res.resolve_with(&needs, &set(&[]), &HashMap::new(), Some(&procs));
+    assert_eq!(out.get("hc:t1"), Some(&"sid-bg".to_string()), "the resolver does match the bg record");
+    assert_eq!(out.get("hc:t2"), Some(&"sid-far".to_string()), "and the parked job outside the tree");
+    assert_eq!(res.claude_pid_record("hc:t1"), None, "a bg record");
+    assert_eq!(res.claude_pid_record("hc:t2"), None, "a matched pid outside the pane's tree");
+    assert_eq!(res.claude_pid_record("hc:t3"), Some((701, dir.clone())));
+}
+
 #[test]
 fn hc_edge_claude_clear() {
     let procs = parse_ps("  500     1 Sat Oct 31 10:00:00 2026     -zsh HC_TERMINAL_ID=t1\n  501   500 Sat Oct 31 10:01:00 2026     claude HC_TERMINAL_ID=t1\n");
