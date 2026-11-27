@@ -111,6 +111,38 @@
               ]
             },
             {
+              "id": "finished",
+              "type": "column",
+              "resizable": false,
+              "children": [
+                {
+                  "id": "finished-top",
+                  "type": "block",
+                  "size": {
+                    "px": 56
+                  },
+                  "window_drag": true,
+                  "content": {
+                    "mod": "flockbook",
+                    "props": {
+                      "view": "top"
+                    }
+                  }
+                },
+                {
+                  "id": "finished-body",
+                  "type": "block",
+                  "content": {
+                    "mod": "flockbook",
+                    "props": {
+                      "view": "finished",
+                      "bar": "outside"
+                    }
+                  }
+                }
+              ]
+            },
+            {
               "id": "overview",
               "type": "column",
               "resizable": false,

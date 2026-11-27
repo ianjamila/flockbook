@@ -6,7 +6,9 @@ import { fakeCx } from "./fake-cx.mjs";
 import { agent, space, passBlockGrace } from "./fixtures.mjs";
 import { SideView, tabMarks, monogram } from "../mods/flockbook/side.js";
 import { NeedsView } from "../mods/flockbook/needs.js";
+import { FinishedView } from "../mods/flockbook/finished.js";
 import { KEY_AGENT } from "../mods/flockbook/state.js";
+import { replyHandoff } from "../mods/flockbook/blocks.js";
 
 const tab = (id, status) => ({ id, status });
 
@@ -68,4 +70,79 @@ test("finished: only hand-off-given tabs — never a working, blocked, asking or
   fake.shared["flockbook.background"] = { t6: { shells: 0, agents: 1 } };
   assert.deepEqual(finished().map((a) => a.address), ["t4"]);
   assert.equal(listMode("finished"), "all", "Finished spans every workspace, as Needs you does");
+});
+
+// The Finished screen: the hand-off tabs on the left, the picked one's re-entry prompt and Copy buttons on the right.
+// The view reads a tab's prompt through readHandoff (tested with a real feed in overview.test.mjs); here a fake reader
+// gives each tab's reply text, parsed by the same blocks.js code.
+const feedOf = (v, replies) => {
+  v.reader = async (addr) => { const h = replyHandoff([{ id: "a1", k: "assistant", text: replies[addr] ?? "Done.", ts: 1 }]); return { prompt: h?.prompt ?? null, file: h?.file ?? null, problem: null }; };
+};
+// The top bar's asks tick (started with the view) rewrites the hand-off marks from the screens, which these fakes do not
+// give: `marks` is set again before each tick and render (as the Overview tests do).
+let marks = {};
+const finishedSetup = (addrs = ["t4", "t6"]) => {
+  fake.agents = [agent("t1", "blocked"), ...addrs.map((a) => agent(a, "done", { tab_name: `job ${a}` }))];
+  marks = Object.fromEntries(addrs.map((a) => [a, true]));
+};
+const paint = (v) => { fake.shared["flockbook.handoff"] = marks; return v.render(fakeCx()); };
+// Ticks the view and waits for the prompt read. Never returns the element from an async function: a drawn element has a
+// then() (the builder API), so awaiting it would wait forever.
+const load = async (v) => { fake.shared["flockbook.handoff"] = marks; const cx = fakeCx(); v.tick(cx); await Promise.all(cx.tasks); };
+
+test("finished screen: the hand-off tabs, the picked one's prompt, Copy full only with a hand-off file", async () => {
+  finishedSetup();
+  const replies = { t4: "Done.\n\nRe-entry prompt:\n\n> Continue t4.\n> Full prompt: ~/claude-notes/handoffs/t4.md — read it first.", t6: "Done.\n\nRe-entry prompt:\n\n> Continue t6, no file." };
+  const v = new FinishedView(fakeCx());
+  feedOf(v, replies);
+  let el = (await load(v), paint(v));
+  assert.match(textOf(byId(el, "finished-list")), /Finished · 2/);
+  assert.ok(byId(el, "fin-t4") && byId(el, "fin-t6") && !byId(el, "fin-t1"), "only the hand-off tabs, not the blocked one");
+  assert.match(textOf(byId(el, "finished-detail")), /Continue t4\./);
+  assert.match(textOf(byId(el, "finished-detail")), /Then type \/clear in the tab and paste\./);
+  assert.ok(byId(el, "fin-copy") && byId(el, "fin-full") && byId(el, "fin-open"));
+  byId(el, "fin-t6")._h.on_click({}, fakeCx());
+  el = (await load(v), paint(v));
+  assert.match(textOf(byId(el, "finished-detail")), /Continue t6, no file/);
+  assert.ok(byId(el, "fin-copy") && !byId(el, "fin-full"), "no hand-off file named: no Copy full");
+  replies.t6 = "Done, nothing to hand over.";
+  v.read.clear();
+  el = (await load(v), paint(v));
+  assert.match(textOf(byId(el, "finished-detail")), /No re-entry prompt in its last reply\./);
+  assert.ok(!byId(el, "fin-copy") && !byId(el, "fin-full") && byId(el, "fin-open"), "no prompt: Open tab only");
+  byId(el, "fin-open")._h.on_click({}, fakeCx());
+  assert.equal(fake.shared[KEY_AGENT], "t6");
+});
+
+test("finished screen: the picked tab leaves (it re-entered) → the first one shows; none left → Nothing finished", async () => {
+  finishedSetup();
+  const v = new FinishedView(fakeCx());
+  feedOf(v, { t4: "Re-entry prompt:\n\n> P4.", t6: "Re-entry prompt:\n\n> P6." });
+  let el = (await load(v), paint(v));
+  byId(el, "fin-t6")._h.on_click({}, fakeCx());
+  marks = { t4: true };
+  el = (await load(v), paint(v));
+  assert.match(textOf(byId(el, "finished-detail")), /P4\./);
+  marks = {};
+  el = paint(v);
+  assert.match(textOf(el), /Nothing finished/);
+  assert.match(textOf(el), /No session left a re-entry prompt\./);
+});
+
+test("finished screen: Copy prompt reads the reply again and copies (and shows) the newest prompt", async () => {
+  finishedSetup(["t4"]);
+  const replies = { t4: "Re-entry prompt:\n\n> OLD prompt." };
+  const v = new FinishedView(fakeCx());
+  feedOf(v, replies);
+  let el = (await load(v), paint(v));
+  assert.match(textOf(byId(el, "finished-detail")), /OLD prompt/);
+  replies.t4 = "Re-entry prompt:\n\n> NEW prompt.";
+  const cx = fakeCx(); let clip = null; cx.write_to_clipboard = (t) => { clip = t; };
+  byId(el, "fin-copy")._h.on_click({}, cx);
+  await Promise.all(cx.tasks);
+  assert.match(clip, /NEW prompt/);
+  el = paint(v);
+  assert.match(textOf(byId(el, "finished-detail")), /NEW prompt/);
+  assert.doesNotMatch(textOf(byId(el, "finished-detail")), /OLD prompt/);
+  assert.match(textOf(byId(el, "fin-copy")), /Copied/);
 });

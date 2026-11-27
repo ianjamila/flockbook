@@ -1,5 +1,5 @@
 // Flockbook for herdr-app: one mod, four views. The layout picks the view with props.view
-// ("top", "side", "chat", "needs", "overview", "tabs"; "settings" and "sessions" (Resume sessions) are dialogs; "new" is the + menu popup). One folder, because a mod cannot import another mod's files.
+// ("top", "side", "chat", "needs", "finished", "overview", "tabs"; "settings" and "sessions" (Resume sessions) are dialogs; "new" is the + menu popup). One folder, because a mod cannot import another mod's files.
 // The layout root's "toast": "flockbook" makes it Herdr's notes too: those props have no view, only {title, body, …, overlay}.
 import { View, div } from "gpui-kit";
 import { theme, props } from "herdr";
@@ -7,6 +7,7 @@ import { TopView } from "./top.js";
 import { SideView } from "./side.js";
 import { ChatView } from "./chat.js";
 import { NeedsView } from "./needs.js";
+import { FinishedView } from "./finished.js";   // owner 11-27: hand-off tabs with their re-entry prompts
 import { TermBar } from "./termbar.js";
 import { TermGrip, TermResize } from "./termresize.js";
 import { OverviewView } from "./overview.js";
@@ -20,7 +21,7 @@ import { SessionsView } from "./sessions.js";
 import { keepSelectionAccent } from "./selection.js";
 import { withSnapshot } from "./parked.js";
 
-const VIEWS = { top: TopView, side: SideView, chat: ChatView, needs: NeedsView, termbar: TermBar, termgrip: TermGrip, termresize: TermResize, overview: OverviewView, menu: MenuView, settings: SettingsView, tabs: TabsView, summary: SummaryView, sessions: SessionsView, new: NewView, toast: ToastView };
+const VIEWS = { top: TopView, side: SideView, chat: ChatView, needs: NeedsView, finished: FinishedView, termbar: TermBar, termgrip: TermGrip, termresize: TermResize, overview: OverviewView, menu: MenuView, settings: SettingsView, tabs: TabsView, summary: SummaryView, sessions: SessionsView, new: NewView, toast: ToastView };
 // A note from Herdr (the layout's "toast"): no view prop, a title (README: {title, body, level, icon, action, timeout, overlay}).
 export const viewName = (p) => p?.view ?? (p && typeof p.title === "string" && p.overlay ? "toast" : undefined);
 
