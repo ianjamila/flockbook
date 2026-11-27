@@ -6,7 +6,7 @@ import { fakeCx } from "./fake-cx.mjs";
 import { agent, space, passBlockGrace } from "./fixtures.mjs";
 import { SideView, tabMarks, monogram } from "../mods/flockbook/side.js";
 import { NeedsView } from "../mods/flockbook/needs.js";
-import { FinishedView } from "../mods/flockbook/finished.js";
+import { FinishedView, RETRY_MS } from "../mods/flockbook/finished.js";
 import { KEY_AGENT } from "../mods/flockbook/state.js";
 import { replyHandoff } from "../mods/flockbook/blocks.js";
 
@@ -163,4 +163,27 @@ test("side: Finished row under Needs you with its count, opens the Finished scre
   fake.shared["flockbook.config"] = { file: { handoff_marks: "off" } };
   el = new SideView(fakeCx()).render(fakeCx());
   assert.equal(byId(el, "side-finished"), null);
+});
+
+// Review (11-27): a failed read must not stick. A read that gave no prompt is tried again after RETRY_MS; a Copy whose
+// re-read fails keeps the prompt already shown (and only says why it could not copy).
+test("finished screen: a failed read is retried; a failed Copy keeps the prompt on screen", async () => {
+  finishedSetup(["t4"]);
+  const v = new FinishedView(fakeCx());
+  let fail = true;
+  v.reader = async () => (fail ? { prompt: null, file: null, problem: "helper restarting" } : { prompt: "P4 now.", file: null, problem: null });
+  let el = (await load(v), paint(v));
+  assert.match(textOf(byId(el, "finished-detail")), /helper restarting/);
+  fail = false;
+  el = (await load(v), paint(v));
+  assert.match(textOf(byId(el, "finished-detail")), /helper restarting/, "not re-read on every tick");
+  v.read.get("t4").at -= RETRY_MS;
+  el = (await load(v), paint(v));
+  assert.match(textOf(byId(el, "finished-detail")), /P4 now\./, "re-read once the retry time passed");
+  fail = true;
+  const cx = fakeCx(); let clip = null; cx.write_to_clipboard = (t) => { clip = t; };
+  byId(el, "fin-copy")._h.on_click({}, cx);
+  await Promise.all(cx.tasks);
+  assert.equal(clip, null);
+  assert.match(textOf(byId(paint(v), "finished-detail")), /P4 now\./, "the shown prompt stays");
 });

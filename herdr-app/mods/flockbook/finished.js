@@ -10,6 +10,9 @@ import { readHandoff, readFull } from "./handoff-read.js";
 import { startTop, overBar, barOver, barRoom, noteScreenHeight } from "./top.js";
 import { withSnapshot } from "./parked.js";
 
+// A read that gave no prompt (the helper failed, or the reply was not logged yet) is tried again after this long.
+export const RETRY_MS = 5000;
+
 export class FinishedView {
   constructor(cx) {
     this.picked = null;
@@ -35,12 +38,14 @@ export class FinishedView {
     this.shown = cur?.address ?? null;
     // A tab that left the list is read afresh if it comes back (a new hand-off, a new prompt).
     for (const k of [...this.read.keys()]) if (!list.some((a) => a.address === k)) this.read.delete(k);
-    if (cur && !this.read.has(cur.address) && !this.reading.has(cur.address)) cx.spawn((cx) => this.load(cx, cur.address));
+    const r = cur ? this.read.get(cur.address) : null;
+    const due = !r || (!r.prompt && Date.now() - (r.at ?? 0) >= RETRY_MS);
+    if (cur && due && !this.reading.has(cur.address)) cx.spawn((cx) => this.load(cx, cur.address));
   }
 
   async load(cx, address) {
     this.reading.add(address);
-    try { this.read.set(address, await this.reader(address)); } finally { this.reading.delete(address); }
+    try { this.read.set(address, { ...(await this.reader(address)), at: Date.now() }); } finally { this.reading.delete(address); }
     cx.notify?.();
   }
 
@@ -51,7 +56,7 @@ export class FinishedView {
     if (this.busy) return;
     this.busy = "copy"; cx.notify?.();
     let r;
-    try { r = await this.reader(address); this.read.set(address, r); } finally { this.busy = null; }
+    try { r = await this.reader(address); if (r.prompt) this.read.set(address, { ...r, at: Date.now() }); } finally { this.busy = null; }
     if (!r.prompt) notify({ title: r.problem ? `Couldn't read its chat: ${r.problem}` : "No re-entry prompt in its last reply. Open the tab to see it.", level: "warning", timeout: 4000 });
     else {
       cx.write_to_clipboard(r.prompt);
@@ -69,7 +74,7 @@ export class FinishedView {
     let text = null, problem = null;
     try {
       const h = await this.reader(address);
-      this.read.set(address, h);
+      if (h.prompt) this.read.set(address, { ...h, at: Date.now() });
       if (h.problem) problem = `Couldn't read its chat: ${h.problem}`;
       else if (!h.prompt) problem = "No re-entry prompt in its last reply. Open the tab to see it.";
       else if (!h.file) problem = "Its re-entry prompt names no full-prompt file (~/claude-notes/handoffs/…). Copy prompt copies it.";
