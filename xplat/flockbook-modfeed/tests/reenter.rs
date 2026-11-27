@@ -75,8 +75,12 @@ impl ProcessSource for Procs {
 }
 
 fn write_record(dir: &Path, start: &str, session: &str, status: &str) {
-    let o = json!({"pid": 4242, "sessionId": session, "procStart": start, "cwd": "/tmp/proj", "status": status, "kind": "interactive"});
-    std::fs::write(dir.join("4242.json"), serde_json::to_vec(&o).unwrap()).unwrap();
+    write_record_for(dir, 4242, start, session, status);
+}
+
+fn write_record_for(dir: &Path, pid: u32, start: &str, session: &str, status: &str) {
+    let o = json!({"pid": pid, "sessionId": session, "procStart": start, "cwd": "/tmp/proj", "status": status, "kind": "interactive"});
+    std::fs::write(dir.join(format!("{pid}.json")), serde_json::to_vec(&o).unwrap()).unwrap();
 }
 
 /// What a real `/clear` does, as measured: the pid record names a new session and says idle, the core's status for the
@@ -692,4 +696,182 @@ fn cache_moves_on_every_exit_after_clear() {
     let a = reenter::run("t1", &rig.found(), &rig.procs, &rig.client, PROMPT, &rig.expect(), None, WAIT, Instant::now() + Duration::from_secs(30));
     check(&a, "sent", json!(true), "yes");
     assert!(!rig.cache.exists());
+}
+
+/// Catches (Task 3 review): the cache refresh after the prompt waiting its fixed 3 s when the deadline is nearly spent,
+/// so a run answered after the mod's 30 s exec had given up and the answer was lost although keys went.
+#[test]
+fn cache_refresh_stays_inside_the_deadline() {
+    let rig = Rig::new();
+    let slow = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let on_clear = {
+        let (dir, start) = (rig.sessions(), rig.start.clone());
+        move |st: &mut State| standard_clear(&dir, &start, st)
+    };
+    let flag = slow.clone();
+    rig.fake.on_send(Some(Arc::new(move |_a, text, st| {
+        if text == "/clear" {
+            on_clear(st);
+        } else {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    })));
+    let flag = slow.clone();
+    rig.fake.on_call(Some(Arc::new(move |m, _st| {
+        if m == "terminal.list" && flag.load(std::sync::atomic::Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_secs(5));
+        }
+    })));
+    let t0 = Instant::now();
+    let a = reenter::run_with_need("t1", &rig.found(), &rig.procs, &rig.client, PROMPT, &rig.expect(), Some(&rig.cache), WAIT, t0 + Duration::from_millis(1500), Duration::ZERO);
+    check(&a, "sent", json!(true), "yes");
+    assert!(t0.elapsed() < Duration::from_millis(2300), "answered {:?} after the start: the refresh must stop at the deadline (+0.3 s floor)", t0.elapsed());
+}
+
+/// Catches (Task 3 review): a prompt that could not be typed explained as "no longer idle" when the cause was a refusal
+/// the core made for another reason or a connect error. The message is true for every cause; result, cleared, keys stay.
+#[test]
+fn prompt_not_sent_message_is_neutral() {
+    for kind in ["status_mismatch", "blocked"] {
+        let rig = Rig::new();
+        rig.fake.send_refuse(vec![None, Some(kind)]);
+        let a = rig.go(PROMPT);
+        check(&a, "cleared_not_sent", json!(true), "yes");
+        assert_eq!(a.message.as_deref(), Some("The tab was cleared, but the prompt could not be typed."), "{kind}");
+        assert_eq!(rig.sent(), ["/clear", PROMPT], "{kind}: the refused prompt send is still recorded, nothing else");
+    }
+}
+
+/// The built binary's local arm on a real process standing in for Claude Code (the arm scans the real process table:
+/// the pid record only counts for a live process that started when it says). No key goes anywhere but the fake core.
+struct Live {
+    fake: FakeHc,
+    cfg: tempfile::TempDir,
+    locks: tempfile::TempDir,
+    child: std::process::Child,
+    start: String,
+}
+
+impl Live {
+    fn new() -> Live {
+        let fake = FakeHc::start();
+        let cfg = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(cfg.path().join("sessions")).unwrap();
+        std::fs::create_dir_all(cfg.path().join("projects/-tmp-proj")).unwrap();
+        std::fs::write(cfg.path().join("projects/-tmp-proj/old.jsonl"), "{}\n").unwrap();
+        // A process named claude with the config folder in its environment, as `ps -E` shows it. Not a system binary:
+        // macOS hides the environment of those (and kills a copy of one), so this test binary runs its own sleeper.
+        use std::os::unix::process::CommandExt;
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg0("claude")
+            .args(["--ignored", "--exact", "stand_in_sleeper"])
+            .env_clear()
+            .env("CLAUDE_CONFIG_DIR", cfg.path())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id() as i32;
+        let start = {
+            let mut found = None;
+            for _ in 0..50 {
+                // `ps -E` can show the process before its environment (the config folder the pid files are read from).
+                found = herdr_core::resolver::processes().into_iter().find(|p| p.pid == pid && p.line.contains("CLAUDE_CONFIG_DIR="));
+                if found.is_some() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            found.expect("the stand-in process shows in the process table").start.format("%a %b %-d %H:%M:%S %Y").to_string()
+        };
+        let live = Live { fake, cfg, locks: tempfile::tempdir().unwrap(), child, start };
+        live.record("old", "idle");
+        eprintln!("DBG {:?} rec={:?}", live.child.id(), herdr_core::resolver::read_pid_record(live.cfg.path().join("sessions").to_str().unwrap(), live.child.id() as i32, &herdr_core::resolver::processes()).map(|r| r.session));
+        live.fake.set_terminals(vec![live.tab("done")]);
+        live.fake.set_screen("t1", &empty_screen());
+        live.fake.set_paint("t1", EMPTY);
+        let (dir, start, pid) = (live.cfg.path().join("sessions"), live.start.clone(), live.child.id());
+        live.fake.on_send(Some(Arc::new(move |_a, text, st| {
+            if text == "/clear" {
+                write_record_for(&dir, pid, &start, "new", "idle");
+                st.terminals = vec![common::terminal("t1", &["claude"], Some(pid as i64), Some("idle"), Some("idle"))];
+                st.screens.insert("t1".into(), after_clear_screen());
+                st.paints.insert("t1".into(), CLEAR_02.to_vec());
+            }
+        })));
+        live
+    }
+    fn tab(&self, status: &str) -> Value {
+        common::terminal("t1", &["claude"], Some(self.child.id() as i64), Some(status), Some(status))
+    }
+    fn record(&self, session: &str, status: &str) {
+        write_record_for(&self.cfg.path().join("sessions"), self.child.id(), &self.start, session, status);
+    }
+    fn log(&self) -> String {
+        self.cfg.path().join("projects/-tmp-proj/old.jsonl").to_string_lossy().into_owned()
+    }
+    /// The mod's own argv for a `reenter` (`sidecar.call` appends `--home` last), then `extra` before `--text`.
+    fn run(&self, extra: &[&str], text: &str) -> Vec<Value> {
+        let cache = self.cfg.path().join("cache/cache.json");
+        let (log, cache) = (self.log(), cache.to_string_lossy().into_owned());
+        let mut args = vec!["reenter", "--terminal", "t1", "--expect-path", &log, "--cache", &cache];
+        args.extend(extra);
+        args.extend(["--text", text, "--home", "/nonexistent-app"]);
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_flockbook-modfeed"))
+            .args(&args)
+            .env_clear()
+            .env("HC_SOCKET", &self.fake.path)
+            .env("HOME", "/nonexistent-home")
+            .env("FLOCKBOOK_KEYLOCK_DIR", self.locks.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "exit code 0 always");
+        String::from_utf8(out.stdout).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+    }
+}
+
+impl Drop for Live {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn done(v: &[Value]) -> Value {
+    v.iter().find(|l| l["type"] == "done").cloned().unwrap_or_else(|| panic!("a done line: {v:?}"))
+}
+
+/// Catches: the local arm reading the tab from the cache (a cached find has no pid record, so every run answers
+/// `no-identity` and nothing ever clears), the argv the mod really builds (`--home` last, a text that is itself
+/// `--home`) misread, or a key typed on the wrong terms. The whole path: header, one `done`, end.
+#[test]
+fn local_arm_reaches_clear_and_the_prompt_with_the_mods_argv() {
+    let live = Live::new();
+    let v = live.run(&[], "--home");
+    assert_eq!((v[0]["type"].as_str(), v.last().unwrap()["type"].as_str()), (Some("header"), Some("end")), "{v:?}");
+    let d = done(&v);
+    assert_eq!((d["result"].as_str(), d["cleared"].clone(), d["keys"].as_str()), (Some("sent"), json!(true), Some("yes")), "{v:?}");
+    assert_eq!(live.fake.sent_texts(), ["/clear", "--home"], "the text is the value after --text, whatever it says");
+    assert!(live.fake.keys().is_empty());
+}
+
+/// Catches: `--budget-ms` ignored (the run needs 18 s: 17 s left must refuse, after every check, with nothing typed),
+/// and the default not being the 27 s the mod's 30 s exec leaves (a run with 27 s has the time).
+#[test]
+fn budget_ms_sets_the_deadline() {
+    let live = Live::new();
+    let d = done(&live.run(&["--budget-ms", "17000"], PROMPT));
+    assert_eq!((d["result"].as_str(), d["cleared"].clone(), d["keys"].as_str()), (Some("no_time"), json!(false), Some("none")), "{d}");
+    assert!(live.fake.sent_texts().is_empty(), "nothing typed");
+    let d = done(&live.run(&[], PROMPT));
+    assert_eq!(d["result"], "sent", "no --budget-ms: 27 s, enough: {d}");
+}
+
+
+/// Not a test: the stand-in process `Live` starts (this test binary, named `claude`), so `ps -E` shows its environment.
+#[test]
+#[ignore]
+fn stand_in_sleeper() {
+    std::thread::sleep(Duration::from_secs(120));
 }

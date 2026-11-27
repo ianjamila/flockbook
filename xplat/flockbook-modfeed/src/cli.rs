@@ -24,13 +24,13 @@
 //! A terminal `m/tN` on another machine: the command runs there, in the helper there (`remote`). Rust only.
 
 use crate::protocol::{JsonLines, ABILITIES, PROTOCOL_VERSION, SIDECAR_VERSION};
-use crate::{awake, cards, config, feed, keylock, locate, paste, phone, queue, remote, status, update, usage};
+use crate::{awake, cards, config, feed, keylock, locate, paste, phone, queue, reenter, remote, status, update, usage};
 use herdr_core::hc::{HcClient, HcSession};
 use herdr_core::PaneScreen;
 use herdr_core::resolver::SessionResolver;
 use serde_json::json;
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 struct Run {
     t0: Instant,
@@ -45,6 +45,11 @@ impl Run {
     }
     fn fail(mut self, code: &str, message: &str) -> String {
         self.out.emit_value(json!({"type": "error", "code": code, "message": message}));
+        self.finish(false)
+    }
+    /// An error line of `reenter` before any key (A14): it says so, so the mod does not read a missing `keys` as "maybe".
+    fn fail_none(mut self, code: &str, message: &str) -> String {
+        self.out.emit_value(json!({"type": "error", "code": code, "message": message, "keys": "none"}));
         self.finish(false)
     }
 }
@@ -64,8 +69,10 @@ pub fn run(argv: &[String]) -> String {
     match cmd.as_str() {
         "version" => {
             // The commands, then what this build can do beyond them (review P3: from ABILITIES, so a new one is listed).
-            let mut commands: Vec<&str> = vec!["version", "feed", "status", "card", "approve", "answer", "send", "paste-image", "helper", "update-check", "queue", "phone", "commands", "parked", "usage", "awake"];
-            commands.extend(ABILITIES);
+            let mut commands: Vec<&str> = vec!["version", "feed", "status", "card", "approve", "answer", "send", "paste-image", "helper", "update-check", "queue", "phone", "commands", "parked", "usage", "awake", "reenter"];
+            // `reenter` is both a command and an ability: listed once.
+            let extra: Vec<&str> = ABILITIES.iter().copied().filter(|a| !commands.contains(a)).collect();
+            commands.extend(extra);
             r.out.emit_value(json!({"type": "version", "commands": commands, "release": update::release()}));
             r.finish(true)
         }
@@ -122,7 +129,7 @@ pub fn run(argv: &[String]) -> String {
                 }
                 let client = HcClient::new(session, 8, 22);
                 let cache = opt("--cache").map(PathBuf::from);
-                return remote::forward(&client, &cmd, &[], &machine, "", cache.as_deref());
+                return remote::forward(&client, &cmd, &[], &machine, "", cache.as_deref(), None);
             }
             let dir = config::dir(home().as_deref());
             for line in usage::lines(&herdr_core::hc::session::process_env(), dir.as_deref(), usage::today()) {
@@ -214,6 +221,66 @@ pub fn run(argv: &[String]) -> String {
                 Err((code, message)) => r.fail(code, &message),
             }
         }
+        "reenter" => {
+            // Read like `send`: options only before `--text` (each by its first position), the text the value right
+            // after the first `--text` (it may say anything, even `--home`), `--home` by its last position (the mod
+            // appends it last). Every error line says `keys: "none"`: nothing is typed before the `/clear` send.
+            let text_at = args.iter().position(|a| a == "--text");
+            let before = &args[..text_at.unwrap_or(args.len())];
+            let first = |name: &str| before.iter().position(|a| a == name).and_then(|i| before.get(i + 1)).cloned();
+            let (Some(terminal), Some(expect_path), Some(text)) = (first("--terminal"), first("--expect-path"), text_at.and_then(|i| args.get(i + 1)).cloned()) else {
+                return r.fail_none("usage", "reenter needs --terminal <addr>, --expect-path <log> and --text <prompt>");
+            };
+            // A value that starts with `-` would be read as an option on another machine: refused everywhere.
+            if before.iter().skip(1).step_by(2).any(|v| v.starts_with('-') || v.is_empty()) {
+                return r.fail_none("usage", "reenter: a value before --text cannot be empty or start with '-'");
+            }
+            // The whole run's limit: 27 s of the mod's 30 s exec (3 s kept for the answer), or what `--budget-ms` gives.
+            let budget = match first("--budget-ms") {
+                None => Duration::from_secs(27),
+                Some(n) => match n.parse::<u64>() {
+                    Ok(ms) if ms > 0 => Duration::from_millis(ms),
+                    _ => return r.fail_none("usage", "reenter --budget-ms needs a positive number of milliseconds"),
+                },
+            };
+            let deadline = r.t0 + budget;
+            let cache_path = first("--cache").map(PathBuf::from);
+            let split = remote::split(&terminal);
+            if matches!(split, Ok(Some(_))) && config::load(config::dir(home().as_deref()).as_deref()).remote_never {
+                return r.fail_none("remote-off", config::REMOTE_OFF);
+            }
+            let session = HcSession::resolve_env();
+            if !session.is_available() {
+                return r.fail_none("no-core", "herdr-core is not running");
+            }
+            match split {
+                Err(()) => return r.fail_none("bad_terminal", &format!("not a terminal address: {terminal}")),
+                // Another machine: the helper there runs it with what is left of the time; its lines go back as they are.
+                Ok(Some((machine, there))) => {
+                    let client = HcClient::new(session, 8, 22);
+                    let mut typed = vec!["--terminal".to_string(), terminal.clone(), "--expect-path".into(), expect_path];
+                    typed.extend(cache_path.iter().flat_map(|c| ["--cache".to_string(), c.to_string_lossy().into_owned()]));
+                    typed.extend(["--text".to_string(), text]);
+                    return remote::forward(&client, &cmd, &typed, &machine, &there, cache_path.as_deref(), Some(deadline));
+                }
+                Ok(None) => {}
+            }
+            // The keys lock first, then a fresh find under it (a cached find has no pid record: `no-identity` always).
+            let (_held, found, _, mut client) = match locked_find(&terminal, cache_path.as_deref(), true) {
+                Ok(x) => x,
+                Err(Gate::Done(d)) => {
+                    let d = if d.result == "busy" { keylock::busy_done(true) } else { d };
+                    r.out.emit(&reenter::from_done(d));
+                    return r.finish(true);
+                }
+                Err(Gate::Error(code, message)) => return r.fail_none(code, &message),
+            };
+            client.send_timeout = Duration::from_secs(reenter::SEND_S);
+            let procs = herdr_core::resolver::processes();
+            let a = reenter::run(&terminal, &found, &procs, &client, &text, &expect_path, cache_path.as_deref(), reenter::WAIT, deadline);
+            r.out.emit(&a);
+            r.finish(true)
+        }
         "feed" | "status" | "card" | "approve" | "answer" | "send" | "queue" | "commands" => {
             let Some(terminal) = opt("--terminal") else { return r.fail("usage", &format!("{cmd} needs --terminal <addr>")) };
             let cache_path = opt("--cache").map(PathBuf::from);
@@ -232,7 +299,7 @@ pub fn run(argv: &[String]) -> String {
                 // exec gives the sidecar 30 s; a send that waits longer reports `unconfirmed`.
                 Ok(Some((machine, there))) => {
                     let client = HcClient::new(session, 8, 22);
-                    return remote::forward(&client, &cmd, &args, &machine, &there, cache_url);
+                    return remote::forward(&client, &cmd, &args, &machine, &there, cache_url, None);
                 }
                 Ok(None) => {}
             }
@@ -490,7 +557,7 @@ fn remote_keys(machine: &str, there: &str, cache: Option<&Path>, home: Option<&s
     }
     args.splice(0..0, ["--terminal".to_string(), terminal]);
     let client = HcClient::new(session, 8, 22);
-    let text = remote::forward(&client, cmd, &args, machine, there, cache);
+    let text = remote::forward(&client, cmd, &args, machine, there, cache, None);
     let lines: Vec<serde_json::Value> = text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
     if let Some(e) = lines.iter().find(|l| l["type"] == "error") {
         return Ok(e.clone());

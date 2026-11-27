@@ -12,14 +12,15 @@
 //! Windows, where POSIX quotes mean nothing). The platform is known before anything with a value runs there, and a
 //! Windows machine gets nothing but `uname`. The fixed lines of install and remove run only on Unix.
 
-use crate::protocol::{JsonLines, ABILITIES, PROTOCOL_VERSION, SEND_OVER_SUGGESTION, SIDECAR_VERSION};
+use crate::protocol::{JsonLines, ABILITIES, PROTOCOL_VERSION, REENTER, SEND_OVER_SUGGESTION, SIDECAR_VERSION};
+use crate::reenter;
 use herdr_core::hc::HcClient;
 use herdr_core::HerdrError;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Under the home there.
 pub const HELPER_DIR: &str = ".local/share/flockbook/helper";
@@ -29,6 +30,9 @@ const CACHE: &str = ".cache/flockbook/cache.json";
 pub const MAX_WRITE: u64 = 6 * 1024 * 1024;
 /// A command there: the longest a helper command takes (a send waits up to 22 s) and a margin.
 const EXEC_TIMEOUT_S: u64 = 30;
+/// A forwarded `reenter` is given what is left of its deadline less this: the time for the launch there (ssh start)
+/// and the reply to come back.
+pub const LAUNCH_MS: u64 = 2_000;
 /// How long a machine's platform, and that it has no helper, are remembered (the chat polls every 2 s).
 const REMEMBER_S: f64 = 60.0;
 
@@ -320,6 +324,16 @@ fn header(out: &mut JsonLines, cmd: &str) {
     out.emit_value(json!({"type": "header", "protocol": PROTOCOL_VERSION, "sidecar": SIDECAR_VERSION, "cmd": cmd, "abilities": ABILITIES}));
 }
 
+/// `reenter` answers say whether a key may have gone (A14): the error lines made here say `none` before the command ran
+/// there and `maybe` once it started. Other commands' lines carry nothing extra.
+fn keys_of(cmd: &str, keys: &str) -> Value {
+    if cmd == REENTER {
+        json!({"keys": keys})
+    } else {
+        json!({})
+    }
+}
+
 fn error_lines(cmd: &str, f: Fail, extra: Value) -> String {
     let mut out = JsonLines::new();
     header(&mut out, cmd);
@@ -335,12 +349,13 @@ fn error_lines(cmd: &str, f: Fail, extra: Value) -> String {
 /// The error with the install card's data: `install` (null when this Flockbook has nothing to put there), or the
 /// error that stops it (an unsupported platform, a bad checksum).
 fn with_install(client: &HcClient, cmd: &str, machine: &str, f: Fail, mut extra: Value, memo: &mut Memo) -> String {
+    let keys = extra.get("keys").map(|k| json!({"keys": k}));
     match card_info(client, machine, memo) {
         Ok(i) => {
             extra["install"] = serde_json::to_value(i).unwrap_or(Value::Null);
             error_lines(cmd, f, extra)
         }
-        Err(stop) => error_lines(cmd, stop, json!({})),
+        Err(stop) => error_lines(cmd, stop, keys.unwrap_or_else(|| json!({}))),
     }
 }
 
@@ -350,14 +365,18 @@ fn missing(machine: &str) -> Fail {
 
 /// `cmd` with `args` (as given to this helper) for the terminal `terminal` on `machine`: the lines of the helper
 /// there, as they are. `cache`: this computer's chat cache (what is remembered about machines goes beside it).
-pub fn forward(client: &HcClient, cmd: &str, args: &[String], machine: &str, terminal: &str, cache: Option<&Path>) -> String {
+/// `deadline`: `reenter` only, the monotonic limit of the whole run. Right before the command goes there, the time left
+/// to it (less `LAUNCH_MS`) is typed as `--budget-ms` before `--text`; under `reenter::NEED_MS` nothing goes there and
+/// the answer is `no_time` (the helper there would refuse as well, and nothing has been typed).
+pub fn forward(client: &HcClient, cmd: &str, args: &[String], machine: &str, terminal: &str, cache: Option<&Path>, deadline: Option<Instant>) -> String {
     let mut memo = Memo::load(cache);
+    let before = keys_of(cmd, "none");
     // The platform first: a Windows machine gets no command with a value.
     if let Err(f) = platform(client, machine, &mut memo) {
-        return error_lines(cmd, f, json!({}));
+        return error_lines(cmd, f, before);
     }
     if memo.missing_now(machine) {
-        return with_install(client, cmd, machine, missing(machine), json!({}), &mut memo);
+        return with_install(client, cmd, machine, missing(machine), before, &mut memo);
     }
     // s34 (owner, item 12): what changes something there (approve, answer, send) is checked there first, so a helper
     // of another version runs none of it. A Send anyway also needs its ability (s32 review P1/P2).
@@ -397,6 +416,8 @@ pub fn forward(client: &HcClient, cmd: &str, args: &[String], machine: &str, ter
             _ => there.push(a.clone()),
         }
     }
+    // Where `--text` sits in `there`: the budget goes right before it.
+    let flag_at = text.as_ref().map(|(slot, _)| slot - 1);
     if let Some((slot, t)) = text {
         // The files are here: each is put beside the terminal there first, and the text names that copy.
         let Some(typed) = client.placed(&t, &format!("hc:{machine}/{terminal}"), &files) else {
@@ -408,30 +429,51 @@ pub fn forward(client: &HcClient, cmd: &str, args: &[String], machine: &str, ter
         };
         there[slot] = typed;
     }
+    // The budget is counted now, after every check that can take time here and there (platform, version ask, files).
+    if let Some(deadline) = deadline {
+        let budget = (deadline.saturating_duration_since(Instant::now()).as_millis() as u64).saturating_sub(LAUNCH_MS);
+        if budget < reenter::NEED_MS {
+            let mut out = JsonLines::new();
+            header(&mut out, cmd);
+            out.emit(&reenter::no_time());
+            out.emit_value(json!({"type": "end", "ok": true, "ms": 0}));
+            return out.text();
+        }
+        if let Some(at) = flag_at {
+            there.splice(at..at, ["--budget-ms".to_string(), budget.to_string()]);
+        }
+    }
     let there = [vec!["sh".to_string(), "-c".into(), forward_script(cached), "sh".into()], there].concat();
+    // From here the command may have started there: its failures say `maybe`, except that the program was not there.
+    let after = keys_of(cmd, "maybe");
     let ran = match exec(client, machine, Run::Argv(&there)) {
         Ok(r) => r,
-        Err(f) => return error_lines(cmd, f, json!({})),
+        Err(f) => return error_lines(cmd, f, after),
     };
     if ran.no_program || matches!(ran.code, Some(126 | 127)) {
         memo.missing.insert(machine.into(), now_s());
         memo.save();
-        return with_install(client, cmd, machine, missing(machine), json!({}), &mut memo);
+        return with_install(client, cmd, machine, missing(machine), before, &mut memo);
     }
     let text = String::from_utf8_lossy(&ran.stdout).to_string();
     let first: Option<Value> = text.lines().next().and_then(|l| serde_json::from_str(l).ok());
     let Some(h) = first.filter(|h| h.get("type").and_then(Value::as_str) == Some("header")) else {
         let why = if ran.stderr.is_empty() { format!("exit {}", ran.code.map_or("?".into(), |c| c.to_string())) } else { ran.stderr };
-        return error_lines(cmd, fail("remote_failed", format!("The helper on {machine} did not answer: {why}")), json!({}));
+        return error_lines(cmd, fail("remote_failed", format!("The helper on {machine} did not answer: {why}")), after);
     };
-    if let Some(stop) = outdated(client, cmd, machine, &h, &mut memo) {
+    if let Some(stop) = outdated(client, cmd, machine, &h, &mut memo, "maybe") {
         return stop;
+    }
+    // A `reenter` that ran says `done` or `error`; a header and an end alone are no answer, and a key may have gone.
+    if cmd == REENTER && !text.lines().any(|l| serde_json::from_str::<Value>(l).is_ok_and(|v| matches!(v.get("type").and_then(Value::as_str), Some("done" | "error")))) {
+        return error_lines(cmd, fail("remote_failed", format!("The helper on {machine} gave no answer.")), after);
     }
     text
 }
 
 /// The helper there (its `header` `h`) is another version: the error lines with the install card's data.
-fn outdated(client: &HcClient, cmd: &str, machine: &str, h: &Value, memo: &mut Memo) -> Option<String> {
+/// `keys`: what a `reenter` says about keys (`none` before the command ran there, `maybe` after it started).
+fn outdated(client: &HcClient, cmd: &str, machine: &str, h: &Value, memo: &mut Memo, keys: &str) -> Option<String> {
     let (p, s) = (h.get("protocol").and_then(Value::as_i64), h.get("sidecar").and_then(Value::as_str));
     if p == Some(PROTOCOL_VERSION) && s == Some(SIDECAR_VERSION) {
         return None;
@@ -440,7 +482,10 @@ fn outdated(client: &HcClient, cmd: &str, machine: &str, h: &Value, memo: &mut M
         "remote_helper_outdated",
         format!("The helper on {machine} is another version ({}); this Flockbook needs {SIDECAR_VERSION}.", s.unwrap_or("?")),
     );
-    let remote = json!({"remote": {"protocol": h.get("protocol"), "sidecar": h.get("sidecar")}});
+    let mut remote = json!({"remote": {"protocol": h.get("protocol"), "sidecar": h.get("sidecar")}});
+    if cmd == REENTER {
+        remote["keys"] = json!(keys);
+    }
     Some(with_install(client, cmd, machine, f, remote, memo))
 }
 
@@ -453,6 +498,8 @@ fn checked_first(cmd: &str, args: &[String]) -> Option<&'static [&'static str]> 
     match cmd {
         "send" if args.iter().take_while(|a| *a != "--text").any(|a| a == "--over-suggestion") => Some(&[SEND_OVER_SUGGESTION]),
         "approve" | "answer" | "send" => Some(&[]),
+        // A helper that does not know `reenter` would answer a usage error: asked first, it gets the install card.
+        "reenter" => Some(&[REENTER]),
         // s34 review: `card --all` walks the picker's tabs with keys, so it changes the screen there too.
         "card" if args.iter().any(|a| a == "--all") => Some(&[]),
         _ => None,
@@ -471,7 +518,7 @@ fn checked_first(cmd: &str, args: &[String]) -> Option<&'static [&'static str]> 
 fn lacks(client: &HcClient, cmd: &str, machine: &str, needs: &[&str], memo: &mut Memo) -> Option<String> {
     let silent = |why: String| {
         let f = fail("remote_failed", format!("{machine} did not answer{why}. Nothing was sent there; try again."));
-        Some(error_lines(cmd, f, json!({})))
+        Some(error_lines(cmd, f, keys_of(cmd, "none")))
     };
     let argv: Vec<String> = ["sh", "-c", &forward_script(false), "sh", "version"].iter().map(|a| a.to_string()).collect();
     let ran = match exec(client, machine, Run::Argv(&argv)) {
@@ -482,7 +529,7 @@ fn lacks(client: &HcClient, cmd: &str, machine: &str, needs: &[&str], memo: &mut
     if ran.no_program || matches!(ran.code, Some(126 | 127)) {
         memo.missing.insert(machine.into(), now_s());
         memo.save();
-        return Some(with_install(client, cmd, machine, missing(machine), json!({}), memo));
+        return Some(with_install(client, cmd, machine, missing(machine), keys_of(cmd, "none"), memo));
     }
     let text = String::from_utf8_lossy(&ran.stdout).to_string();
     let header = text.lines().next().and_then(|l| serde_json::from_str::<Value>(l).ok()).filter(|h| h.get("type").and_then(Value::as_str) == Some("header"));
@@ -490,7 +537,7 @@ fn lacks(client: &HcClient, cmd: &str, machine: &str, needs: &[&str], memo: &mut
         let why = if ran.stderr.is_empty() { format!(" (its helper gave exit {})", ran.code.map_or("?".into(), |c| c.to_string())) } else { format!(" (its helper said: {})", ran.stderr) };
         return silent(why);
     };
-    if let Some(stop) = outdated(client, cmd, machine, &h, memo) {
+    if let Some(stop) = outdated(client, cmd, machine, &h, memo, "none") {
         return Some(stop);
     }
     let has: Vec<&str> = h.get("abilities").and_then(Value::as_array).map_or(vec![], |a| a.iter().filter_map(Value::as_str).collect());
@@ -499,7 +546,10 @@ fn lacks(client: &HcClient, cmd: &str, machine: &str, needs: &[&str], memo: &mut
         return None;
     }
     let f = fail("remote_helper_outdated", format!("The helper on {machine} is older than this Flockbook (it lacks {}).", missing.join(", ")));
-    let remote = json!({"remote": {"protocol": h.get("protocol"), "sidecar": h.get("sidecar"), "missing": missing}});
+    let mut remote = json!({"remote": {"protocol": h.get("protocol"), "sidecar": h.get("sidecar"), "missing": missing}});
+    if cmd == REENTER {
+        remote["keys"] = json!("none");
+    }
     Some(with_install(client, cmd, machine, f, remote, memo))
 }
 

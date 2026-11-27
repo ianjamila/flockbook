@@ -13,7 +13,9 @@ pub const SIDECAR_VERSION: &str = "0.1.0";
 /// `sid`/`config`) is only listed: without it Resume falls back to the command-line rules.
 pub const SEND_OVER_SUGGESTION: &str = "send-over-suggestion";
 pub const BARE_SESSION: &str = "bare-session";
-pub const ABILITIES: [&str; 2] = [SEND_OVER_SUGGESTION, BARE_SESSION];
+/// `reenter` (Clear & re-enter): a helper without it does not know the command, so a forward asks for it first (`checked_first`).
+pub const REENTER: &str = "reenter";
+pub const ABILITIES: [&str; 3] = [SEND_OVER_SUGGESTION, BARE_SESSION, REENTER];
 
 /// Collects output lines; `text` prints them. Keys are sorted (serde_json's map is ordered by key) and slashes are
 /// not escaped, as Swift's `.sortedKeys, .withoutEscapingSlashes`.

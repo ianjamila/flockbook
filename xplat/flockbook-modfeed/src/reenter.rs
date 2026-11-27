@@ -86,8 +86,16 @@ fn refuse(result: &str, message: &str) -> Answer {
     answer(result, message, Cleared::No, Keys::None_)
 }
 
-fn from_done(d: Done) -> Answer {
+/// A refusal of a keyed command (busy, no_lock, changed...) as a reenter answer: nothing typed.
+pub fn from_done(d: Done) -> Answer {
     Answer { t: "done", result: d.result, message: d.message, cleared: Cleared::No, keys: Keys::None_ }
+}
+
+const NO_TIME: &str = "There is not enough time left to do it safely.";
+
+/// Not enough time left to start (`NEED_MS`): nothing typed.
+pub fn no_time() -> Answer {
+    refuse("no_time", NO_TIME)
 }
 
 /// The `/clear` went: only the prompt (or its confirmation) is missing.
@@ -200,9 +208,12 @@ impl ProcessSource for Fixed {
 
 /// A9: look the tab up again so the cache names the new conversation (its log, or the bare session id until the log
 /// exists), and the chat and the Finished list read it at once.
-fn refresh_cache(terminal: &str, procs: &[Proc], client: &HcClient, cache: Option<&Path>) {
+/// Best effort and bounded by the time left to `deadline` (a floor of 300 ms): a late answer is lost to the caller's own
+/// timeout although keys went, and a stale cache only delays the chat catching up.
+fn refresh_cache(terminal: &str, procs: &[Proc], client: &HcClient, cache: Option<&Path>, deadline: Instant) {
     let Some(cache) = cache else { return };
-    let Ok(ws) = client.snapshot_within(Duration::from_secs(3)) else { return };
+    let limit = Duration::from_secs(3).min(deadline.saturating_duration_since(Instant::now())).max(Duration::from_millis(300));
+    let Ok(ws) = client.snapshot_within(limit) else { return };
     let mut resolver = SessionResolver::new(&client.session.socket_path).with_source(Box::new(Fixed(procs.to_vec())));
     let now_s = std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
     let _ = locate::recheck(terminal, &ws, &mut resolver, Some(cache), now_s);
@@ -288,7 +299,7 @@ pub fn run_with_need(
     }
     let left = deadline.saturating_duration_since(Instant::now());
     if left < need {
-        return refuse("no_time", "There is not enough time left to do it safely.");
+        return no_time();
     }
 
     // 8. `/clear`. No `if`: after a finished turn the core's status is `done`, and `if: "idle"` would refuse.
@@ -304,7 +315,7 @@ pub fn run_with_need(
         SendOutcome::Sent => after_clear(found, procs, client, text, wait, deadline, (*pid, dir), &old),
     };
     // 12. A9: the cache names the conversation the tab holds now.
-    refresh_cache(terminal, procs, client, cache);
+    refresh_cache(terminal, procs, client, cache, deadline);
     a
 }
 
@@ -356,6 +367,6 @@ fn after_clear(found: &locate::Found, procs: &[Proc], client: &HcClient, text: &
     match client.send_sure(text, &pane.id, Duration::from_secs(SEND_S).min(left), Some("idle")) {
         SendOutcome::Sent => Answer { t: "done", result: "sent".into(), message: None, cleared: Cleared::Yes, keys: Keys::Yes },
         SendOutcome::Maybe => answer("prompt_unconfirmed", "The prompt was typed but not confirmed: it may already be in the tab.", Cleared::Yes, Keys::Yes),
-        SendOutcome::NotSent => cleared_not_sent("The tab was no longer idle when the prompt was due, so it was not typed."),
+        SendOutcome::NotSent => cleared_not_sent("The tab was cleared, but the prompt could not be typed."),
     }
 }

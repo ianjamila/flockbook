@@ -577,3 +577,194 @@ fn usage_on_another_machine_follows_never() {
     assert_eq!(e["code"], "remote-off");
     assert!(w.here.calls("machine.exec").is_empty(), "nothing ran there");
 }
+
+// Clear & re-enter on another machine: the helper there runs it with a time budget, and every error line made here says
+// whether a key may have gone (A14): "none" before the command ran there, "maybe" after it started.
+const LOG: &str = "/home/u/cfg/projects/-w/old.jsonl";
+
+/// A fake helper there: `version` answers a header listing `abilities` (a JSON array); `reenter` runs `on_reenter`
+/// (shell lines). Every call's command and full argv are noted (`calls`, `argv` in its home).
+fn there_reenter(w: &World, v: &str, abilities: &str, on_reenter: &str) {
+    std::fs::create_dir_all(w.installed().parent().unwrap()).unwrap();
+    let head = format!("echo '{{\"abilities\":{abilities},\"cmd\":\"version\",\"protocol\":1,\"sidecar\":\"{v}\",\"type\":\"header\"}}'");
+    let fake = format!(
+        "#!/bin/sh\necho \"$1\" >> \"$HOME/calls\"\necho \"$@\" >> \"$HOME/argv\"\ncase \"$1\" in\nreenter)\n{on_reenter}\n;;\n*)\n{head}\necho '{{\"ms\":0,\"ok\":true,\"type\":\"end\"}}'\n;;\nesac\n"
+    );
+    std::fs::write(w.installed(), fake).unwrap();
+    std::fs::set_permissions(w.installed(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _ = std::fs::remove_file(w.home.join("calls"));
+    let _ = std::fs::remove_file(w.home.join("argv"));
+}
+
+/// The header line (shell) of a `reenter` answer from a helper of version `v`.
+fn reenter_header(v: &str) -> String {
+    format!("echo '{{\"abilities\":[\"reenter\"],\"cmd\":\"reenter\",\"protocol\":1,\"sidecar\":\"{v}\",\"type\":\"header\"}}'")
+}
+
+const END: &str = "echo '{\"ms\":0,\"ok\":true,\"type\":\"end\"}'";
+
+/// What `reenter` there says when it works: this version's header, the answer, the end.
+fn reenter_ok() -> String {
+    format!("{}\necho '{{\"type\":\"done\",\"result\":\"sent\",\"cleared\":true,\"keys\":\"yes\"}}'\n{END}", reenter_header(remote::helper_version()))
+}
+
+const WITH: &str = "[\"reenter\"]";
+
+fn reenter_cmd<'a>(budget: &'a str, text: &'a str) -> Vec<&'a str> {
+    vec!["reenter", "--terminal", "box/t3", "--expect-path", LOG, "--budget-ms", budget, "--text", text]
+}
+
+fn keys_of(e: &Value) -> Option<&str> {
+    e["keys"].as_str()
+}
+
+/// Catches: Never ignored for a re-enter (it would run the helper on a machine the person said no to); the `--home`
+/// read from the first position (the text is `--home`: its next word would be taken for the folder).
+#[test]
+fn reenter_respects_remote_off() {
+    let w = world();
+    w.install_by_hand();
+    let app = w.home.parent().unwrap().join("app");
+    std::fs::create_dir_all(app.join("flockbook")).unwrap();
+    std::fs::write(app.join("flockbook/config.json"), r#"{"remote_helper":"never"}"#).unwrap();
+    let e = w.error(&["reenter", "--terminal", "box/t3", "--expect-path", LOG, "--text", "--home", "--home", app.to_str().unwrap()]);
+    assert_eq!((e["code"].as_str(), keys_of(&e)), (Some("remote-off"), Some("none")), "{e}");
+    assert!(w.here.calls("machine.exec").is_empty(), "nothing ran there, not even a look");
+}
+
+/// Catches: a value there that is not the typed one (the address there, the log, a budget before `--text`), this
+/// computer's `--home` or cache path going over, a budget that does not count the launch time, or the text altered.
+#[test]
+fn reenter_forwards_typed_values() {
+    let w = world();
+    w.install_by_hand();
+    there_reenter(&w, remote::helper_version(), WITH, &reenter_ok());
+    let text = "-go on; $(id) `id` 'q' \"d\" %PATH%";
+    let cache = "/nonexistent-home/cache.json";
+    let v = w.run(&["reenter", "--terminal", "box/t3", "--expect-path", LOG, "--cache", cache, "--budget-ms", "25000", "--text", text, "--home", "/nonexistent-home/app"]);
+    assert_eq!(v.iter().find(|l| l["type"] == "done").unwrap()["result"], "sent", "{v:?}");
+    assert_eq!(calls_there(&w), vec!["version", "reenter"], "asked first, then run");
+    let exec = w.here.calls("machine.exec");
+    let argv: Vec<&str> = exec.last().unwrap()["argv"].as_array().unwrap().iter().map(|a| a.as_str().unwrap()).collect();
+    let script = format!("c=$1; shift; exec \"$HOME\"/{} \"$c\" --cache \"$HOME\"/.cache/flockbook/cache.json \"$@\"", helper_rel());
+    assert_eq!(&argv[..6], ["sh", "-c", script.as_str(), "sh", "reenter", "--terminal"], "{argv:?}");
+    assert_eq!(&argv[6..10], ["t3", "--expect-path", LOG, "--budget-ms"], "{argv:?}");
+    let n: u64 = argv[10].parse().unwrap();
+    assert!((21_000..=23_000).contains(&n), "25 s from the start, less the 2 s for the launch and the time already spent: {n}");
+    assert_eq!(&argv[11..], ["--text", text], "{argv:?}");
+    // No cache asked for: the script adds none, and the budget is still typed.
+    there_reenter(&w, remote::helper_version(), WITH, &reenter_ok());
+    w.run(&reenter_cmd("25000", "hi"));
+    let exec = w.here.calls("machine.exec");
+    let argv: Vec<&str> = exec.last().unwrap()["argv"].as_array().unwrap().iter().map(|a| a.as_str().unwrap()).collect();
+    assert!(!argv.iter().any(|a| a.contains("cache")), "{argv:?}");
+    assert_eq!((argv[4], argv[9]), ("reenter", "--budget-ms"), "{argv:?}");
+}
+
+/// Catches (A14): an error made before the command ran there answering "maybe" (or nothing, which the mod reads as
+/// "maybe": the user is told a key may have gone when none could), and a reenter that ran there anyway.
+#[test]
+fn preflight_failures_are_none() {
+    let w = world();
+    let go = || w.error(&reenter_cmd("25000", "hi"));
+    // The version ask runs out of time.
+    there_reenter(&w, remote::helper_version(), WITH, &reenter_ok());
+    w.here.state.lock().unwrap().version_timed_out = true;
+    let e = go();
+    assert_eq!((e["code"].as_str(), keys_of(&e)), (Some("remote_failed"), Some("none")), "{e}");
+    w.here.state.lock().unwrap().version_timed_out = false;
+    // Another version, by the ask.
+    there_reenter(&w, "0.0.9", WITH, &reenter_ok());
+    let e = go();
+    assert_eq!((e["code"].as_str(), keys_of(&e)), (Some("remote_helper_outdated"), Some("none")), "{e}");
+    assert_eq!(e["install"]["machine"], "box", "the card can offer this version");
+    // This version without the ability (a build before reenter).
+    there_reenter(&w, remote::helper_version(), "[\"bare-session\"]", &reenter_ok());
+    let e = go();
+    assert_eq!((e["code"].as_str(), keys_of(&e)), (Some("remote_helper_outdated"), Some("none")), "{e}");
+    assert_eq!(e["remote"]["missing"], json!(["reenter"]), "{e}");
+    assert_eq!(calls_there(&w), vec!["version"], "only the ask ran there");
+    // No helper at all there.
+    std::fs::remove_file(w.installed()).unwrap();
+    let e = go();
+    assert_eq!((e["code"].as_str(), keys_of(&e)), (Some("remote_helper_missing"), Some("none")), "{e}");
+    // A platform without a helper.
+    let w2 = world();
+    w2.here.state.lock().unwrap().windows = true;
+    let e = w2.error(&reenter_cmd("25000", "hi"));
+    assert_eq!(keys_of(&e), Some("none"), "{e}");
+    assert!(w2.here.calls("machine.exec").iter().all(|c| c["argv"] == json!(["uname", "-sm"])), "nothing with a value ran");
+}
+
+/// Catches (A14): an error after the command started there answering "none" (the user would be told nothing was typed
+/// while the helper there may have sent `/clear`), a helper's own error line altered, or a header-only answer taken
+/// for an answer.
+#[test]
+fn post_dispatch_failures_are_maybe() {
+    let w = world();
+    let go = || w.error(&reenter_cmd("25000", "hi"));
+    // The run there runs out of the exec's time.
+    there_reenter(&w, remote::helper_version(), WITH, &reenter_ok());
+    w.here.state.lock().unwrap().reenter_timed_out = true;
+    let e = go();
+    assert_eq!((e["code"].as_str(), keys_of(&e)), (Some("remote_failed"), Some("maybe")), "{e}");
+    w.here.state.lock().unwrap().reenter_timed_out = false;
+    // The header it returns is another version's (it was swapped while it ran).
+    let other = format!("{}\necho '{{\"type\":\"done\",\"result\":\"sent\",\"cleared\":true,\"keys\":\"yes\"}}'", reenter_header("0.0.9"));
+    there_reenter(&w, remote::helper_version(), WITH, &other);
+    let e = go();
+    assert_eq!((e["code"].as_str(), keys_of(&e)), (Some("remote_helper_outdated"), Some("maybe")), "{e}");
+    assert_eq!(calls_there(&w), vec!["version", "reenter"]);
+    // No header at all: it died.
+    there_reenter(&w, remote::helper_version(), WITH, "echo boom >&2\nexit 3");
+    let e = go();
+    assert_eq!((e["code"].as_str(), keys_of(&e)), (Some("remote_failed"), Some("maybe")), "{e}");
+    // A header and an end, no answer.
+    let hollow = format!("{}\n{END}", reenter_header(remote::helper_version()));
+    there_reenter(&w, remote::helper_version(), WITH, &hollow);
+    let e = go();
+    assert_eq!((e["code"].as_str(), keys_of(&e)), (Some("remote_failed"), Some("maybe")), "{e}");
+    assert!(e["message"].as_str().unwrap().contains("gave no answer"), "{e}");
+    // The program is not there (exit 127 or 126): it never started, so none.
+    for code in [126, 127] {
+        there_reenter(&w, remote::helper_version(), WITH, &format!("exit {code}"));
+        let e = go();
+        assert_eq!((e["code"].as_str(), keys_of(&e)), (Some("remote_helper_missing"), Some("none")), "{code}: {e}");
+    }
+    // Its own lines pass through as they are: an error without `keys` stays without (the mod reads absent as maybe),
+    // one with `keys` keeps it, and a done line is untouched.
+    let mine = reenter_header(remote::helper_version());
+    for line in [
+        r#"{"code":"usage","message":"x","type":"error"}"#,
+        r#"{"code":"no-core","keys":"none","message":"x","type":"error"}"#,
+        r#"{"cleared":"maybe","keys":"maybe","message":"m","result":"clear_unconfirmed","type":"done"}"#,
+    ] {
+        there_reenter(&w, remote::helper_version(), WITH, &format!("{mine}\necho '{line}'\n{END}"));
+        let v = w.run(&reenter_cmd("25000", "hi"));
+        let got = v.iter().find(|l| l["type"] == "error" || l["type"] == "done").unwrap();
+        assert_eq!(got, &serde_json::from_str::<Value>(line).unwrap(), "passes through as it is");
+    }
+}
+
+/// Catches: a slow preflight eating the time and the run there started anyway (it would refuse with less than it
+/// needs, or worse run out mid-way): the budget is counted after the version ask, and under `reenter::NEED_MS` nothing
+/// goes there and the answer is `no_time` with nothing typed.
+#[test]
+fn slow_preflight_leaves_no_time() {
+    let w = world();
+    there_reenter(&w, remote::helper_version(), WITH, &reenter_ok());
+    w.here.state.lock().unwrap().version_delay = 2.0;
+    // 21 s, 2 s for the slow ask, 2 s for the launch: 17 s, under the 18 s it needs.
+    let v = w.run(&reenter_cmd("21000", "hi"));
+    let d = v.iter().find(|l| l["type"] == "done").unwrap_or_else(|| panic!("a done line: {v:?}"));
+    assert_eq!((d["result"].as_str(), d["cleared"].clone(), keys_of(d)), (Some("no_time"), json!(false), Some("none")), "{v:?}");
+    assert_eq!(d["message"], "There is not enough time left to do it safely.");
+    assert_eq!(v.last().unwrap()["ok"], true);
+    assert_eq!(calls_there(&w), vec!["version"], "no reenter ran there");
+    assert!(w.here.calls("terminal.send").is_empty() && w.there.calls("terminal.send").is_empty(), "nothing typed anywhere");
+    // The same budget with a quick ask has the time (19 s): it goes there.
+    w.here.state.lock().unwrap().version_delay = 0.0;
+    let v = w.run(&reenter_cmd("21000", "hi"));
+    assert_eq!(v.iter().find(|l| l["type"] == "done").unwrap()["result"], "sent", "{v:?}");
+    assert_eq!(calls_there(&w), vec!["version", "version", "reenter"]);
+}

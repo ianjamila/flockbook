@@ -9,12 +9,16 @@ use std::process::Command;
 fn run(sock: &str, args: &[&str]) -> Vec<Value> {
     // The keys lock folder (a keyed command refuses without one): a throwaway one.
     let locks = tempfile::tempdir().unwrap();
+    run_in(sock, locks.path(), args)
+}
+
+fn run_in(sock: &str, locks: &std::path::Path, args: &[&str]) -> Vec<Value> {
     let out = Command::new(env!("CARGO_BIN_EXE_flockbook-modfeed"))
         .args(args)
         .env_clear()
         .env("HC_SOCKET", sock)
         .env("HOME", "/nonexistent-home")
-        .env("FLOCKBOOK_KEYLOCK_DIR", locks.path())
+        .env("FLOCKBOOK_KEYLOCK_DIR", locks)
         .output()
         .unwrap();
     assert!(out.status.success(), "exit code 0 always");
@@ -25,8 +29,8 @@ fn run(sock: &str, args: &[&str]) -> Vec<Value> {
 fn protocol_lines() {
     let v = run("/nonexistent.sock", &["version"]);
     // s32: what this build can do beyond its commands, in every header (a helper on another machine is checked by it).
-    assert_eq!(v[0], serde_json::json!({"type":"header","protocol":1,"sidecar":"0.1.0","cmd":"version","abilities":["send-over-suggestion","bare-session"]}));
-    assert_eq!(v[1]["commands"], serde_json::json!(["version", "feed", "status", "card", "approve", "answer", "send", "paste-image", "helper", "update-check", "queue", "phone", "commands", "parked", "usage", "awake", "send-over-suggestion", "bare-session"]));
+    assert_eq!(v[0], serde_json::json!({"type":"header","protocol":1,"sidecar":"0.1.0","cmd":"version","abilities":["send-over-suggestion","bare-session","reenter"]}));
+    assert_eq!(v[1]["commands"], serde_json::json!(["version", "feed", "status", "card", "approve", "answer", "send", "paste-image", "helper", "update-check", "queue", "phone", "commands", "parked", "usage", "awake", "reenter", "send-over-suggestion", "bare-session"]));
     assert_eq!(v.last().unwrap()["type"], "end");
     assert_eq!(v.last().unwrap()["ok"], true);
 
@@ -143,4 +147,111 @@ fn send_refuses_when_the_agents_box_has_text() {
     fake.clear_screen("t1");
     assert_ne!(send()["result"], "box_not_empty", "no screen: it goes as before");
     assert!(fake.calls("terminal.send").len() > typed);
+}
+
+fn error_of(v: &[Value]) -> Value {
+    v.iter().find(|l| l["type"] == "error").cloned().unwrap_or_else(|| panic!("an error line: {v:?}"))
+}
+
+fn done_of(v: &[Value]) -> Value {
+    v.iter().find(|l| l["type"] == "done").cloned().unwrap_or_else(|| panic!("a done line: {v:?}"))
+}
+
+/// Catches: `reenter` missing from `version` (the mod and a forwarding helper read the command and the ability there:
+/// a helper without the ability would be sent a command it does not know), or listed twice.
+#[test]
+fn version_lists_reenter() {
+    let v = run("/nonexistent.sock", &["version"]);
+    assert!(v[0]["abilities"].as_array().unwrap().contains(&serde_json::json!("reenter")), "{}", v[0]);
+    let commands: Vec<&str> = v[1]["commands"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
+    assert_eq!(commands.iter().filter(|c| **c == "reenter").count(), 1, "{commands:?}");
+}
+
+/// Catches: a missing option or text that still runs (a /clear typed with no prompt to follow), or an option read out
+/// of the text (the text may say `--expect-path`: only what comes before `--text` is options).
+#[test]
+fn reenter_needs_expect_path_and_text() {
+    let fake = FakeHc::start();
+    fake.set_terminals(vec![claude("t1", "done", "done")]);
+    let cases: [&[&str]; 5] = [
+        &["reenter", "--terminal", "t1", "--text", "hi"],
+        &["reenter", "--terminal", "t1", "--expect-path", "P"],
+        &["reenter", "--terminal", "t1", "--expect-path", "P", "--text"],
+        &["reenter", "--expect-path", "P", "--text", "hi"],
+        &["reenter", "--terminal", "t1", "--text", "--expect-path", "P"],
+    ];
+    for args in cases {
+        let e = error_of(&run(&fake.path, args));
+        assert_eq!((e["code"].as_str(), e["keys"].as_str()), (Some("usage"), Some("none")), "{args:?}: {e}");
+    }
+    assert!(fake.calls("terminal.list").is_empty() && fake.calls("terminal.send").is_empty(), "nothing asked of the core");
+}
+
+/// Catches: an option's value that starts with `-` read as the next option there (a forwarded `--terminal -x`), or the
+/// text refused for starting with `-` (only the values before `--text` are checked), or a bad `--budget-ms`.
+#[test]
+fn reenter_refuses_dash_values_before_text() {
+    let fake = FakeHc::start();
+    fake.set_terminals(vec![claude("t1", "done", "done")]);
+    let cases: [&[&str]; 8] = [
+        &["reenter", "--terminal", "-t", "--expect-path", "P", "--text", "hi"],
+        &["reenter", "--terminal", "t1", "--expect-path", "-P", "--text", "hi"],
+        &["reenter", "--terminal", "t1", "--expect-path", "P", "--cache", "-c", "--text", "hi"],
+        &["reenter", "--terminal", "t1", "--expect-path", "", "--text", "hi"],
+        &["reenter", "--terminal", "t1", "--expect-path", "P", "--budget-ms", "x", "--text", "hi"],
+        &["reenter", "--terminal", "t1", "--expect-path", "P", "--budget-ms", "0", "--text", "hi"],
+        &["reenter", "--terminal", "t1", "--expect-path", "P", "--budget-ms", "-5", "--text", "hi"],
+        &["reenter", "--terminal", "t1", "--expect-path", "P", "--budget-ms", "1.5", "--text", "hi"],
+    ];
+    for args in cases {
+        let e = error_of(&run(&fake.path, args));
+        assert_eq!((e["code"].as_str(), e["keys"].as_str()), (Some("usage"), Some("none")), "{args:?}: {e}");
+    }
+    assert!(fake.calls("terminal.send").is_empty());
+    // The text may start with `-` or be an option's name: it is the value right after the first `--text`.
+    for text in ["-hi", "--home", "--expect-path"] {
+        let d = done_of(&run(&fake.path, &["reenter", "--terminal", "t1", "--expect-path", "P", "--text", text]));
+        assert_eq!((d["cleared"].clone(), d["keys"].as_str()), (serde_json::json!(false), Some("none")), "{text}: {d}");
+    }
+}
+
+/// Catches (A14): an error line before any key that leaves `keys` out (the mod reads a missing `keys` as "maybe" and
+/// would tell the user a key may have gone), and a busy / no_lock / changed refusal that is not the reenter answer
+/// shape (`cleared` and `keys` both present).
+#[test]
+fn reenter_error_lines_all_carry_keys_none() {
+    let fake = FakeHc::start();
+    fake.set_terminals(vec![claude("t1", "done", "done"), common::terminal("t2", &["zsh"], Some(9), None, None)]);
+    let t = tempfile::tempdir().unwrap();
+    let app = t.path().join("app");
+    std::fs::create_dir_all(app.join("flockbook")).unwrap();
+    std::fs::write(app.join("flockbook/config.json"), r#"{"remote_helper":"never"}"#).unwrap();
+    let app = app.to_str().unwrap();
+    let args = |terminal: &'static str| -> Vec<&str> { vec!["reenter", "--terminal", terminal, "--expect-path", "P", "--text", "hi", "--home", app] };
+    let table: Vec<(&str, &str, Vec<&str>)> = vec![
+        ("usage", "/nonexistent.sock", vec!["reenter", "--terminal", "t1", "--text", "hi"]),
+        ("no-core", "/nonexistent.sock", args("t1")),
+        ("bad_terminal", fake.path.as_str(), args("a/b/c")),
+        ("no-terminal", fake.path.as_str(), args("t9")),
+        ("not-agent", fake.path.as_str(), args("t2")),
+        ("remote-off", fake.path.as_str(), args("box/t1")),
+    ];
+    for (code, sock, argv) in table {
+        let v = run(sock, &argv);
+        let e = error_of(&v);
+        assert_eq!((e["code"].as_str(), e["keys"].as_str()), (Some(code), Some("none")), "{argv:?}: {e}");
+        assert_eq!(v.last().unwrap()["ok"], false);
+    }
+    // The refusals that are `done` lines: another action holds the tab; no lock folder.
+    let locks = tempfile::tempdir().unwrap();
+    let held = modfeedkit::keylock::take(locks.path(), "t1").unwrap();
+    let d = done_of(&run_in(&fake.path, locks.path(), &args("t1")));
+    assert_eq!((d["result"].as_str(), d["message"].as_str()), (Some("busy"), Some(modfeedkit::keylock::BUSY_REENTER)), "{d}");
+    assert_eq!((d["cleared"].clone(), d["keys"].as_str()), (serde_json::json!(false), Some("none")), "{d}");
+    drop(held);
+    let file = t.path().join("file");
+    std::fs::write(&file, "x").unwrap();
+    let d = done_of(&run_in(&fake.path, &file, &args("t1")));
+    assert_eq!((d["result"].as_str(), d["cleared"].clone(), d["keys"].as_str()), (Some("no_lock"), serde_json::json!(false), Some("none")), "{d}");
+    assert!(fake.calls("terminal.send").is_empty() && fake.keys().is_empty(), "nothing typed");
 }

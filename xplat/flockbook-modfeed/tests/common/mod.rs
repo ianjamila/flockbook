@@ -43,6 +43,10 @@ pub struct State {
     pub exec_timed_out: bool,
     /// Only a `version` ask there runs out of time (the helper asked first, s36 fail fast); the rest run.
     pub version_timed_out: bool,
+    /// Seconds a `version` ask there takes before it runs (a slow preflight; 0: at once).
+    pub version_delay: f64,
+    /// Only a `reenter` run there runs out of time (the preflight before it ran).
+    pub reenter_timed_out: bool,
     /// A Windows machine: no `uname` (argv `uname` gives `spawn_failed`).
     pub windows: bool,
     /// `file.write` changes the bytes on the way (the sum there must catch it).
@@ -274,8 +278,14 @@ fn serve(mut s: std::os::unix::net::UnixStream, st: Arc<Mutex<State>>) {
                             None => Run::Line(p["line"].as_str().unwrap_or("").to_string()),
                         };
                         let is_version = matches!(&run, Run::Argv(a) if a.last().map(String::as_str) == Some("version"));
-                        let (uname, timed_out, windows, in_root) = (g.uname.clone(), g.exec_timed_out || (g.version_timed_out && is_version), g.windows, g.exec_in_root);
+                        let is_reenter = matches!(&run, Run::Argv(a) if a.iter().any(|x| x == "reenter"));
+                        let timed_out = g.exec_timed_out || (g.version_timed_out && is_version) || (g.reenter_timed_out && is_reenter);
+                        let (uname, windows, in_root) = (g.uname.clone(), g.windows, g.exec_in_root);
+                        let delay = if is_version { g.version_delay } else { 0.0 };
                         drop(g);
+                        if delay > 0.0 {
+                            std::thread::sleep(std::time::Duration::from_secs_f64(delay));
+                        }
                         Some(match exec_there(&run, &home, &sock, uname, timed_out, windows, in_root) {
                             Ok(v) => reply(v),
                             Err(kind) => json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32000, "message": kind, "data": {"kind": kind}}}),
