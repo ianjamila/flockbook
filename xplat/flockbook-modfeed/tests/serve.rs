@@ -57,8 +57,8 @@ fn start_env(sock: &str, extra: &[&str], env: &[(&str, &str)]) -> Server {
     Server { child, port, _dir: dir }
 }
 
-/// One raw request; the status code and the body.
-fn http(port: u16, method: &str, path: &str, headers: &[(&str, &str)], body: &str) -> (u16, String) {
+/// One raw request; the whole response (head and body).
+fn raw(port: u16, method: &str, path: &str, headers: &[(&str, &str)], body: &str) -> String {
     let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
     let mut req = format!("{method} {path} HTTP/1.1\r\n");
@@ -73,6 +73,12 @@ fn http(port: u16, method: &str, path: &str, headers: &[(&str, &str)], body: &st
     s.write_all(req.as_bytes()).unwrap();
     let mut out = String::new();
     let _ = s.read_to_string(&mut out);
+    out
+}
+
+/// One raw request; the status code and the body.
+fn http(port: u16, method: &str, path: &str, headers: &[(&str, &str)], body: &str) -> (u16, String) {
+    let out = raw(port, method, path, headers, body);
     let code = out.split(' ').nth(1).and_then(|c| c.parse().ok()).unwrap_or(0);
     (code, out.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default())
 }
@@ -118,9 +124,15 @@ fn who_is_refused() {
     assert_eq!(http(p, "GET", "/", &[("Host", HOST), ("Tailscale-Funnel-Request", "?1")], "").0, 403, "Funnel without identity");
     let (c, hub) = http(p, "GET", "/hub.json", &me, "");
     assert_eq!(c, 200);
-    assert_eq!(serde_json::from_str::<Value>(&hub).unwrap(), json!({"auth": "tailscale", "post": ["approve", "answer", "send", "pullQueued", "attach"]}));
+    assert_eq!(serde_json::from_str::<Value>(&hub).unwrap(), json!({"auth": "tailscale", "post": ["approve", "answer", "send", "reenter", "pullQueued", "attach"]}));
     assert_eq!(http(p, "GET", "/hub.json", &[("Host", HOST)], "").0, 403, "every path is gated");
     assert_eq!(http(p, "GET", "/nope.js", &me, "").0, 404);
+    // The mod's prompt finder, which the page imports: a JS type (a module script with another type is refused by the
+    // browser, and the phone would show no Clear & re-enter button), behind the same gate as every file.
+    let blocks = raw(p, "GET", "/blocks.js", &me, "");
+    assert!(blocks.starts_with("HTTP/1.1 200") && blocks.contains("Content-Type: text/javascript"), "{}", &blocks[..blocks.len().min(200)]);
+    assert!(blocks.contains("export function replyHandoff"), "the mod's own file");
+    assert_eq!(http(p, "GET", "/blocks.js", &[("Host", HOST)], "").0, 403, "gated");
 
     // POST /api: identity, then a same-origin JSON POST.
     let deny = json!({"v": 1, "id": "c1", "type": "approve", "pane": "hc:t1", "prompt": "x", "allow": false});
@@ -278,6 +290,9 @@ fn read_only_and_bind() {
     let (_, body) = api(srv.port, &[], &json!({"v": 1, "id": "p1", "type": "approve", "pane": "hc:t1", "prompt": "x", "allow": true}));
     assert_eq!(serde_json::from_str::<Value>(&body).unwrap()[0]["error"]["code"], "readOnly");
     assert!(fake.keys().is_empty());
+    let (_, body) = api(srv.port, &[], &json!({"v": 1, "id": "p2", "type": "reenter", "pane": "hc:t1", "text": "Continue.", "agent": "claude", "session": "/tmp/a.jsonl"}));
+    assert_eq!(serde_json::from_str::<Value>(&body).unwrap()[0]["error"]["code"], "readOnly", "a read-only hub never re-enters");
+    assert!(fake.keys().is_empty());
     // No option binds another address.
     let out = Command::new(env!("CARGO_BIN_EXE_flockbook-modfeed")).args(["serve", "--user", ME, "--host", "0.0.0.0"]).output().unwrap();
     assert_eq!(out.status.code(), Some(2));
@@ -323,6 +338,38 @@ fn send_checks_the_agent() {
     let r: Value = serde_json::from_str(&api(srv.port, &[], &json!({"v": 1, "id": "s2", "type": "send", "pane": "hc:t1", "text": "hi"})).1).unwrap();
     assert_eq!(r[0]["error"]["code"], "badRequest", "the agent is needed: {r}");
     assert!(fake.calls("terminal.send").is_empty());
+}
+
+/// `reenter` has the gates of `send` and needs the agent to be Claude and the log: a request that lacks one types nothing
+/// and never reaches the helper's run; one that has them all does (here the helper refuses it for want of a pid record:
+/// still nothing typed, and the reply says so with `keys`).
+#[test]
+fn reenter_has_the_send_gates() {
+    let fake = FakeHc::start();
+    fake.set_terminals(vec![claude("t1", "idle", "")]);
+    let srv = start(&fake.path, &[]);
+    let reply = |m: Value| -> Value { serde_json::from_str::<Value>(&api(srv.port, &[], &m).1).unwrap()[0].clone() };
+    let base = json!({"v": 1, "id": "r", "type": "reenter", "pane": "hc:t1", "text": "Continue the work.", "agent": "claude", "session": "/tmp/a.jsonl"});
+    let without = |k: &str| { let mut m = base.clone(); m.as_object_mut().unwrap().remove(k); m };
+    let with = |k: &str, v: Value| { let mut m = base.clone(); m[k] = v; m };
+    for (what, m) in [
+        ("no agent", without("agent")),
+        ("another agent", with("agent", json!("codex"))),
+        ("no session", without("session")),
+        ("the pane's own id is no log", with("session", json!("hc:t1"))),
+        ("no text", without("text")),
+    ] {
+        let r = reply(m);
+        assert_eq!(r["error"]["code"], "badRequest", "{what}: {r}");
+    }
+    assert_eq!(reply(with("pane", json!("hc:t9")))["error"]["code"], "notFound");
+    assert!(fake.calls("terminal.send").is_empty() && fake.keys().is_empty(), "a refused request typed nothing");
+    // Every gate met: the run starts and the helper refuses it (no pid record on the fake): nothing typed, and it says so.
+    let r = reply(base.clone());
+    assert_eq!(r["ok"], false, "{r}");
+    assert_eq!(r["keys"], "none", "{r}");
+    assert_ne!(r["error"]["code"], "badRequest", "{r}");
+    assert!(fake.calls("terminal.send").is_empty() && fake.keys().is_empty());
 }
 
 /// A masked client text frame (payload under 126 bytes).

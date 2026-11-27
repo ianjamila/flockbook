@@ -217,6 +217,15 @@ fn page(s: &mut TcpStream, head: &Head) {
         respond(s, "200 OK", "application/json", body.as_bytes(), head_only);
         return;
     }
+    // The mod's own re-entry prompt finder (herdr-app/mods/flockbook/blocks.js, embedded by build.rs): one source, so the
+    // page finds the prompt the way the Overview and the chat do. Pure JS with no imports.
+    if head.path == "/blocks.js" {
+        match crate::install::FILES.iter().find(|(p, _)| *p == "mods/flockbook/blocks.js") {
+            Some((_, bytes)) => respond(s, "200 OK", mime("blocks.js"), bytes, head_only),
+            None => text(s, "404 Not Found", "Not found"),
+        }
+        return;
+    }
     let name = if head.path == "/" { "index.html" } else { head.path.trim_start_matches('/') };
     match Web::get(name) {
         Some(f) if !name.contains("..") => respond(s, "200 OK", mime(name), &f.data, head_only),

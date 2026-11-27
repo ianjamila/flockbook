@@ -23,7 +23,7 @@ Funnel is refused:
 
 The socket (`/ws`) only reads.
 
-Approve, answer and send go only with `POST /api`:
+Approve, answer, send and reenter go only with `POST /api`:
 
 - The body must be JSON.
 - The `Origin` must be the page's own `https://` origin.
@@ -33,6 +33,14 @@ Approve, answer and send go only with `POST /api`:
 
 `send` names the agent and the conversation the page showed. When another agent or another conversation is
 in that pane now, nothing is sent (the same check as the mod's `send --expect-kind`, `--expect-path`).
+
+`reenter` (Clear & re-enter: `/clear` typed in a finished Claude Code tab, then the re-entry prompt) is the mod's
+`reenter` command, run by the same code, so the same checks apply and nothing is typed when one fails. The request has
+the gates of `send`: `--read-only` refuses it, POST only, a pane with an agent, `agent` named and it must be
+`claude`, and `session` (the log the prompt was read from) is needed. Fields: `pane`, `text` (the prompt, at most
+16,000 characters), `agent`, `session`. It takes up to 27 s. The reply is the usual `reply` with `result` and
+`keys` from the helper's answer (`none`: nothing typed; `yes`; `maybe`: check the tab). The page finds the prompt in the
+conversation with the mod's own `blocks.js`, which the helper serves as `/blocks.js`.
 
 Terminals on other machines (`hc machine add`) show in their own spaces, named and ordered by that machine's
 Herdr layout, as in the Mac app. Their conversation, prompts and keys go through the helper on that machine,
@@ -126,7 +134,7 @@ Options:
 | `--port <n>` | The port on 127.0.0.1 (8787). |
 | `--cache <file>` | The sidecar's cache and its `answered/` claims (`~/.flockbook/serve/cache.json`). |
 | `--origin https://<host>` | An extra page origin to accept. Use it when a proxy changes `Host`. By default the `Origin` must name `Host` or `X-Forwarded-Host`. |
-| `--read-only` | The page only reads. Approve, answer and send are refused. |
+| `--read-only` | The page only reads. Approve, answer, send and reenter are refused. |
 | `--home <folder>` | The herdr-app home whose Flockbook settings apply (`Never` for other machines). Default: `$HERDR_APP_HOME`, else the home this helper is installed in, else `~/.config/herdr-app`. |
 
 ## From the Herdr app mod (Flockbook settings)

@@ -245,6 +245,7 @@ h2 .parts { font: var(--caption); color: var(--label-2); }
 .card-head { display: flex; align-items: center; gap: 10px; font: var(--headline); }
 .ask { flex: none; display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: var(--r-control); background: var(--orange); color: var(--on-status); font: 700 17px/1 var(--font); }
 .card p { margin: 10px 0 0; }
+.card.reenter pre.command { max-height: 9em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .card pre.command { font-size: 15px; line-height: 21px; padding: 8px 10px; border-radius: var(--r-control); background: rgba(var(--primary), .05); margin: 12px 0 0; }
 .actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; }
 .actions button { flex: 1; }

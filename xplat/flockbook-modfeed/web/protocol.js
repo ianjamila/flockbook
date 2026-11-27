@@ -24,13 +24,17 @@
 /** A picture of an item: its size in the log. The client asks for it with `picture` when it comes into view. */
                                                           
 
-                  
+                    
                                                                                                          
                                                                                                                             
                      
                                                                                        
                                                                        
-                                                                               
+                                                                              
+     
+                                                                                                                                                    
+                    
+  
 
                                                             
                                                                   
@@ -38,7 +42,8 @@
                         
                                                      
                                                                                                                             
-                                                                
+                                                                                                                  
+                                                                               
                                                  
                                                     
                                                                                                                                        
