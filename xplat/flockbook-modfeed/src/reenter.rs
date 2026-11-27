@@ -319,16 +319,28 @@ pub fn run_with_need(
     a
 }
 
+/// Whether the wait for the new conversation may end on the pid record: the core's fresh status for the pane is Idle in
+/// the same process as before the `/clear`. A pane that is gone or in another process ends the wait too (step 10 says
+/// what happened); a snapshot that fails, or a status that lags the record, keeps it waiting.
+fn core_settled(client: &HcClient, deadline: Instant, pane: &Pane) -> bool {
+    let Ok(ws) = Io::new(client, deadline).snapshot() else { return false };
+    match pane_in(&ws, &pane.id) {
+        None => true,
+        Some(now) => now.process_ids != pane.process_ids || now.agent.as_ref().is_some_and(|a| a.status == AgentStatus::Idle),
+    }
+}
+
 /// Steps 8 (the wait) to 11, after the `/clear` send returned `Sent`.
 #[allow(clippy::too_many_arguments)]
 fn after_clear(found: &locate::Found, procs: &[Proc], client: &HcClient, text: &str, wait: Wait, deadline: Instant, record: (i32, &str), old: &PidRecord) -> Answer {
     let pane = &found.pane;
     let (pid, dir) = record;
-    // The new conversation: another session, idle, in the same process (a changed start is another process).
+    // The new conversation: another session, idle, in the same process (a changed start is another process), and the
+    // core's own status for the tab Idle too (it follows the record by ~80 ms: final review I4).
     let end = (Instant::now() + wait.limit).min(deadline);
     let new = loop {
         if let Some(r) = read_pid_record(dir, pid, procs) {
-            if r.session != old.session && r.status.as_deref() == Some("idle") && r.proc_start == old.proc_start {
+            if r.session != old.session && r.status.as_deref() == Some("idle") && r.proc_start == old.proc_start && (Instant::now() >= deadline || core_settled(client, deadline, pane)) {
                 break r.session;
             }
         }
@@ -366,7 +378,7 @@ fn after_clear(found: &locate::Found, procs: &[Proc], client: &HcClient, text: &
     let left = deadline.saturating_duration_since(Instant::now());
     match client.send_sure(text, &pane.id, Duration::from_secs(SEND_S).min(left), Some("idle")) {
         SendOutcome::Sent => Answer { t: "done", result: "sent".into(), message: None, cleared: Cleared::Yes, keys: Keys::Yes },
-        SendOutcome::Maybe => answer("prompt_unconfirmed", "The prompt was typed but not confirmed: it may already be in the tab.", Cleared::Yes, Keys::Yes),
+        SendOutcome::Maybe => answer("prompt_unconfirmed", "The prompt was typed but not confirmed.", Cleared::Yes, Keys::Yes),
         SendOutcome::NotSent => cleared_not_sent("The tab was cleared, but the prompt could not be typed."),
     }
 }

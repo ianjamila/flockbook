@@ -660,7 +660,7 @@ fn prompt_lost_reply_is_prompt_unconfirmed() {
     rig.fake.send_close(vec![false, true]);
     let a = rig.go(PROMPT);
     check(&a, "prompt_unconfirmed", json!(true), "yes");
-    assert!(a.message.as_deref().unwrap().contains("may already be in the tab"), "{a:?}");
+    assert!(a.message.as_deref().unwrap().contains("typed but not confirmed"), "{a:?}");
     assert_eq!(rig.sent(), ["/clear", PROMPT]);
 }
 
@@ -876,4 +876,38 @@ fn stand_in_sleeper() {
         return;
     }
     std::thread::sleep(Duration::from_secs(120));
+}
+
+/// Catches (final review I4): the pid record flips to the new idle session before the core's own status does (measured:
+/// about 80 ms later), and the wait ending on the record alone answered `cleared_not_sent` ("the tab changed") on a good
+/// tab. The wait also needs the core's status Idle.
+#[test]
+fn core_status_lagging_behind_the_record_still_sends() {
+    let rig = Rig::new();
+    let lag = || {
+        move |st: &mut State| {
+            // the core still says `done` for a few snapshots after the /clear
+            st.terminals = vec![claude("t1", "done", "done")];
+        }
+    };
+    rig.on_clear(lag());
+    rig.fake.on_call(Some(Arc::new(|m, st| {
+        if m == "terminal.list" {
+            let after = st.calls.iter().skip_while(|(c, _)| c != "terminal.send").filter(|(c, _)| c == "terminal.list").count();
+            if after >= 3 {
+                st.terminals = vec![claude("t1", "idle", "idle")];
+            }
+        }
+    })));
+    check(&rig.go(PROMPT), "sent", json!(true), "yes");
+    assert_eq!(rig.sent(), ["/clear", PROMPT]);
+}
+
+/// Catches (I4): a core status that never says Idle after the /clear taken for a good tab: the prompt is not typed.
+#[test]
+fn core_status_never_idle_after_clear_is_clear_unknown() {
+    let rig = Rig::new();
+    rig.on_clear(|st| st.terminals = vec![claude("t1", "done", "done")]);
+    check(&rig.go(PROMPT), "clear_unknown", json!(true), "yes");
+    assert_eq!(rig.sent(), ["/clear"], "the prompt is never typed");
 }
