@@ -9,10 +9,7 @@ import { tabLabel, plainLabel, subStatus, workKind, SUB_GROUPS, tabAgents, agent
 import { openMenu, tabItems, suggestBadge } from "./menu.js";
 import { movedBadge, badgeTip } from "./automove.js";
 import { askOf, nowOf, handoffOf } from "./asks.js";
-import * as sidecar from "./sidecar.js";
-import { emptyFeed, applyFeed } from "./feedstate.js";
-import { replyPrompt, replyHandoff } from "./blocks.js";
-import { readFullPrompt } from "./where.js";
+import { readHandoff, readFull } from "./handoff-read.js";
 import { aboutOf, aboutMore, cooledAccounts, agentsOn, pauseWords, accountName, clockText, localOffset, autoPausedUntil, resumeAuto } from "./ai.js";
 import { sinceView, copyText, markSeen } from "./history.js";
 import { offer, resumeOne, resumeAll, dismissOffer, opening } from "./resume.js";
@@ -132,12 +129,7 @@ export class OverviewView {
     if (this.copying) return;
     this.copying = address; cx.notify?.();
     let prompt = null, problem = null;
-    try {
-      const f = emptyFeed(address);
-      applyFeed(f, await sidecar.feed(address));
-      if (f.error) problem = f.error.message || "the helper could not read its chat";
-      else prompt = replyPrompt(f.rows);
-    } catch (e) { problem = String(e?.message ?? e); } finally { this.copying = null; }
+    try { ({ prompt, problem } = await readHandoff(address)); } finally { this.copying = null; }
     if (!prompt) {
       notify({ title: problem ? `Couldn't read its chat: ${problem}` : "No re-entry prompt in its last reply. Open the tab to see it.", level: "warning", timeout: 4000 });
     } else {
@@ -153,17 +145,15 @@ export class OverviewView {
     if (typeof cx?.write_to_clipboard !== "function") { notify({ title: "Couldn't copy: no clipboard here. Open the tab and use Copy full prompt.", level: "warning", timeout: 3000 }); return; }
     if (this.copyingFull) return;
     this.copyingFull = address; cx.notify?.();
-    let text = null, problem = null, h = null;
+    let text = null, problem = null;
     try {
-      const f = emptyFeed(address);
-      applyFeed(f, await sidecar.feed(address));
-      if (f.error) problem = `Couldn't read its chat: ${f.error.message || "the helper could not read its chat"}`;
+      const h = await readHandoff(address);
+      if (h.problem) problem = `Couldn't read its chat: ${h.problem}`;
       else {
-        h = replyHandoff(f.rows);
-        if (!h) problem = "No re-entry prompt in its last reply. Open the tab to see it.";
+        if (!h.prompt) problem = "No re-entry prompt in its last reply. Open the tab to see it.";
         else if (!h.file) problem = "Its re-entry prompt names no full-prompt file (~/claude-notes/handoffs/…). Copy prompt copies it.";
         else {
-          const r = await readFullPrompt(address, h.file);
+          const r = await readFull(address, h.file);
           if (r.text) text = r.text; else problem = `Couldn't read the full prompt (${h.file}): ${r.problem}`;
         }
       }

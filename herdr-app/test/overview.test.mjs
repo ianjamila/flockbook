@@ -215,3 +215,28 @@ test("Hand-off given: Copy full copies the hand-off file the newest prompt names
   assert.equal(copied, null);
   assert.match(log.notify.at(-1).title, /names no full-prompt file/);
 });
+
+// Finished (owner 11-27): Overview and the Finished screen read a tab's re-entry prompt with one shared helper.
+test("readHandoff: the newest prompt, the hand-off file it names, or the problem", async () => {
+  const { readHandoff } = await import("../mods/flockbook/handoff-read.js");
+  const jl = (...lines) => ({ code: 0, stdout: lines.map((l) => JSON.stringify(l)).join("\n") + "\n", stderr: "" });
+  const head = { type: "header", protocol: 1, sidecar: "0.1.0", command: "feed" }, end = { type: "end", ok: true };
+  const logLine = { type: "log", agent: "claude", path: "/logs/s.jsonl", start: 0, size: 10, cursor: "c1", model: "m" };
+  const row = (id, k, text) => ({ type: "row", id, k, text, ts: 1 });
+  let reply = "Done.\n\nRe-entry prompt:\n\n> Continue.\n> Full prompt: ~/claude-notes/handoffs/ov.md — read it first.";
+  fake.exec = (_c, args) => (args[0] === "feed" ? jl(head, logLine, { type: "splice", at: 0, count: 3 }, row("u1", "user", "go"), row("a1", "assistant", reply), row("f1", "footer", "10:04"), end) : { code: 127, stdout: "", stderr: "" });
+  const a = await readHandoff("t2");
+  assert.match(a.prompt, /Continue\./);
+  assert.match(a.file, /handoffs\/ov\.md$/);
+  assert.equal(a.problem, null);
+  reply = "Done.\n\nRe-entry prompt:\n\n> Continue, no file.";
+  const b = await readHandoff("t2");
+  assert.match(b.prompt, /no file/);
+  assert.equal(b.file, null);
+  reply = "Done, nothing to hand over.";
+  assert.equal((await readHandoff("t2")).prompt, null);
+  fake.exec = () => ({ code: 0, stdout: JSON.stringify({ type: "error", message: "no such terminal" }) + "\n" + JSON.stringify(end) + "\n", stderr: "" });
+  const c = await readHandoff("t2");
+  assert.equal(c.prompt, null);
+  assert.ok(c.problem, "a helper error is reported, not swallowed");
+});
