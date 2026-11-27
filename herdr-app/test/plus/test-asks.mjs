@@ -37,6 +37,10 @@ eq("empty", pendingAsk(""), null);
 const SAYP = `  Should I run both scheduled jobs from this branch now?\n\n  - Why: it proves the new steps work.\n\n  Say "OK, run both" to approve. Or say "watchdog only", and I'll run just the read-only watchdog\n  now and the backup by hand right after the merge.`;
 eq("say \"…\" or say \"…\"", pendingAsk(`${SAYP}\n\n${box()}`), { kind: "reply", words: ["OK, run both", "watchdog only"], text: `Say "OK, run both" to approve. Or say "watchdog only", and I'll run just the read-only watchdog now and the backup by hand right after the merge.` });
 eq("curly quotes, reply “…”", pendingAsk(`  Reply “yes” to go on.\n\n${box()}`)?.words, ["yes"]);
+// Owner 11-28 ("why is this in needs you but there is nothing to do"): a later step told, not asked for now.
+eq("you'll type \"…\" is no ask", pendingAsk(`  Round 1 is running for PR #906. I'll pick it up when it finishes. Clicks are off on this build, so when it's\n  time to merge you'll type "merge".\n\n${box()}`), null);
+eq("you will / you'd say: no ask", pendingAsk(`  After CI you will reply "go", and you'd say “merge” at the end.\n\n${box()}`), null);
+eq("when you're ready, say \"…\" is still an ask", pendingAsk(`  When you're ready, say "go".\n\n${box()}`)?.words, ["go"]);
 eq("a question as the last line", pendingAsk(`  The checks passed.\n\n  Want me to open the follow-up PR now?\n\n${box()}`), { kind: "question", text: "Want me to open the follow-up PR now?" });
 // False catches from asks-questions.log (11-11/11-12): a running tool's block whose command ends in `$?`.
 const RUN = (title, cmd) => `⏺ ${title}\n  ⎿ $ ${cmd}\n\n✻ Running… (3s)\n\n${box()}`;

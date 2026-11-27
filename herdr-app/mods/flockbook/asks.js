@@ -34,6 +34,8 @@ const MIGRATION = /\b(?:reply|type|say)\s*:?\s*["“'`]go\s+(?:for\s+(?:the\s+)?
 // The heading may start the reply, after Claude Code's ⏺ marker (s13 Codex R1 P2).
 const WORTH = /^\s*(?:⏺\s*)?(?:\*\*)?(?:also\s+)?worth\s+considering\b/i;
 const SAY = /\b(?:say|reply|type|answer)\s*(?:with\s+)?:?\s*(?:"([^"\n]{1,60})"|“([^”\n]{1,60})”|'([^'\n]{1,60})'|`([^`\n]{1,60})`)/gi;
+// Just before a SAY match: "you'll", "you will", "you'd", "you would" — the reply tells a later step, it asks nothing now.
+const LATER = /\byou(?:['’]ll|['’]d|\s+will|\s+would)\s+$/i;
 // A merge that happened: "#1821 is merged", "#1821 was merged", "merged #1821", "#1821 merged".
 const MERGED = /(?:#(\d{1,6})\b[^.\n]{0,30}?\b(?:is|was|has been|got)?\s*merged\b|\bmerged\s+(?:PR\s+)?#(\d{1,6})\b)/gi;
 const REPO = /\brepo\s+([\w.-]+\/[\w.-]+)/g;
@@ -95,7 +97,9 @@ export function pendingAsk(screen, { pipeline = true, worth = true } = {}) {
     while (h > 0 && !lines[h].trim()) h--;
     if (worth && (WORTH.test(para) || (h >= 0 && h < j && WORTH.test(lines[h])))) return null;
     // Any other answer the reply asks for in words, or a question it ends with.
-    const words = [...para.matchAll(SAY)].map((x) => x[1] ?? x[2] ?? x[3] ?? x[4]).filter((w, k, l) => w.trim() && l.indexOf(w) === k);
+    // A later step told, not asked for now ("when it's time to merge you'll type "merge"", owner 11-28): no ask.
+    const words = [...para.matchAll(SAY)].filter((x) => !LATER.test(para.slice(0, x.index)))
+      .map((x) => x[1] ?? x[2] ?? x[3] ?? x[4]).filter((w, k, l) => w.trim() && l.indexOf(w) === k);
     if (words.length) return { kind: "reply", words, text: para.slice(0, 240) };
     if (/\?["”')]*$/.test(para)) return { kind: "question", text: para.slice(0, 240) };
     return null;
