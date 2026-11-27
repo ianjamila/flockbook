@@ -51,7 +51,8 @@ test("reentryPrompt: the quote under a line naming the prompt, as written, witho
 test("reentryPrompt: none without a quote or fence under the line; a later mention is passed over", async () => {
   const { reentryPrompt } = await import("../mods/flockbook/blocks.js");
   assert.equal(reentryPrompt("I'll write a re-entry prompt when we stop."), null);
-  assert.equal(reentryPrompt("Re-entry prompt:\n\nContinue the work."), null, "a plain paragraph is not taken");
+  assert.equal(reentryPrompt("The re-entry prompt is in the hand-off file:\n\nContinue the work."), null, "a plain paragraph under a sentence is not taken");
+  assert.equal(reentryPrompt("I wrote the re-entry prompt.\nContinue the work."), null);
   assert.equal(reentryPrompt("Re-entry prompt:\n\n> \n>   \n"), null, "an empty quote is none");
   assert.equal(reentryPrompt("Re-entry prompt:"), null);
   assert.equal(reentryPrompt(""), null);
@@ -59,6 +60,20 @@ test("reentryPrompt: none without a quote or fence under the line; a later menti
   assert.equal(reentryPrompt("> quoted re-entry prompt line\n> more"), null, "the naming line inside a quote is not the heading");
   assert.equal(reentryPrompt("Re-entry prompt:\n> the prompt\n\nCopy the re-entry prompt above into a fresh session."), "the prompt");
   assert.equal(reentryPrompt("Plain quote:\n> not a prompt"), null);
+});
+
+// Owner 11-28 (Finished screen, "no copy prompt button here"): a reply ended "---\n**Re-entry prompt**\n" + plain lines,
+// no quote or fence, so the tab was Finished (the words are on screen) but Copy prompt found nothing.
+test("reentryPrompt: a plain paragraph under a line that is only the prompt's name", async () => {
+  const { reentryPrompt } = await import("../mods/flockbook/blocks.js");
+  const body = "Finish the eaglewatch master sheet check: cleanup done 11-27.\nSTART HERE: ~/claude-memory/home/x.md → HAND-OFF s12.\nFull prompt: ~/claude-notes/handoffs/x.md — read it first.";
+  assert.equal(reentryPrompt(`The cleanup is done.\n\nTop 3 optional: none open.\n\n---\n**Re-entry prompt**\n${body}`), body);
+  assert.equal(reentryPrompt(`**Re-entry prompt:**\n\n${body}\n\nThat's all for today.`), body, "one paragraph; text after a blank line is not in it");
+  assert.equal(reentryPrompt(`## Re-entry prompt\n${body}\n---\nfooter`), body, "a rule ends it");
+  assert.equal(reentryPrompt(`Re-entry prompt (start it after 06:00 PHT on 11-28):\n${body}`), body);
+  assert.equal(reentryPrompt("Re-entry prompt:\n\nContinue the work."), "Continue the work.");
+  assert.equal(reentryPrompt("**Re-entry prompt**\n\n---\nafter"), null, "nothing but a rule under it");
+  assert.equal(reentryPrompt("**Re-entry prompt**\n> quoted one"), "quoted one", "a quote under it is still taken as a quote");
 });
 
 // Owner 11-13 follow-up: a reply that was only the fenced prompt + "The prompt is ready to paste." had no Copy all.

@@ -107,11 +107,27 @@ function blockAt(lines, i) {
   return { body: body.join("\n").trim(), end: j };
 }
 const nonBlank = (lines, i, step) => { while (i >= 0 && i < lines.length && !lines[i].trim()) i += step; return i >= 0 && i < lines.length ? lines[i] : null; };
+// Owner 11-28 ("no copy prompt button here"): a line that is only the prompt's name ("**Re-entry prompt**",
+// "## Resume prompt", "Re-entry prompt (start it after 06:00):") is a heading; a plain paragraph under it is the prompt
+// (its lines up to a blank line, a rule or a heading). A sentence that only mentions the prompt is no heading.
+const PROMPT_HEADING = /^(?:(?:short|the|your)\s+)?(?:re-?entry|resume|hand-?off) prompt\s*(?:\([^)]*\))?\s*:?$/i;
+const isHeading = (line) => PROMPT_HEADING.test(line.trim().replace(/^#{1,6}\s+/, "").replace(/\*\*|__/g, "").trim());
+const ENDS_PARA = /^\s*(?:#{1,6}\s|(?:-\s*){3,}$|(?:\*\s*){3,}$|(?:_\s*){3,}$)/;
+function paragraphAt(lines, i) {
+  let j = i + 1;
+  while (j < lines.length && !lines[j].trim()) j++;
+  if (j >= lines.length || ENDS_PARA.test(lines[j]) || blockAt(lines, j)) return null;
+  const body = [];
+  for (; j < lines.length && lines[j].trim() && !ENDS_PARA.test(lines[j]); j++) body.push(lines[j]);
+  return { body: body.join("\n").trim(), end: j };
+}
 export function reentryPrompt(text, ask = null) {
   const lines = String(text ?? "").replace(/\r/g, "").split("\n");
   const asked = PROMPT_NAME.test(String(ask ?? "")) || /\b(?:re-?entry|resume|hand-?off)\b.*\bprompt\b|\bprompt\b.*\b(?:re-?entry|fresh session|new session)\b/i.test(String(ask ?? ""));
   let found = null;
   for (let i = 0; i < lines.length; i++) {
+    const p = !QUOTED.test(lines[i]) && isHeading(lines[i]) ? paragraphAt(lines, i) : null;
+    if (p?.body) { found = p.body; i = p.end - 1; continue; }
     const b = blockAt(lines, i);
     if (!b) continue;
     const above = nonBlank(lines, i - 1, -1), below = nonBlank(lines, b.end, 1);
