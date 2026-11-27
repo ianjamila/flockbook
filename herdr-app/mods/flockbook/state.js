@@ -265,6 +265,9 @@ export function overlays(a) {
       out.push({ glyph: ch, group: "merging", word: "merging", tip: "it is merging (you said merge; the merge queue or gate runs)", ...(b?.shells && !handoffOf(a?.address) ? { wait: true } : {}) });
       continue;
     }
+    // #2 (11-28): a ⏳ the title hook left behind after its watch exited (nothing runs behind the finished turn) is
+    // a leftover mark, not a CI wait: it showed "Waiting on CI" forever. It counts only while a shell or agent runs.
+    if (ch === "⏳" && a.status !== "working" && a.status !== "blocked" && !b?.shells && !b?.agents) continue;
     // ⏳ / 🔍 / a review dot on a finished turn: the tab-title hook keeps them only while a CI / merge watch, a Codex
     // run or a review agent goes on (it re-checks them at every turn end), so they are live work, ahead of a leftover
     // ✅ or answered 🔀 (owner 11-14 20:00: "⏳✅ … PR #2049" sat in Done while its browser tests ran; its footer and

@@ -58,6 +58,7 @@ test("work: working, a finished turn with CI or a review behind it, and blocked 
     ["id", { status: "idle" }],
     ["dn", { status: "done" }],
   ]);
+  fake.shared["flockbook.background"] = { ci: { shells: 1, agents: 0 } };   // a ⏳ counts while its watch runs (#2, 11-28)
   const w = classify(allTabs(), NOW);
   assert.deepEqual({ working: w.working, ci: w.ci, review: w.review, other: w.other, waiting: w.waiting, total: w.total }, { working: 1, ci: 1, review: 1, other: 0, waiting: 1, total: 4 });
   // The 🛠 on a finished turn with no build agent running is only a leftover mark: not work (the Overview says the same).
@@ -280,7 +281,7 @@ test("workKind: the tab mark, the Overview and stay-awake agree on what is work"
     ["id", { status: "idle" }],
     ["dn", { status: "done" }],
   ]);
-  fake.shared["flockbook.background"] = { sh: { shells: 1, agents: 0 } };
+  fake.shared["flockbook.background"] = { sh: { shells: 1, agents: 0 }, ci: { shells: 1, agents: 0 } };
   const kinds = Object.fromEntries(allTabs().map(({ tab: t }) => [t.id, workKind(t)]));
   assert.deepEqual(kinds, { "tb-w": "turn", "tb-ci": "ci", "tb-rv": "review", "tb-sh": "other", "tb-bg": null, "tb-id": null, "tb-dn": null });
   for (const { tab: t } of allTabs()) {

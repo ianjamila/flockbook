@@ -30,7 +30,7 @@ const eq = (name, got, want) => { const ok = JSON.stringify(got) === JSON.string
 const ag = (title) => ({ title, program: { name: "Claude Code", key: "claude-code" } });
 
 eq("no symbols", S.overlays(ag("✳ Fix login")), []);
-eq("spinner + ⏳🔵", S.overlays(ag("✳ ⏳🔵 Fix login")).map((o) => o.glyph), ["⏳", "🔵"]);
+eq("spinner + ⏳🔵", S.overlays({ ...ag("✳ ⏳🔵 Fix login"), status: "working" }).map((o) => o.glyph), ["⏳", "🔵"]);
 eq("🛠️ with FE0F + ✅", S.overlays(ag("🛠️✅ Sidebar")).map((o) => o.group), ["agents", "results"]);
 eq("▲ stripped then 🔀", S.overlays(ag("▲ 🔀 PR 5")).map((o) => o.glyph), ["🔀"]);
 eq("stops at first word", S.overlays(ag("🔍 Review ✅ later")).map((o) => o.glyph), ["🔍"]);
@@ -41,6 +41,7 @@ AGENTS.b = ag("🛠 Auto tab renaming");
 AGENTS.c = ag("Herdr handoff");
 AGENTS.d = { ...ag("🟣✅ Tools repo move"), status: "working" };   // while the turn runs
 AGENTS.e = ag("⏳ Merge gate");
+BG.e = { shells: 1, agents: 0 };   // #2: a ⏳ on a finished turn counts only while something runs behind it
 const tab = (id, status, extra = {}) => ({ id, status, name: "1", named: false, ...extra });
 ASKS.a = { kind: "merge", pr: 1818 };   // the reply still ends with the hand-off
 eq("merge outranks results", S.subStatus(tab("a"))?.key, "merge");
@@ -195,7 +196,10 @@ eq("workKind: a background shell", S.workKind(tab("k", "done")), "other");
 eq("workKind: blocked is never work (it waits on the owner)", S.workKind(tab("k", "blocked")), null);
 delete BG.k;
 AGENTS.k = ag("⏳ PR #9");
+BG.k = { shells: 1, agents: 0 };
 eq("workKind: a CI wait", S.workKind(tab("k", "done")), "ci");
+delete BG.k;
+eq("workKind: a leftover ⏳ with nothing running is not work (#2, 11-28)", S.workKind(tab("k", "done")), null);
 AGENTS.k = ag("🔍 round 2");
 eq("workKind: a review wait", S.workKind(tab("k", "done")), "review");
 AGENTS.k = ag("🟣✅ Fable");
@@ -245,6 +249,7 @@ eq("hand-off + leftover shell → Done, Hand-off given", O.groups([tab("h", "don
 delete BG.h; delete HO.h;
 // Owner 11-14 20:00: a finished ⏳✅ tab (CI runs, review results wait) is not Done: Waiting on CI in the pipeline section.
 AGENTS.ci = { ...ag("⏳✅ EagleWatch PR #2049 signed-out redirect"), status: "done" };
+BG.ci = { shells: 1, agents: 0 };
 eq("owner 11-14: done + ⏳✅ → pipeline, Waiting on CI", O.groups([tab("ci", "done")].map((t) => ({ space: { id: "s", name: "S" }, tab: t })), "status").map((x) => [x.title, x.subs.map((y) => y.title)]), [["CI / Final Review / Merging", ["Waiting on CI"]]]);
 AGENTS.cv = { ...ag("🔍✅ Tools repo move"), status: "idle" };
 eq("idle + 🔍✅ (Codex still running) → pipeline, In review", O.groups([tab("cv", "idle")].map((t) => ({ space: { id: "s", name: "S" }, tab: t })), "status").map((x) => [x.title, x.subs.map((y) => y.title)]), [["CI / Final Review / Merging", ["In review"]]]);

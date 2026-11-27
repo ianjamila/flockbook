@@ -98,21 +98,32 @@ eq("leftover shell only: goes by status (hand-off allowed with shells)", [s2?.ke
 
 // Owner 11-14 20:00: "⏳✅ EagleWatch PR #2049 …" sat in Done — the title's ✅ outranked its ⏳ and a ✅ only counts
 // while the turn runs. The tab-title hook keeps ⏳ / 🔍 only while a CI watch / Codex run goes on, so on a finished
-// turn they are live work, ahead of a leftover ✅ (whether or not the footer shows the shell or the reply says so).
+// turn they are live work, ahead of a leftover ✅ (whether or not the reply says so). #2 (11-28): a ⏳ counts only while
+// a shell or agent still runs behind the turn; with none it is a leftover mark (below).
 for (const b of [null, { shells: 1, agents: 0 }]) {
   bg = b;
-  agent.title = "⏳✅ EagleWatch PR #2049 signed-out redirect";
-  const sc = state.subStatus(tab);
   const w = b ? "shell, reply not read as CI" : "no footer read";
-  eq(`title ⏳✅ (${w}): Waiting on CI`, sc?.key, "ci");
-  eq(`title ⏳✅ (${w}): working`, [sc?.background, state.tabStatus(tab)], [true, "working"]);
-  eq(`title ⏳✅ (${w}): no hand-off flag`, /🤝/.test(sc?.glyphs ?? ""), false);
+  if (b) {
+    agent.title = "⏳✅ EagleWatch PR #2049 signed-out redirect";
+    const sc = state.subStatus(tab);
+    eq(`title ⏳✅ (${w}): Waiting on CI`, sc?.key, "ci");
+    eq(`title ⏳✅ (${w}): working`, [sc?.background, state.tabStatus(tab)], [true, "working"]);
+    eq(`title ⏳✅ (${w}): no hand-off flag`, /🤝/.test(sc?.glyphs ?? ""), false);
+  }
   agent.title = "🔍✅ Claude-pipeline PR #299 follow-ups";
   const sv = state.subStatus(tab);
   eq(`title 🔍✅ (${w}): In review, working`, [sv?.key, sv?.background, state.tabStatus(tab)], ["review", true, "working"]);
-  agent.title = "⏳🔀 Claude-pipeline PR #299 follow-ups";
-  eq(`title ⏳🔀 after "merge" (${w}): Waiting on CI, working`, [state.subStatus(tab)?.key, state.tabStatus(tab)], ["ci", "working"]);
+  if (b) {
+    agent.title = "⏳🔀 Claude-pipeline PR #299 follow-ups";
+    eq(`title ⏳🔀 after "merge" (${w}): Waiting on CI, working`, [state.subStatus(tab)?.key, state.tabStatus(tab)], ["ci", "working"]);
+  }
 }
+// #2 (11-28): a ⏳ left in the title after its watch exited, nothing running behind the finished turn: not "Waiting on CI".
+bg = null;
+agent.title = "⏳✅ EagleWatch PR #2049 signed-out redirect";
+const sl = state.subStatus(tab);
+eq("leftover ⏳ (no shell, no agent): not Waiting on CI, not working", [sl?.key === "ci", sl?.background, state.tabStatus(tab)], [false, false, "done"]);
+eq("leftover ⏳: no overlay carries wait", state.overlays(agent).some((o) => o.wait && o.glyph === "⏳"), false);
 bg = null;
 agent.title = "✅ Claude-pipeline PR #299 follow-ups";
 eq("title ✅ alone, finished: not working", [state.subStatus(tab)?.key, state.subStatus(tab)?.background, state.tabStatus(tab)], ["handoff", false, "done"]);
