@@ -57,3 +57,15 @@ test("needs: nothing waits, All clear", () => {
   fake.agents = [agent("t2", "working")];
   assert.match(textOf(new NeedsView(fakeCx()).render(fakeCx())), /All clear/);
 });
+
+// Finished (owner 11-27): the Overview's "Hand-off given" tabs, on their own screen.
+test("finished: only hand-off-given tabs — never a working, blocked, asking or background-agent one", async () => {
+  const { finished } = await import("../mods/flockbook/state.js");
+  const { listMode } = await import("../mods/flockbook/tabs.js");
+  fake.agents = [agent("t1", "blocked"), agent("t2", "working"), agent("t4", "done"), agent("t5", "done"), agent("t6", "done"), agent("t7", "idle")];
+  fake.shared["flockbook.handoff"] = { t1: true, t2: true, t4: true, t5: true, t6: true };
+  fake.shared["flockbook.asks"] = { t5: { kind: "merge", pr: 5 } };
+  fake.shared["flockbook.background"] = { t6: { shells: 0, agents: 1 } };
+  assert.deepEqual(finished().map((a) => a.address), ["t4"]);
+  assert.equal(listMode("finished"), "all", "Finished spans every workspace, as Needs you does");
+});

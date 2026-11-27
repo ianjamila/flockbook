@@ -388,6 +388,7 @@ export function showAgent(address) {
 
 export function showNeeds() { showScreen("needs"); }
 export function showOverview() { showScreen("overview"); }
+export function showFinished() { showScreen("finished"); }
 // The Flockbook settings: a dialog over the window, as Herdr's own Settings (dimmed behind it; Esc or a
 // click beside it closes it). The file is read again, in case someone edited it. Opening it again
 // replaces the open one, so there is never a second (closing an id that is gone does nothing).
@@ -464,6 +465,11 @@ export function needReason(a) {
 }
 export function needing() {
   return agents().filter((a) => needReason(a));
+}
+// Finished (owner 11-27): the tabs the Overview files under "Hand-off given" (overlays: finished, nothing running
+// behind it, its last reply gave a re-entry prompt). A tab that also asks something stays in Needs you only.
+export function finished() {
+  return agents().filter((a) => !needReason(a) && overlays(a).some((o) => o.group === "handoff"));
 }
 
 // Shows a space's chat. The pick is cleared, so the chat starts at the space's focused or first agent.
@@ -570,7 +576,7 @@ export async function readTermPlace(now = Date.now()) {
 // window opened while one of them shows ("Answer in terminal") stays: only the switch puts it away.
 const KEY_TERM_AWAY = "flockbook.terminal.away";       // true while the window is put away for Needs you / Overview
 const KEY_TERM_SCREEN = "flockbook.terminal.screen";   // the screen at the last sync, to see a switch
-const AWAY_SCREENS = new Set(["needs", "overview"]);
+const AWAY_SCREENS = new Set(["needs", "overview", "finished"]);
 // The switch to `screen`: puts the open window away (to Needs you / Overview) or brings it back (to anything else) for
 // `to` (undefined: the shown tab's terminal). Run by showScreen in the click (owner 11-13: coming back on the next
 // sync, a second later, was eye-straining) and by the sync for a switch made elsewhere. True when it opened or closed it.

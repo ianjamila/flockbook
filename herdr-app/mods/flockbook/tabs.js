@@ -57,7 +57,7 @@ export function headText(spaceName, n) {
 // im in overview, it should show all running sessions in all workspaces … instead of just the last workspace i
 // visited"), and on Needs you, which spans every workspace too; else "space", the shown workspace's.
 export function listMode(screen) {
-  return screen === "overview" || screen === "needs" ? "all" : "space";
+  return screen === "overview" || screen === "needs" || screen === "finished" ? "all" : "space";
 }
 // The rows of the "all" list: per workspace with tabs (in the sidebar's order), a heading { kind: "space", space,
 // text: "eaglewatch · 5 · 2 waiting", open: the tab a click on it shows (the workspace's shown tab, else its first) },
