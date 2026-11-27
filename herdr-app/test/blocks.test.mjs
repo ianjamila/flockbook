@@ -76,6 +76,40 @@ test("reentryPrompt: a plain paragraph under a line that is only the prompt's na
   assert.equal(reentryPrompt("**Re-entry prompt**\n> quoted one"), "quoted one", "a quote under it is still taken as a quote");
 });
 
+// Owner 11-28 (second screenshot, "its still occuring bug"): 17 of 71 Finished-style replies of the week gave no prompt.
+// Each case below is the shape of a real one.
+test("reentryPrompt: the shapes real hand-off replies use", async () => {
+  const { reentryPrompt } = await import("../mods/flockbook/blocks.js");
+  const body = "Objective: ship PR B2.\nFull prompt: ~/claude-notes/handoffs/x.md — read it first.";
+  // "Yes, clear" (CLAUDE.md "Clear vs continue") just above a fence or quote names it.
+  assert.equal(reentryPrompt(`**Yes, clear.** This session is past 200k tokens.\n\n\`\`\`\n${body}\n\`\`\``), body);
+  assert.equal(reentryPrompt(`**Clear vs continue:** yes, clear. A fresh start is cheaper.\n\n> Objective: ship PR B2.\n> Effort high.`), "Objective: ship PR B2.\nEffort high.");
+  // "▎" (the terminal's quote bar, copied) is a quote mark; inside a fence too, it is taken off.
+  assert.equal(reentryPrompt("**Yes, clear**, after the click test.\n\n▎ Fix merge.\n▎ START HERE: memory x."), "Fix merge.\nSTART HERE: memory x.");
+  assert.equal(reentryPrompt("**Yes, clear.** Only cleanup left.\n\n```\n▎ Finish the thread.\n▎ Effort medium.\n```"), "Finish the thread.\nEffort medium.");
+  // A sentence ending "Re-entry (…):" with a list under it.
+  const list = "- **Objective:** EagleWatch public copy.\n- **Full prompt:** `~/claude-notes/handoffs/ew-public-copy.md` — read it first.";
+  assert.equal(reentryPrompt(`Closed: 5b.\n\n**Yes, clear.** The hand-off is up to date. Re-entry (I can't clear it for you):\n${list}`), list);
+  // A bold heading with a label; with two, the last one.
+  assert.equal(reentryPrompt("**Re-entry prompt 1: Demand Chart**\nObjective: A.\n\n**Re-entry prompt 2: master sheet check**\nObjective: B."), "Objective: B.");
+  // A paragraph that starts with the label: as written.
+  assert.equal(reentryPrompt("**yes, clear:** the conversation is long.\n\nRe-entry: design step 2.\nSTART HERE: memory x."), "Re-entry: design step 2.\nSTART HERE: memory x.");
+  // Talk about a prompt is none.
+  assert.equal(reentryPrompt("The last line of the re-entry prompt stays as written:\n\n`Effort high`"), null);
+  assert.equal(reentryPrompt("**Yes, clear.** Context is large.\n\nI updated the notes."), null, "yes, clear over a plain paragraph");
+  assert.equal(reentryPrompt("Run it, then paste the output:\n\n```sh\nnpm test\n```"), null);
+});
+
+test("replyHandoff: 'the re-entry prompt from my last message still applies' gives that reply's prompt", async () => {
+  const { replyHandoff } = await import("../mods/flockbook/blocks.js");
+  const r = (id, k, text) => ({ id, k, text });
+  const before = [r("u", "user", "go"), r("a", "assistant", "Done.\n\nRe-entry prompt:\n\n> Continue X.\n> Full prompt: ~/claude-notes/handoffs/x.md"), r("f", "footer", "1")];
+  const still = "Merged.\n\nThe re-entry prompt from my last message still applies, with #2641 now done.";
+  assert.deepEqual(replyHandoff([...before, r("u2", "user", "merge"), r("a2", "assistant", still), r("f2", "footer", "2")]),
+    { prompt: "Continue X.\nFull prompt: ~/claude-notes/handoffs/x.md", file: "~/claude-notes/handoffs/x.md" });
+  assert.equal(replyHandoff([...before, r("u2", "user", "merge"), r("a2", "assistant", "Merged."), r("f2", "footer", "2")]), null, "no reference: none");
+});
+
 // Owner 11-13 follow-up: a reply that was only the fenced prompt + "The prompt is ready to paste." had no Copy all.
 test("reentryPrompt: a block counts when the line under it speaks of the prompt, when it reads like one, or when asked for", async () => {
   const { reentryPrompt } = await import("../mods/flockbook/blocks.js");
