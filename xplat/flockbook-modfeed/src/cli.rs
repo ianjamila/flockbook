@@ -249,41 +249,15 @@ pub fn run(argv: &[String]) -> String {
                 return r.fail_none("usage", "reenter --budget-ms is too large");
             };
             let cache_path = first("--cache").map(PathBuf::from);
-            let split = remote::split(&terminal);
-            if matches!(split, Ok(Some(_))) && config::load(config::dir(home().as_deref()).as_deref()).remote_never {
-                return r.fail_none("remote-off", config::REMOTE_OFF);
-            }
-            let session = HcSession::resolve_env();
-            if !session.is_available() {
-                return r.fail_none("no-core", "herdr-core is not running");
-            }
-            match split {
-                Err(()) => return r.fail_none("bad_terminal", &format!("not a terminal address: {terminal}")),
-                // Another machine: the helper there runs it with what is left of the time; its lines go back as they are.
-                Ok(Some((machine, there))) => {
-                    let client = HcClient::new(session, 8, 22);
-                    let mut typed = vec!["--terminal".to_string(), terminal.clone(), "--expect-path".into(), expect_path];
-                    typed.extend(cache_path.iter().flat_map(|c| ["--cache".to_string(), c.to_string_lossy().into_owned()]));
-                    typed.extend(["--text".to_string(), text]);
-                    return remote::forward(&client, &cmd, &typed, &machine, &there, cache_path.as_deref(), Some(deadline));
+            match reenter_run(&terminal, &expect_path, &text, cache_path.as_deref(), home().as_deref(), deadline) {
+                // Another machine: the lines of the helper there (its own `end` too), as they are.
+                Reentered::Forwarded(lines) => lines,
+                Reentered::Done(a) => {
+                    r.out.emit(&a);
+                    r.finish(true)
                 }
-                Ok(None) => {}
+                Reentered::Error(code, message) => r.fail_none(code, &message),
             }
-            // The keys lock first, then a fresh find under it (a cached find has no pid record: `no-identity` always).
-            let (_held, found, _, mut client) = match locked_find(&terminal, cache_path.as_deref(), true) {
-                Ok(x) => x,
-                Err(Gate::Done(d)) => {
-                    let d = if d.result == "busy" { keylock::busy_done(true) } else { d };
-                    r.out.emit(&reenter::from_done(d));
-                    return r.finish(true);
-                }
-                Err(Gate::Error(code, message)) => return r.fail_none(code, &message),
-            };
-            client.send_timeout = Duration::from_secs(reenter::SEND_S);
-            let procs = herdr_core::resolver::processes();
-            let a = reenter::run(&terminal, &found, &procs, &client, &text, &expect_path, cache_path.as_deref(), reenter::WAIT, deadline);
-            r.out.emit(&a);
-            r.finish(true)
         }
         "feed" | "status" | "card" | "approve" | "answer" | "send" | "queue" | "commands" => {
             let Some(terminal) = opt("--terminal") else { return r.fail("usage", &format!("{cmd} needs --terminal <addr>")) };
@@ -486,6 +460,52 @@ pub fn locked_find(terminal: &str, cache: Option<&Path>, recheck: bool) -> Resul
         return Err(Gate::Done(cards::agent_changed()));
     }
     Ok((held, found, was, client))
+}
+
+/// How `reenter_run` ended. Every error says `keys: "none"`: nothing is typed before the `/clear` send.
+pub enum Reentered {
+    /// A terminal on another machine: the lines the helper there printed, as they are.
+    Forwarded(String),
+    Done(reenter::Answer),
+    Error(&'static str, String),
+}
+
+/// `reenter` for the CLI and for `serve` (the phone page): the same run, the same gates. `terminal` as given (`t1`,
+/// `hc:t1` or `machine/tN`); `expect_path`: the log the prompt was read from; `home`: as `--home`; `deadline`: the limit of
+/// the whole run. Another machine: the same command forwarded to the helper there. Here: the keys lock, a fresh find under
+/// it (a cached find has no pid record: `no-identity` always), then `reenter::run`.
+pub fn reenter_run(terminal: &str, expect_path: &str, text: &str, cache: Option<&Path>, home: Option<&str>, deadline: Instant) -> Reentered {
+    let split = remote::split(terminal);
+    if matches!(split, Ok(Some(_))) && config::load(config::dir(home).as_deref()).remote_never {
+        return Reentered::Error("remote-off", config::REMOTE_OFF.into());
+    }
+    let session = HcSession::resolve_env();
+    if !session.is_available() {
+        return Reentered::Error("no-core", "herdr-core is not running".into());
+    }
+    match split {
+        Err(()) => return Reentered::Error("bad_terminal", format!("not a terminal address: {terminal}")),
+        // Another machine: the helper there runs it with what is left of the time; its lines go back as they are.
+        Ok(Some((machine, there))) => {
+            let client = HcClient::new(session, 8, 22);
+            let mut typed = vec!["--terminal".to_string(), terminal.to_string(), "--expect-path".into(), expect_path.to_string()];
+            typed.extend(cache.iter().flat_map(|c| ["--cache".to_string(), c.to_string_lossy().into_owned()]));
+            typed.extend(["--text".to_string(), text.to_string()]);
+            return Reentered::Forwarded(remote::forward(&client, "reenter", &typed, &machine, &there, cache, Some(deadline)));
+        }
+        Ok(None) => {}
+    }
+    let (_held, found, _, mut client) = match locked_find(terminal, cache, true) {
+        Ok(x) => x,
+        Err(Gate::Done(d)) => {
+            let d = if d.result == "busy" { keylock::busy_done(true) } else { d };
+            return Reentered::Done(reenter::from_done(d));
+        }
+        Err(Gate::Error(code, message)) => return Reentered::Error(code, message),
+    };
+    client.send_timeout = Duration::from_secs(reenter::SEND_S);
+    let procs = herdr_core::resolver::processes();
+    Reentered::Done(reenter::run(terminal, &found, &procs, &client, text, expect_path, cache, reenter::WAIT, deadline))
 }
 
 /// A key command with its values typed, never parsed from arguments: `serve` passes the page's values here, so a
