@@ -5,7 +5,9 @@ import { withHover } from "./hover.js";
 import { theme, shared, setShared, home, notify } from "herdr";
 import { spaces, agents, withSnapshot } from "./parked.js";
 import { spaceTitle } from "./machines.js";
-import { tabLabel, plainLabel, subStatus, workKind, SUB_GROUPS, tabAgents, agentName, openTab, showNeeds, showSessions, needing, icon, FADE, watchEdge, noteWindowHeight } from "./state.js";
+import { tabLabel, plainLabel, subStatus, workKind, SUB_GROUPS, tabAgents, agentName, openTab, showNeeds, showSessions, needing, icon, FADE, watchEdge, noteWindowHeight, reenterRuns } from "./state.js";
+import * as sidecar from "./sidecar.js";
+import { begin, reenter, canReenterRead, HelperCan, ASK_RETRY_MS } from "./reenter-run.js";
 import { openMenu, tabItems, suggestBadge } from "./menu.js";
 import { movedBadge, badgeTip } from "./automove.js";
 import { askOf, nowOf, handoffOf } from "./asks.js";
@@ -119,7 +121,75 @@ export class OverviewView {
     this.top = {}; if (this.barOver) startTop(cx, this.top);
     // The "13m" labels age; redraw twice a minute.
     cx?.timer?.every?.(30000, (cx) => cx.notify());
+    // Clear & re-enter on a hand-off card (reenter-run.js): the card's prompt is read once when it shows (not every tick).
+    this.reads = new Map();      // address → { prompt, file, seen, problem, at } of a hand-off tab
+    this.reading = new Set();    // addresses whose read is under way
+    this.readNo = 0;             // read numbers: only the newest started read stores its result
+    this.startedNo = new Map();  // address → the number of the newest read started
+    this.runSig = "";            // every tab's run (id, state, result) at the last tick: a change repaints
+    this.reader = readHandoff;   // tests hand in a fake
+    this.reenterer = sidecar.reenter;
+    this.helper = new HelperCan();
+    cx?.timer?.every?.(2000, (cx2) => this.tick(cx2));
   }
+
+  // Every two seconds: the hand-off tabs' prompts are read (once each; a read without a prompt again after a while), and a
+  // run's change (started or ended in the Finished screen or a chat) repaints.
+  tick(cx) { withSnapshot(() => this.tickBody(cx)); }
+  tickBody(cx) {
+    const want = new Set(agents().filter((a) => handoffOf(a.address)).map((a) => a.address));
+    for (const k of [...this.reads.keys()]) if (!want.has(k) && !reenterRuns.has(k)) this.reads.delete(k);
+    for (const address of want) {
+      const r = this.reads.get(address);
+      const due = !r || (!r.prompt && Date.now() - (r.at ?? 0) >= ASK_RETRY_MS);
+      if (due && !this.reading.has(address) && !reenterRuns.has(address)) cx.spawn((cx2) => this.loadRead(cx2, address));
+    }
+    if (want.size) this.helper.poke(cx);
+    const sig = [...reenterRuns].map(([a, run]) => `${a}|${run.id}|${run.state}|${run.result ?? ""}`).join(";");
+    if (sig !== this.runSig) { this.runSig = sig; cx.notify?.(); }
+  }
+  startRead(address) { const n = ++this.readNo; this.startedNo.set(address, n); return n; }
+  storeRead(address, n, r) { if (this.startedNo.get(address) === n) this.reads.set(address, { ...r, at: Date.now() }); }
+  async loadRead(cx, address) {
+    this.reading.add(address);
+    const n = this.startRead(address);
+    try { this.storeRead(address, n, await this.reader(address)); } finally { this.reading.delete(address); }
+    cx.notify?.();
+  }
+
+  // Clear & re-enter from a hand-off card: the same run as the Finished screen's (reenter-run.js; its record is shared, so the
+  // other places show "Re-entering…" too). The checks at the click are the button's own: allowed, a clipboard, no run on.
+  startReenter(cx, address) {
+    const r = this.reads.get(address);
+    if (!canReenterRead(r, reenterRuns.get(address), this.helper.value)) return;
+    if (typeof cx?.write_to_clipboard !== "function") { notify({ title: "Couldn't re-enter: no clipboard here. Open the tab and use Copy all.", level: "warning", timeout: 3000 }); return; }
+    const started = begin(address, r);
+    if (!started) return;
+    cx.notify?.();
+    cx.spawn((cx2) => reenter(cx2, address, started, typeof cx2?.write_to_clipboard === "function" ? cx2 : cx, {
+      reader: (a) => this.reader(a),
+      reenterer: (...args) => this.reenterer(...args),
+      startRead: (a) => this.startRead(a),
+      // A reply that changed: its new read is shown (no prompt: no button); a read that failed keeps the old one.
+      changed: (again, n) => { if (!again.problem) this.storeRead(address, n, again); },
+    }));
+  }
+  // The button: "Clear & re-enter" when the card's read allows it, "Re-entering…" (nothing to press) while a run is on in
+  // this tab, wherever it started; null otherwise.
+  reenterButton(id, address, t) {
+    const run = reenterRuns.get(address);
+    const busy = run?.state === "running";
+    if (!busy && !canReenterRead(this.reads.get(address), run, this.helper.value)) return null;
+    return div().id(id).flex_none().h(22).px(8).flex().items_center().rounded(6).text_size(11.5)
+      .bg(t.chrome).border(1).border_color(t.border).text_color(t.foreground)
+      .tooltip("Type /clear in this tab, then its re-entry prompt (the helper checks the tab first)")
+      .when(!busy, (el) => el.hover((s) => s.bg(t.hover)))
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_click((_e, cx) => { cx.stop_propagation?.(); if (!busy) this.startReenter(cx, address); })
+      .child(busy ? "Re-entering…" : "Clear & re-enter");
+  }
+  // The run's note under a card while its record shows (the result of a run that typed or that was refused).
+  runNote(address) { const run = reenterRuns.get(address); return run?.state === "done" && run.note ? run : null; }
 
   // "Copy re-entry prompt" (s19, owner yes): a hand-off tab's prompt without opening the tab. Its newest reply is read
   // through the helper (the chat's own feed call) and the prompt found the way the chat's Copy all finds it
@@ -199,7 +269,8 @@ export class OverviewView {
     const ss = subStatus(tab);
     // What it works on, in plain words (owner 11-12): "Now: …" while working, "Last: …" after; the hover tells the story.
     const nw = nowOf(a?.address), about = aboutOf(a?.address);
-    const card = h_flex().id(`ov-${tab.id}`).w(w).max_w_full().h(64 + (this.tall ? 20 : 0) + (this.tallAbout ? 20 : 0)).px(16).gap(12).items_center().flex_none().rounded(12)
+    const runNote = a?.address ? this.runNote(a.address) : null;
+    const card = h_flex().id(`ov-${tab.id}`).w(w).max_w_full().h(64 + (this.tall ? 20 : 0) + (this.tallAbout ? 20 : 0) + (this.tallRun ? 20 : 0)).px(16).gap(12).items_center().flex_none().rounded(12)
       .bg(t.raised).border(1).border_color(t.border).hover((s) => s.bg(t.hover))
       .on_click(() => openTab(space.id, tab))
       .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openMenu(tabItems(tab, { agent: a ?? null, spaceId: space.id, list: (space.tabs ?? []).filter((x) => !x.settled) })); })
@@ -211,7 +282,8 @@ export class OverviewView {
             .tooltip(badgeTip(moved)).child(svg(icon("moved")).size(11)).child("moved here")))
           .when(Boolean(suggestBadge(a, t, `ov-sg-${tab.id}`)), (el) => el.child(suggestBadge(a, t, `ov-sg-${tab.id}`)))
           .when(ss?.key === "handoff" && Boolean(a?.address), (el) => el.child(this.copyButton(`ov-copy-${tab.id}`, a.address, t))
-            .child(this.fullButton(`ov-full-${tab.id}`, a.address, t)))
+            .child(this.fullButton(`ov-full-${tab.id}`, a.address, t))
+            .when(Boolean(this.reenterButton(`ov-reenter-${tab.id}`, a.address, t)), (e2) => e2.child(this.reenterButton(`ov-reenter-${tab.id}`, a.address, t))))
           .when(Boolean(when), (el) => el.child(div().flex_none().text_size(11.5).text_color(t.muted).child(when)))
           // The hover box opens from this ⓘ only (owner 11-12: opening on the whole card covered the cards below it,
           // so the next card could not be clicked). A click on it opens the tab, as the card does.
@@ -227,7 +299,10 @@ export class OverviewView {
         .when(Boolean(about), (el) => el.child(div().id(`ov-about-${tab.id}`).w_full().truncate().text_size(12).text_color(t.foreground)
           .child(`About: ${about}`)))
         .when(Boolean(nw), (el) => el.child(div().id(`ov-now-${tab.id}`).w_full().truncate().text_size(12).text_color(t.foreground).opacity(0.85)
-          .child(`${tab.status === "working" || nw.helpers.length ? "Now" : "Last"}: ${nw.now}`))));
+          .child(`${tab.status === "working" || nw.helpers.length ? "Now" : "Last"}: ${nw.now}`)))
+        // A Clear & re-enter run's result, while its record shows (the Finished screen shows the same).
+        .when(Boolean(runNote), (el) => el.child(div().id(`ov-run-${tab.id}`).w_full().truncate().text_size(12).text_color(runNote.bad ? t.blocked : t.foreground)
+          .tooltip(runNote.note).child(runNote.note))));
     // The hover (hover.js): what it's about, needs you, now, steps, helpers, freshness, Summarize / Rewrite.
     return card;
   }
@@ -288,9 +363,11 @@ export class OverviewView {
           .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(g.key === "closed" ? t.muted : t.foreground).child(it.label))
           .when(Boolean(it.account), (el) => el.child(div().id(`${id}-acct`).flex_none().px(5).rounded(4).border(1).border_color(t.border)
             .text_size(10.5).text_color(t.muted).tooltip(accountName(it.account)).child(it.account)))
-          .when(Boolean(open) && handoffOf(it.addr), (el) => el.child(this.copyButton(`${id}-copy`, it.addr, t)).child(this.fullButton(`${id}-full`, it.addr, t)))
+          .when(Boolean(open) && handoffOf(it.addr), (el) => el.child(this.copyButton(`${id}-copy`, it.addr, t)).child(this.fullButton(`${id}-full`, it.addr, t))
+            .when(Boolean(this.reenterButton(`${id}-reenter`, it.addr, t)), (e2) => e2.child(this.reenterButton(`${id}-reenter`, it.addr, t))))
           .child(div().flex_none().text_size(11.5).text_color(t.dim).child(ago(it.at, now) === "now" ? "just now" : `${ago(it.at, now)} ago`)))
         .child(div().w_full().whitespace_normal().text_size(12).text_color(tint[g.key]).child(it.now))
+        .when(Boolean(this.runNote(it.addr)), (el) => el.child(div().id(`${id}-run`).w_full().whitespace_normal().text_size(12).text_color(this.runNote(it.addr).bad ? t.blocked : t.foreground).child(this.runNote(it.addr).note)))
         .when(Boolean(it.about), (el) => el.child(div().id(`${id}-about`).w_full().whitespace_normal().text_size(12).line_height("17px")
           .text_color(t.muted).tooltip("About: written by Haiku from the tab's screen").child(it.about)))
         .when(it.events.length > 0, (el) => el.child(h_flex().w_full().flex_wrap().gap(4).items_center()
@@ -376,6 +453,7 @@ export class OverviewView {
     // One card height for all: the taller one when any card has a "Now" line.
     this.tall = items.some((it) => nowOf(tabAgents(it.tab.id)[0]?.address));
     this.tallAbout = items.some((it) => aboutOf(tabAgents(it.tab.id)[0]?.address));
+    this.tallRun = items.some((it) => { const ad = tabAgents(it.tab.id)[0]?.address; return Boolean(ad) && Boolean(this.runNote(ad)); });
     const working = items.filter((it) => statusOf(it.tab) === "working").length;
     // The Needs you page's count (questions, extra rounds, merges), which the link opens.
     const waiting = needing().length;

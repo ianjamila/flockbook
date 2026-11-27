@@ -252,3 +252,60 @@ test("readHandoff: seen has the feed's agent and log; empty when the chat could 
   fake.exec = () => ({ code: 0, stdout: JSON.stringify({ type: "error", message: "no such terminal" }) + "\n" + JSON.stringify(end) + "\n", stderr: "" });
   assert.deepEqual((await readHandoff("t2")).seen, { agent: null, path: null });
 });
+
+// Clear & re-enter on a hand-off card (reenter-run.js). No key goes anywhere: the helper call is a fake `reenterer`.
+// Fails if the card types into a tab it should not (another agent, no log, an older helper), types twice for two clicks,
+// or does not share its run with the other screens (a second run started from the Finished screen or a chat).
+test("Hand-off given: Clear & re-enter shows only when allowed, runs once with (address, prompt, seen), and shares its run", async () => {
+  const { reentering, reenterRuns } = await import("../mods/flockbook/state.js");
+  reentering.clear(); reenterRuns.clear();
+  const seen = { agent: "claude", path: "/logs/t2.jsonl" };
+  let read = { prompt: "Continue.", file: null, seen, problem: null };
+  fake.shared["flockbook.handoff"] = { t2: true };
+  const boot = fakeCx();
+  const v = new OverviewView(boot);
+  const calls = []; let release;
+  v.reader = async () => read;
+  v.reenterer = async (a, text, s) => { calls.push([a, text, s]); await new Promise((r) => { release = r; }); return { lines: [{ type: "done", result: "sent", message: "m", keys: "yes" }], error: null }; };
+  let canHelper = false;
+  v.helper.has = async () => canHelper;
+  const paint = () => { fake.shared["flockbook.handoff"] = { t2: true }; return v.render(fakeCx()); };
+  const tick = async () => { fake.shared["flockbook.handoff"] = { t2: true }; const cx = fakeCx(); v.tick(cx); await Promise.all(cx.tasks); };
+  const ccx = Object.assign(fakeCx(), { write_to_clipboard: () => {}, stop_propagation: () => {} });
+  // an older helper (no `reenter`): no button
+  await tick();
+  assert.equal(byId(paint(), "ov-reenter-tb-t2"), null, "the helper has no reenter");
+  // the helper has it (asked again after its first "no")
+  canHelper = true; v.helper.at = 0; await tick();
+  assert.match(textOf(byId(paint(), "ov-reenter-tb-t2")), /Clear & re-enter/);
+  assert.equal(byId(paint(), "ov-reenter-tb-t1"), null, "a working tab has none");
+  // another agent, or no log path: no button
+  read = { prompt: "Continue.", file: null, seen: { agent: "codex", path: "/logs/t2.jsonl" }, problem: null }; v.reads.clear(); await tick();
+  assert.equal(byId(paint(), "ov-reenter-tb-t2"), null, "not a Claude tab");
+  read = { prompt: "Continue.", file: null, seen: { agent: "claude", path: null }, problem: null }; v.reads.clear(); await tick();
+  assert.equal(byId(paint(), "ov-reenter-tb-t2"), null, "no log path");
+  read = { prompt: "Continue.", file: null, seen, problem: null }; v.reads.clear(); await tick();
+  // a click: the helper gets (address, prompt, seen); the label says Re-entering…; a second click does nothing
+  byId(paint(), "ov-reenter-tb-t2")._h.on_click({}, ccx);
+  await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(calls, [["t2", "Continue.", seen]]);
+  assert.equal(reenterRuns.get("t2")?.state, "running", "the run is shared state: the Finished screen and chats see it");
+  assert.equal(reentering.has("t2"), true, "the chat's Send waits");
+  assert.match(textOf(byId(paint(), "ov-reenter-tb-t2")), /Re-entering…/);
+  byId(paint(), "ov-reenter-tb-t2")._h.on_click({}, ccx);
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(calls.length, 1, "no second run");
+  release(); await Promise.all(ccx.tasks);
+  assert.match(log.notify.at(-1).title, /Re-entered/);
+  assert.equal(reentering.has("t2"), false);
+  // sent: no button again for the tab (its row stays only 5 s)
+  assert.equal(byId(paint(), "ov-reenter-tb-t2"), null);
+  // a run another screen started shows here as Re-entering…, with nothing to press, even before this view read the tab
+  reenterRuns.clear(); v.reads.clear();
+  reenterRuns.set("t2", { id: 99, state: "running", prompt: "Continue.", seen, at: Date.now() });
+  const other = byId(paint(), "ov-reenter-tb-t2");
+  assert.match(textOf(other), /Re-entering…/);
+  other._h.on_click({}, ccx); await new Promise((r) => setTimeout(r, 5));
+  assert.equal(calls.length, 1, "a run on elsewhere is not started again");
+  reentering.clear(); reenterRuns.clear();
+});
