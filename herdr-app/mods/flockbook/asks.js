@@ -36,6 +36,8 @@ const WORTH = /^\s*(?:⏺\s*)?(?:\*\*)?(?:also\s+)?worth\s+considering\b/i;
 const SAY = /\b(?:say|reply|type|answer)\s*(?:with\s+)?:?\s*(?:"([^"\n]{1,60})"|“([^”\n]{1,60})”|'([^'\n]{1,60})'|`([^`\n]{1,60})`)/gi;
 // Just before a SAY match: "you'll", "you will", "you'd", "you would" — the reply tells a later step, it asks nothing now.
 const LATER = /\byou(?:['’]ll|['’]d|\s+will|\s+would)\s+$/i;
+// "filed as issue #2695: should …", "Filed idea #12: could …": the words after the colon are that issue's title.
+const FILED_TITLE = /\b(?:filed|issue|idea|follow-?up)\b[^.!?]*#\d+\s*:/i;
 // A merge that happened: "#1821 is merged", "#1821 was merged", "merged #1821", "#1821 merged".
 const MERGED = /(?:#(\d{1,6})\b[^.\n]{0,30}?\b(?:is|was|has been|got)?\s*merged\b|\bmerged\s+(?:PR\s+)?#(\d{1,6})\b)/gi;
 const REPO = /\brepo\s+([\w.-]+\/[\w.-]+)/g;
@@ -101,7 +103,13 @@ export function pendingAsk(screen, { pipeline = true, worth = true } = {}) {
     const words = [...para.matchAll(SAY)].filter((x) => !LATER.test(para.slice(0, x.index)))
       .map((x) => x[1] ?? x[2] ?? x[3] ?? x[4]).filter((w, k, l) => w.trim() && l.indexOf(w) === k);
     if (words.length) return { kind: "reply", words, text: para.slice(0, 240) };
-    if (/\?["”')]*$/.test(para)) return { kind: "question", text: para.slice(0, 240) };
+    if (/\?["”')]*$/.test(para)) {
+      // The last sentence quotes a filed issue's question ("filed as issue #2695: should …?", owner 11-28 t8s): the
+      // question is the issue's title, not one for the owner. A question of its own after it still asks.
+      const last = para.replace(/\?["”')]*$/, "").split(/(?<=[.!?])\s+/).pop();
+      if (FILED_TITLE.test(last)) return null;
+      return { kind: "question", text: para.slice(0, 240) };
+    }
     return null;
   }
   return null;

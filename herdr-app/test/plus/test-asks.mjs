@@ -38,7 +38,13 @@ const SAYP = `  Should I run both scheduled jobs from this branch now?\n\n  - Wh
 eq("say \"…\" or say \"…\"", pendingAsk(`${SAYP}\n\n${box()}`), { kind: "reply", words: ["OK, run both", "watchdog only"], text: `Say "OK, run both" to approve. Or say "watchdog only", and I'll run just the read-only watchdog now and the backup by hand right after the merge.` });
 eq("curly quotes, reply “…”", pendingAsk(`  Reply “yes” to go on.\n\n${box()}`)?.words, ["yes"]);
 // Owner 11-28 ("why is this in needs you but there is nothing to do"): a later step told, not asked for now.
-eq("you'll type \"…\" is no ask", pendingAsk(`  Round 1 is running for PR #906. I'll pick it up when it finishes. Clicks are off on this build, so when it's\n  time to merge you'll type "merge".\n\n${box()}`), null);
+// Owner 11-28 (t8s, #2611): a reply ending with the question a filed issue holds ("filed as issue #2695: should …?")
+// sat in Needs you; that question is the issue's, not one for the owner. A real question after it still asks.
+const FILED = `⏺ Round 8 came back clean. PR #2611 is now ready and running its full checks. This usually takes about 15 minutes,\n  and I'll ask you to merge once everything is green. The one idea from this round is filed as issue\n  #2695: should the 24-hour limit also cover staff editing their own time records through other screens?\n\n${box()}`;
+eq("a filed issue's question is no ask", pendingAsk(FILED), null);
+eq("idea #N: …? is no ask", pendingAsk(`⏺ Done. Filed idea #12: could the list sort by date?\n\n${box()}`), null);
+eq("a question after a filed issue still asks", pendingAsk(`⏺ Filed #12: could the list sort by date? Want me to start on it now?\n\n${box()}`)?.kind, "question");
+eq("you'll type \"…\" is no ask",pendingAsk(`  Round 1 is running for PR #906. I'll pick it up when it finishes. Clicks are off on this build, so when it's\n  time to merge you'll type "merge".\n\n${box()}`), null);
 eq("you will / you'd say: no ask", pendingAsk(`  After CI you will reply "go", and you'd say “merge” at the end.\n\n${box()}`), null);
 eq("when you're ready, say \"…\" is still an ask", pendingAsk(`  When you're ready, say "go".\n\n${box()}`)?.words, ["go"]);
 eq("a question as the last line", pendingAsk(`  The checks passed.\n\n  Want me to open the follow-up PR now?\n\n${box()}`), { kind: "question", text: "Want me to open the follow-up PR now?" });
