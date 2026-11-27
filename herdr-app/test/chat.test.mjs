@@ -691,3 +691,53 @@ test("the list scrolls back to the newest row when its size changes while follow
   box._h.on_size_change({ width: 700, height: 480 }, cx);
   assert.equal(scrolls().length, 0, "reading older rows: the scroll stays");
 });
+
+// Clear & re-enter in a tab's chat (reenter-run.js): a strip over the reply box for the NEWEST reply's hand-off. No key goes
+// anywhere: the helper call is a fake `reenterer`. Fails if an older reply's prompt could be re-entered, if the click sends
+// something other than (address, prompt, the chat's own agent + log), if two clicks type twice, or if a run started in another
+// screen is not shown here.
+test("a tab's chat: Clear & re-enter is for the newest reply's hand-off only, runs once with the chat's own log, shares its run", async () => {
+  const { reentering, reenterRuns } = await import("../mods/flockbook/state.js");
+  reentering.clear(); reenterRuns.clear();
+  fake.exec = () => jl(header, logLine("c1"), { type: "splice", at: 0, count: 3 }, user("u1", "go"), asst("a1", "Done.\n\nRe-entry prompt:\n\n> Continue the work."),
+    { type: "row", id: "f-a1", k: "footer", text: "10:04" }, end);
+  const cx = fakeCx(); const v = new ChatView(cx); await cx.settle(); v.width = 900;
+  const seen = { agent: "claude", path: "/logs/s.jsonl" };
+  const calls2 = []; let release;
+  v.reader = async () => ({ prompt: "Continue the work.", file: null, seen, problem: null });
+  v.reenterer = async (a, text, s) => { calls2.push([a, text, s]); await new Promise((r) => { release = r; }); return { lines: [{ type: "done", result: "sent", message: "m", keys: "yes" }], error: null }; };
+  let canHelper = false;
+  v.reenterHelper.has = async () => canHelper;
+  const tick = async () => { const c = fakeCx(); v.tick(c); await Promise.all(c.tasks); };
+  const ccx = Object.assign(fakeCx(), { write_to_clipboard: () => {} });
+  // an older helper: no button
+  await tick();
+  assert.equal(byId(v.render(cx), "chat-reenter"), null, "the helper has no reenter");
+  canHelper = true; v.reenterHelper.at = 0; await tick();
+  assert.match(textOf(byId(v.render(cx), "chat-reenter")), /Clear & re-enter/);
+  // a later reply without a prompt: the older prompt is not re-entered
+  const rows = v.feed().rows, kept = rows.slice();
+  rows.push(user("u2", "thanks"), asst("a2", "You're welcome."), { type: "row", id: "f-a2", k: "footer", text: "10:30" });
+  assert.equal(byId(v.render(cx), "chat-reenter"), null, "an older reply's prompt");
+  rows.length = 0; rows.push(...kept);
+  // a click: the helper gets (address, prompt, the chat's seen); Re-entering…; a second click does nothing
+  byId(v.render(cx), "chat-reenter")._h.on_click({}, ccx);
+  await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(calls2, [["t1", "Continue the work.", seen]]);
+  assert.equal(reenterRuns.get("t1")?.state, "running");
+  assert.match(textOf(byId(v.render(cx), "chat-reenter")), /Re-entering…/);
+  assert.equal(byId(v.render(cx), "chat-reenter")._h.on_click, undefined, "nothing to press while it runs");
+  v.startReenter(ccx);   // a click that got through anyway
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(calls2.length, 1, "no second run");
+  release(); await Promise.all(ccx.tasks);
+  assert.match(textOf(byId(v.render(cx), "chat-reenter-note")), /Re-entered/);
+  assert.equal(byId(v.render(cx), "chat-reenter"), null, "after a run that typed, no button again");
+  // a run another screen started shows here
+  reenterRuns.clear();
+  reenterRuns.set("t1", { id: 77, state: "running", prompt: "Continue the work.", seen, at: Date.now() });
+  assert.match(textOf(byId(v.render(cx), "chat-reenter")), /Re-entering…/);
+  v.startReenter(ccx); await new Promise((r) => setTimeout(r, 5));
+  assert.equal(calls2.length, 1, "a run on elsewhere is not started again");
+  reentering.clear(); reenterRuns.clear();
+});

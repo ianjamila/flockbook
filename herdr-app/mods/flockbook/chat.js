@@ -4,7 +4,7 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextView, Scrollbar, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
 import { theme, run, shared, settings, notify } from "herdr";
-import { currentAgent, machineOf, icon, SPIN_MS, FADE, shownScreen, watchEdge, noteWindowHeight, KEY_WIN_H } from "./state.js";
+import { currentAgent, machineOf, icon, SPIN_MS, FADE, shownScreen, watchEdge, noteWindowHeight, KEY_WIN_H, reenterRuns } from "./state.js";
 import { Appear } from "./motion.js";
 import { now, record, flush, loadTiming } from "./timing.js";
 import * as sidecar from "./sidecar.js";
@@ -16,6 +16,8 @@ import { Composer } from "./composer.js";
 import { markdownView, codeBlockAt } from "./mdblocks.js";
 import { reentryPrompt, replyHandoff, handoffFile, askBefore } from "./blocks.js";
 import { readFullPrompt } from "./where.js";
+import { readHandoff } from "./handoff-read.js";
+import { begin, reenter, canReenterRead, HelperCan } from "./reenter-run.js";
 import { textScale } from "./config.js";
 
 // Herdr's zoom: line heights round in zoomed px (estimate.js lineHeight).
@@ -110,6 +112,11 @@ export class ChatView {
     this.appear = new Appear();
     this.cards = new Cards(cx);
     this.helper = new HelperUI();
+    // Clear & re-enter for the newest reply's hand-off (reenter-run.js; the strip over the reply box).
+    this.reenterHelper = new HelperCan();
+    this.reader = readHandoff;          // how the reply is read again before anything is typed (tests hand in a fake)
+    this.reenterer = sidecar.reenter;
+    this.runSig = "";                   // this tab's run (id, state, result) at the last tick: a change repaints
     this.refresh = (cx) => { this.lastPoll = 0; return this.poll(cx); };
     this.cards.canFocus = () => this.composer?.empty !== false;
     this.switchTo(currentAgent()?.address ?? null);
@@ -141,6 +148,7 @@ export class ChatView {
     cx.spawn((cx) => this.cards.poll(cx, this.address, wanted(agent, this.feed()?.rows)));
     if (this.wantOlder) { this.wantOlder = false; cx.spawn((cx) => this.loadOlder(cx)); }
     this.readAhead(cx);
+    this.reenterTick(cx);
     if (Date.now() - this.lastPoll >= POLL_MS) return this.poll(cx);
   }
 
@@ -339,6 +347,53 @@ export class ChatView {
   handoffBefore(footer) {
     const rows = this.feed()?.rows ?? [];
     return replyHandoff(rows, rows.findIndex((r) => r.id === footer.id));
+  }
+
+  // The newest reply's hand-off as Clear & re-enter takes it: its prompt and the agent and log this chat reads ({ agent, path }).
+  // Only the newest reply (replyHandoff stops at a footer or a message of the owner): an older reply's prompt is not re-entered.
+  newestRead() {
+    const f = this.feed();
+    const h = f?.loaded ? replyHandoff(f.rows ?? []) : null;
+    return h ? { prompt: h.prompt, file: h.file, seen: this.composer.seen(this.address), problem: null } : null;
+  }
+  // From the tick: the helper is asked (once, again after a no) while a hand-off shows; a run's change repaints.
+  reenterTick(cx) {
+    if (this.address && this.newestRead()) this.reenterHelper.poke(cx);
+    const run = this.address ? reenterRuns.get(this.address) : null;
+    const sig = run ? `${run.id}|${run.state}|${run.result ?? ""}` : "";
+    if (sig !== this.runSig) { this.runSig = sig; cx.notify?.(); }
+  }
+  startReenter(cx) {
+    const address = this.address, read = this.newestRead();
+    if (!address || !canReenterRead(read, reenterRuns.get(address), this.reenterHelper.value)) return;
+    if (typeof cx?.write_to_clipboard !== "function") { notify({ title: "Couldn't re-enter: no clipboard here. Use Copy all and paste it after /clear.", level: "warning", timeout: 3000 }); return; }
+    const started = begin(address, read);
+    if (!started) return;
+    cx.notify?.();
+    cx.spawn((cx2) => reenter(cx2, address, started, typeof cx2?.write_to_clipboard === "function" ? cx2 : cx, {
+      reader: (a) => this.reader(a),
+      reenterer: (...args) => this.reenterer(...args),
+    }));
+  }
+  // The strip over the reply box: the button for the newest reply's hand-off, "Re-entering…" while a run is on in this tab
+  // (wherever it started), and the run's note after it. null when there is nothing to show.
+  reenterStrip(t, stop) {
+    const address = this.address;
+    if (!address) return null;
+    const run = reenterRuns.get(address), busy = run?.state === "running";
+    const allowed = canReenterRead(this.newestRead(), run, this.reenterHelper.value);
+    const note = run?.state === "done" && run.note ? run : null;
+    if (!busy && !allowed && !note) return null;
+    return h_flex().w_full().px(16).pt(8).justify_center().on_mouse_down("left", stop)
+      .child(h_flex().id("chat-reenter-strip").w_full().max_w(800).px(14).py(6).gap(10).items_center().rounded(12)
+        .bg(t.raised).border(1).border_color(t.border)
+        .child(v_flex().flex_1().min_w(0)
+          .child(div().text_size(12).text_color(t.muted).child(note ? "Clear & re-enter" : "Types /clear in this tab, then the prompt of the reply above. If the reply box has text in it, nothing is typed."))
+          .when(Boolean(note), (n) => n.child(div().id("chat-reenter-note").whitespace_normal().text_size(12.5).text_color(note.bad ? t.blocked : t.foreground).child(note.note))))
+        .when(busy || allowed, (b) => b.child(div().id("chat-reenter").flex_none().px(14).h(32).flex().items_center().rounded(8).text_size(13).font_semibold()
+          .bg(busy ? t.chrome : t.done).text_color(busy ? t.dim : t.background)
+          .when(!busy, (x) => x.hover((y) => y.opacity(0.9)).on_click((_e, cx) => this.startReenter(cx)))
+          .child(busy ? "Re-entering…" : "Clear & re-enter"))));
   }
 
   // s27 "Copy full prompt": hand-off files, read once per chat on the tab's machine (where.js readFullPrompt).
@@ -612,6 +667,8 @@ export class ChatView {
                 .when(!busy, (x) => x.hover((y) => y.opacity(0.9)).on_click((_e, cx) => cx.spawn((cx) => this.grant(cx, address, ask))))
                 .child(busy ? "Sending…" : round ? "🔁 Extra round" : "🔀 Merge")))));
         }
+        const reenterStrip = this.reenterStrip(t, stop);
+        if (reenterStrip) el.child(reenterStrip);
         if (card) el.child(this.appear.wrap(h_flex().w_full().px(16).pt(8).justify_center().on_mouse_down("left", stop).child(card), "chat-card-in", `${this.address}:${this.cards.key?.(this.address) ?? ""}`, cx, 10));
         return el.child(div().w_full().on_mouse_down("left", stop).child(this.composer.render(currentAgent(), t)));
       })
