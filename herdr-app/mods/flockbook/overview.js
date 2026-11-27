@@ -5,9 +5,9 @@ import { withHover } from "./hover.js";
 import { theme, shared, setShared, home, notify } from "herdr";
 import { spaces, agents, withSnapshot } from "./parked.js";
 import { spaceTitle } from "./machines.js";
-import { tabLabel, plainLabel, subStatus, workKind, SUB_GROUPS, tabAgents, agentName, openTab, showNeeds, showSessions, needing, icon, FADE, watchEdge, noteWindowHeight, reenterRuns } from "./state.js";
+import { tabLabel, plainLabel, subStatus, workKind, SUB_GROUPS, tabAgents, agentName, openTab, showNeeds, showSessions, needing, icon, FADE, watchEdge, noteWindowHeight, reenterRuns, shownScreen } from "./state.js";
 import * as sidecar from "./sidecar.js";
-import { begin, reenter, canReenterRead, HelperCan, ASK_RETRY_MS } from "./reenter-run.js";
+import { begin, reenter, release, canReenterRead, dropStale, isRunning, HelperCan } from "./reenter-run.js";
 import { openMenu, tabItems, suggestBadge } from "./menu.js";
 import { movedBadge, badgeTip } from "./automove.js";
 import { askOf, nowOf, handoffOf } from "./asks.js";
@@ -19,6 +19,9 @@ import { statusMark, startTop, overBar, barOver, barRoom, noteScreenHeight } fro
 
 export const KEY_GROUP = "flockbook.overview.group";   // "status" | "space"
 const CARD_MIN = 300, GAP = 12, MAX_W = 1220;
+// The hand-off prefetch: at most this many tab reads at once, and a tab whose read gave no prompt is asked again after
+// these waits (after the first miss, the second, every later one).
+const MAX_READS = 2, RETRY_MS = [5000, 30_000, 300_000];
 
 export function greeting(hour) {
   return hour < 5 ? "Good evening" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
@@ -124,6 +127,9 @@ export class OverviewView {
     // Clear & re-enter on a hand-off card (reenter-run.js): the card's prompt is read once when it shows (not every tick).
     this.reads = new Map();      // address → { prompt, file, seen, problem, at } of a hand-off tab
     this.reading = new Set();    // addresses whose read is under way
+    this.misses = new Map();     // address → how many reads in a row gave no prompt (the retry wait grows with it)
+    this.sigs = new Map();       // address → the tab's status and turn times at the last tick (a change: its read is old)
+    this.stale = new Set();      // addresses whose read is to be taken again
     this.readNo = 0;             // read numbers: only the newest started read stores its result
     this.startedNo = new Map();  // address → the number of the newest read started
     this.runSig = "";            // every tab's run (id, state, result) at the last tick: a change repaints
@@ -133,25 +139,49 @@ export class OverviewView {
     cx?.timer?.every?.(2000, (cx2) => this.tick(cx2));
   }
 
-  // Every two seconds: the hand-off tabs' prompts are read (once each; a read without a prompt again after a while), and a
-  // run's change (started or ended in the Finished screen or a chat) repaints.
+  // Every two seconds, while the Overview shows: the hand-off tabs' prompts are read (once each, two at a time; again when
+  // the tab's turn ended again; a read without a prompt again after 5 s, 30 s, 5 min). A run's change (started or ended in
+  // the Finished screen or a chat) repaints, shown or not.
   tick(cx) { withSnapshot(() => this.tickBody(cx)); }
   tickBody(cx) {
-    const want = new Set(agents().filter((a) => handoffOf(a.address)).map((a) => a.address));
-    for (const k of [...this.reads.keys()]) if (!want.has(k) && !reenterRuns.has(k)) this.reads.delete(k);
-    for (const address of want) {
-      const r = this.reads.get(address);
-      const due = !r || (!r.prompt && Date.now() - (r.at ?? 0) >= ASK_RETRY_MS);
-      if (due && !this.reading.has(address) && !reenterRuns.has(address)) cx.spawn((cx2) => this.loadRead(cx2, address));
-    }
-    if (want.size) this.helper.poke(cx);
+    if (shownScreen() === "overview") this.readTick(cx);
     const sig = [...reenterRuns].map(([a, run]) => `${a}|${run.id}|${run.state}|${run.result ?? ""}`).join(";");
     if (sig !== this.runSig) { this.runSig = sig; cx.notify?.(); }
   }
+  readTick(cx) {
+    const ags = agents().filter((a) => handoffOf(a.address));
+    const want = new Set(ags.map((a) => a.address));
+    for (const k of [...this.reads.keys()]) if (!want.has(k) && !reenterRuns.has(k)) { this.reads.delete(k); this.misses.delete(k); this.sigs.delete(k); this.stale.delete(k); }
+    const tabs = new Map(allTabs().map((it) => [it.tab.id, it.tab]));
+    const now = Date.now();
+    for (const a of ags) {
+      const address = a.address, t = tabs.get(a.tab);
+      // The tab's turn began or ended: its read may be of a reply it has replaced.
+      const sig = `${a.status}|${t?.changed_at ?? ""}|${t?.working_since ?? ""}`;
+      const was = this.sigs.get(address);
+      this.sigs.set(address, sig);
+      if (was !== undefined && was !== sig) { this.stale.add(address); this.misses.delete(address); }
+      const r = this.reads.get(address);
+      const wait = RETRY_MS[Math.min((this.misses.get(address) ?? 1) - 1, RETRY_MS.length - 1)];
+      const due = !r || this.stale.has(address) || (!r.prompt && now - (r.at ?? 0) >= wait);
+      if (due && !this.reading.has(address) && !isRunning(address) && this.reading.size < MAX_READS) {
+        this.reading.add(address);
+        cx.spawn((cx2) => this.loadRead(cx2, address));
+      }
+    }
+    if (want.size) this.helper.poke(cx);
+  }
   startRead(address) { const n = ++this.readNo; this.startedNo.set(address, n); return n; }
-  storeRead(address, n, r) { if (this.startedNo.get(address) === n) this.reads.set(address, { ...r, at: Date.now() }); }
+  storeRead(address, n, r) {
+    if (this.startedNo.get(address) !== n) return;
+    this.reads.set(address, { ...r, at: Date.now() });
+    // A run that ended is about another prompt than the tab's newest one: its record goes (the button is back).
+    if (r.prompt) dropStale(address, r.prompt);
+    if (r.prompt) this.misses.delete(address); else this.misses.set(address, (this.misses.get(address) ?? 0) + 1);
+  }
   async loadRead(cx, address) {
     this.reading.add(address);
+    this.stale.delete(address);   // a read that starts now sees the tab as it is now
     const n = this.startRead(address);
     try { this.storeRead(address, n, await this.reader(address)); } finally { this.reading.delete(address); }
     cx.notify?.();
@@ -166,13 +196,15 @@ export class OverviewView {
     const started = begin(address, r);
     if (!started) return;
     cx.notify?.();
-    cx.spawn((cx2) => reenter(cx2, address, started, typeof cx2?.write_to_clipboard === "function" ? cx2 : cx, {
-      reader: (a) => this.reader(a),
-      reenterer: (...args) => this.reenterer(...args),
-      startRead: (a) => this.startRead(a),
-      // A reply that changed: its new read is shown (no prompt: no button); a read that failed keeps the old one.
-      changed: (again, n) => { if (!again.problem) this.storeRead(address, n, again); },
-    }));
+    try {
+      cx.spawn((cx2) => reenter(cx2, address, started, typeof cx2?.write_to_clipboard === "function" ? cx2 : cx, {
+        reader: (a) => this.reader(a),
+        reenterer: (...args) => this.reenterer(...args),
+        startRead: (a) => this.startRead(a),
+        // A reply that changed: its new read is shown (no prompt: no button); a read that failed keeps the old one.
+        changed: (again, n) => { if (!again.problem) this.storeRead(address, n, again); },
+      }));
+    } catch { release(address, started.id); cx.notify?.(); }   // the task never started: nothing was typed, the tab is free again
   }
   // The button: "Clear & re-enter" when the card's read allows it, "Re-entering…" (nothing to press) while a run is on in
   // this tab, wherever it started; null otherwise.

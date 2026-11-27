@@ -59,10 +59,11 @@ let runs = 0;   // run ids: only the run with the matching id may change or clea
 export const isRunning = (address) => reenterRuns.get(address)?.state === "running";
 
 // Whether the button shows: the read has a prompt, the agent is Claude, its log path is known, the helper has `reenter`,
-// and no run already typed into the tab (also "sent": its row stays 5 s: the pre-clear read is stale, the tab shows a new
-// conversation now). A refusal that typed nothing (keys "none") leaves the button, to press again.
+// and no run already typed THIS prompt into the tab (also "sent": its row stays 5 s: the pre-clear read is stale, the tab
+// shows a new conversation now). A refusal that typed nothing (keys "none") leaves the button, to press again; so does a
+// new hand-off (a prompt other than the one the run typed).
 export function canReenterRead(r, run, helperHas) {
-  const typed = run?.state === "done" && run.keys !== "none";
+  const typed = run?.state === "done" && run.keys !== "none" && run.prompt === r?.prompt;
   return Boolean(r?.prompt) && r.seen?.agent === "claude" && Boolean(r.seen?.path) && helperHas === true && !typed;
 }
 
@@ -95,6 +96,15 @@ export function settle(address, id) {
   if (reenterRuns.get(address)?.id === id) reentering.delete(address);
 }
 
+// A run that has ended is about the prompt it typed (or refused): when a view reads another prompt for the tab, the record
+// goes (its note and its hold on the button with it). Returns whether one was dropped. A run on is never dropped here.
+export function dropStale(address, prompt) {
+  const run = reenterRuns.get(address);
+  if (!run || run.state === "running" || !prompt || run.prompt === prompt) return false;
+  reenterRuns.delete(address);
+  return true;
+}
+
 // 5 s after a run that sent: its record goes (the Finished screen passes its own, which also moves the pick on).
 export function dropRun(cx, address, id) {
   if (reenterRuns.get(address)?.id !== id) return;
@@ -115,8 +125,8 @@ export async function reenter(cx, address, started, clip, o) {
     const token = o.startRead?.(address);
     try { again = await o.reader(address); } catch (e) { again = { prompt: null, problem: String(e?.message ?? e) }; }
     if (!again.prompt || again.problem || again.prompt !== shown.prompt || again.seen?.path !== shown.path) {
-      o.changed?.(again, token);
-      release(address, id);
+      release(address, id);   // first: a callback that throws must not leave the run on
+      try { o.changed?.(again, token); } catch { /* the view is gone or broken: the notice below still goes */ }
       notify({ title: CHANGED, level: "warning", timeout: 4000 });
       return;
     }
@@ -133,7 +143,12 @@ export async function reenter(cx, address, started, clip, o) {
     if (own()) Object.assign(reenterRuns.get(address), { state: "done", result: a.result, keys: a.keys, message: line?.message ?? null, at: Date.now(), lead: a.lead, tail: a.tail, note: text, bad: a.result !== "sent", copyFailed });
     notify({ title: text, level: a.result === "sent" ? "info" : "warning", timeout: a.result === "sent" ? 3000 : 8000 });
     if (a.result === "sent") cx.timer?.after?.(DROP_MS, (cx2) => (o.drop ?? dropRun)(cx2, address, id));
-  } finally { settle(address, id); cx.notify?.(); }
+  } finally {
+    settle(address, id);
+    // Whatever threw above: a record still "running" now would show Re-entering… for ever.
+    if (own() && reenterRuns.get(address).state === "running") release(address, id);
+    cx.notify?.();
+  }
 }
 
 // Whether the helper has `reenter` (sidecar.hasCommand asks once and keeps the answer; a failed ask is asked again).

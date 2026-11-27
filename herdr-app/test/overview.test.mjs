@@ -21,6 +21,7 @@ beforeEach(() => {
     space("sp2", { name: "docs", active: false, tabs: [tab("tb-t3", 1, { status: "blocked" }), tab("tb-sh", 2)] }),
   ];
   fake.agents = [agent("t1", "working"), agent("t2", "done"), agent("t3", "blocked", { space: "sp2" })];
+  fake.shared["flockbook.screen"] = "overview";   // the hand-off prefetch reads only while the Overview shows
   passBlockGrace();   // plus build: blocked counts as Needs you only once it has lasted the grace (state.js BLOCK_GRACE_MS)
 });
 
@@ -308,4 +309,113 @@ test("Hand-off given: Clear & re-enter shows only when allowed, runs once with (
   other._h.on_click({}, ccx); await new Promise((r) => setTimeout(r, 5));
   assert.equal(calls.length, 1, "a run on elsewhere is not started again");
   reentering.clear(); reenterRuns.clear();
+});
+
+// Clear & re-enter, review round 1. Each test names what it would catch in real use.
+const KEY_SCREEN = "flockbook.screen";
+const seenT2 = { agent: "claude", path: "/logs/t2.jsonl" };
+const doneRun = (prompt, extra = {}) => ({ id: 5, state: "done", result: "prompt_unconfirmed", keys: "yes", prompt, seen: seenT2, at: Date.now(), message: null, lead: "x", tail: "y", note: "The prompt may already be in the tab.", bad: true, copyFailed: false, ...extra });
+
+// A done run that typed (keys "yes") but did not send kept the button off until the Finished screen picked another tab:
+// the owner's NEXT hand-off in that tab (a different prompt) never got its button.
+test("Hand-off given: a run that typed hides the button only for the prompt it typed; a new hand-off drops the record and shows the button", async () => {
+  const { reentering, reenterRuns } = await import("../mods/flockbook/state.js");
+  reentering.clear(); reenterRuns.clear();
+  fake.shared[KEY_SCREEN] = "overview";
+  let read = { prompt: "Old.", file: null, seen: seenT2, problem: null };
+  const v = new OverviewView(fakeCx());
+  v.reader = async () => read; v.helper.has = async () => true;
+  const paint = () => { fake.shared["flockbook.handoff"] = { t2: true }; return v.render(fakeCx()); };
+  const tick = async () => { fake.shared["flockbook.handoff"] = { t2: true }; const cx = fakeCx(); v.tick(cx); await Promise.all(cx.tasks); };
+  await tick(); await tick();
+  assert.match(textOf(byId(paint(), "ov-reenter-tb-t2")), /Clear & re-enter/);
+  reenterRuns.set("t2", doneRun("Old."));
+  assert.equal(byId(paint(), "ov-reenter-tb-t2"), null, "the prompt it typed: not again");
+  // the tab worked again and ended with a new hand-off
+  read = { prompt: "New.", file: null, seen: seenT2, problem: null };
+  fake.spaces[0].tabs[1].changed_at = Date.now() + 1000;
+  await tick();
+  assert.match(textOf(byId(paint(), "ov-reenter-tb-t2")), /Clear & re-enter/, "a new hand-off has its button");
+  assert.equal(reenterRuns.has("t2"), false, "the old run's record is dropped");
+  reenterRuns.clear(); reentering.clear();
+});
+
+// The prefetch used to run while another screen showed, all tabs at once, and a tab with no prompt every 5 s for ever.
+test("Hand-off given: reads only while the Overview shows, two at a time, a tab with no prompt is asked after 5 s, 30 s, 5 min", async () => {
+  const { reenterRuns } = await import("../mods/flockbook/state.js");
+  reenterRuns.clear();
+  const v = new OverviewView(fakeCx());
+  const marks = { t1: true, t2: true, t3: true };
+  const gates = []; let calls = 0;
+  v.reader = (a) => { calls++; return new Promise((r) => gates.push(() => r({ prompt: "P " + a, file: null, seen: seenT2, problem: null }))); };
+  const tick = async () => { fake.shared["flockbook.handoff"] = { ...marks }; const cx = fakeCx(); v.tick(cx); await Promise.resolve(); return cx; };
+  fake.shared[KEY_SCREEN] = "chat";
+  await tick();
+  assert.equal(calls, 0, "another screen shows: nothing is read");
+  fake.shared[KEY_SCREEN] = "overview";
+  await tick(); await tick();
+  assert.equal(calls, 2, "at most two reads at once");
+  gates.splice(0).forEach((g) => g());
+  await new Promise((r) => setTimeout(r, 5));
+  await tick();
+  assert.equal(calls, 3, "the third tab is read when one is free");
+  gates.splice(0).forEach((g) => g());
+  await new Promise((r) => setTimeout(r, 5));
+
+  // no prompt: backoff
+  const w = new OverviewView(fakeCx()); let n = 0; let now = 1_000_000;
+  Date.now = () => now;
+  w.reader = async () => { n++; return { prompt: null, file: null, seen: seenT2, problem: null }; };
+  const wtick = async () => { fake.shared["flockbook.handoff"] = { t2: true }; const cx = fakeCx(); w.tick(cx); await Promise.all(cx.tasks); };
+  await wtick(); assert.equal(n, 1);
+  now += 4000; await wtick(); assert.equal(n, 1, "not before 5 s");
+  now += 1000; await wtick(); assert.equal(n, 2, "5 s after the first miss");
+  now += 29000; await wtick(); assert.equal(n, 2, "not before 30 s");
+  now += 1000; await wtick(); assert.equal(n, 3, "30 s after the second");
+  now += 299000; await wtick(); assert.equal(n, 3, "not before 5 min");
+  now += 1000; await wtick(); assert.equal(n, 4, "5 min after the third");
+  now += 299000; await wtick(); assert.equal(n, 4);
+});
+
+// A card kept the prompt of a reply the tab had since replaced (its mark stayed on across a new turn).
+test("Hand-off given: a card's read is taken again when the tab's turn ends again", async () => {
+  fake.shared[KEY_SCREEN] = "overview";
+  let read = { prompt: "First.", file: null, seen: seenT2, problem: null }, n = 0;
+  const v = new OverviewView(fakeCx());
+  v.reader = async () => { n++; return read; };
+  const tick = async () => { fake.shared["flockbook.handoff"] = { t2: true }; const cx = fakeCx(); v.tick(cx); await Promise.all(cx.tasks); };
+  await tick(); await tick();
+  assert.equal(n, 1); assert.equal(v.reads.get("t2").prompt, "First.");
+  read = { prompt: "Second.", file: null, seen: seenT2, problem: null };
+  fake.spaces[0].tabs[1].changed_at = Date.now() + 5000;
+  await tick();
+  assert.equal(n, 2); assert.equal(v.reads.get("t2").prompt, "Second.");
+});
+
+// The click took the lock and the run record, then cx.spawn threw: the tab showed "Re-entering…" for ever.
+test("Hand-off given: a click whose task could not start leaves no run and no lock", async () => {
+  const { reentering, reenterRuns } = await import("../mods/flockbook/state.js");
+  reentering.clear(); reenterRuns.clear();
+  fake.shared[KEY_SCREEN] = "overview";
+  const v = new OverviewView(fakeCx());
+  v.reader = async () => ({ prompt: "Go.", file: null, seen: seenT2, problem: null }); v.helper.has = async () => true;
+  const tick = async () => { fake.shared["flockbook.handoff"] = { t2: true }; const cx = fakeCx(); v.tick(cx); await Promise.all(cx.tasks); };
+  await tick(); await tick();
+  const boom = Object.assign(fakeCx(), { write_to_clipboard: () => {}, spawn() { throw new Error("no spawn"); } });
+  v.startReenter(boom, "t2");
+  assert.equal(reenterRuns.has("t2"), false); assert.equal(reentering.has("t2"), false);
+});
+
+// The changed callback threw: the record stayed "running", the button said Re-entering… for ever.
+test("reenter(): a callback that throws still ends the run", async () => {
+  const { reentering, reenterRuns } = await import("../mods/flockbook/state.js");
+  const { begin, reenter } = await import("../mods/flockbook/reenter-run.js");
+  reentering.clear(); reenterRuns.clear();
+  const started = begin("t2", { prompt: "A.", seen: seenT2 });
+  await reenter(fakeCx(), "t2", started, { write_to_clipboard() {} }, {
+    reader: async () => ({ prompt: "B.", seen: seenT2, problem: null }),
+    reenterer: async () => { throw new Error("must not be called"); },
+    changed: () => { throw new Error("view gone"); },
+  });
+  assert.equal(reenterRuns.has("t2"), false); assert.equal(reentering.has("t2"), false);
 });

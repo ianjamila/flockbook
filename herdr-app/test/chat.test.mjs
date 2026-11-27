@@ -699,6 +699,7 @@ test("the list scrolls back to the newest row when its size changes while follow
 test("a tab's chat: Clear & re-enter is for the newest reply's hand-off only, runs once with the chat's own log, shares its run", async () => {
   const { reentering, reenterRuns } = await import("../mods/flockbook/state.js");
   reentering.clear(); reenterRuns.clear();
+  fake.agents = [agent("t1", "done")];   // a tab that works has no button (below)
   fake.exec = () => jl(header, logLine("c1"), { type: "splice", at: 0, count: 3 }, user("u1", "go"), asst("a1", "Done.\n\nRe-entry prompt:\n\n> Continue the work."),
     { type: "row", id: "f-a1", k: "footer", text: "10:04" }, end);
   const cx = fakeCx(); const v = new ChatView(cx); await cx.settle(); v.width = 900;
@@ -740,4 +741,53 @@ test("a tab's chat: Clear & re-enter is for the newest reply's hand-off only, ru
   v.startReenter(ccx); await new Promise((r) => setTimeout(r, 5));
   assert.equal(calls2.length, 1, "a run on elsewhere is not started again");
   reentering.clear(); reenterRuns.clear();
+});
+
+// Clear & re-enter in a chat, review round 1. Each test names what it would catch.
+async function chatWithHandoff() {
+  const { reentering, reenterRuns } = await import("../mods/flockbook/state.js");
+  reentering.clear(); reenterRuns.clear();
+  fake.agents = [agent("t1", "done")];
+  fake.exec = () => jl(header, logLine("c1"), { type: "splice", at: 0, count: 3 }, user("u1", "go"), asst("a1", "Done.\n\nRe-entry prompt:\n\n> Continue the work."),
+    { type: "row", id: "f-a1", k: "footer", text: "10:04" }, end);
+  const cx = fakeCx(); const v = new ChatView(cx); await cx.settle(); v.width = 900;
+  const seen = { agent: "claude", path: "/logs/s.jsonl" };
+  v.reenterHelper.has = async () => true;
+  const tick = async () => { const c = fakeCx(); v.tick(c); await Promise.all(c.tasks); };
+  await tick(); await tick();
+  return { v, cx, seen, reenterRuns, reentering, tick };
+}
+
+// A run that typed but did not send kept the button off in the chat for the next hand-off of the same tab.
+test("a tab's chat: a run that typed hides the button only for its own prompt; a newer reply's hand-off brings it back", async () => {
+  const { v, cx, seen, reenterRuns, tick } = await chatWithHandoff();
+  assert.match(textOf(byId(v.render(cx), "chat-reenter")), /Clear & re-enter/);
+  reenterRuns.set("t1", { id: 3, state: "done", result: "prompt_unconfirmed", keys: "yes", prompt: "Continue the work.", seen, at: Date.now(), note: "The prompt may already be in the tab.", bad: true });
+  assert.equal(byId(v.render(cx), "chat-reenter"), null, "the prompt it typed: not again");
+  // the tab answers again with another hand-off
+  v.feed().rows.push(user("u2", "more"), asst("a2", "Done.\n\nRe-entry prompt:\n\n> Continue with part two."), { type: "row", id: "f-a2", k: "footer", text: "11:00" });
+  await tick();
+  assert.match(textOf(byId(v.render(cx), "chat-reenter")), /Clear & re-enter/);
+  assert.equal(reenterRuns.has("t1"), false, "the old run's record (and its note) is dropped");
+  reenterRuns.clear();
+});
+
+// /clear typed into a turn that is still running.
+test("a tab's chat: no Clear & re-enter while the tab works", async () => {
+  const { v, cx, reenterRuns, reentering } = await chatWithHandoff();
+  assert.match(textOf(byId(v.render(cx), "chat-reenter")), /Clear & re-enter/);
+  fake.agents = [agent("t1", "working")];
+  assert.equal(byId(v.render(cx), "chat-reenter"), null);
+  const calls = [];
+  v.reenterer = async (...a) => { calls.push(a); return { lines: [{ type: "done", result: "sent", message: "m", keys: "yes" }], error: null }; };
+  v.startReenter(Object.assign(fakeCx(), { write_to_clipboard: () => {} }));
+  assert.equal(reenterRuns.has("t1"), false); assert.equal(calls.length, 0);
+  reentering.clear(); reenterRuns.clear();
+});
+
+// The click took the lock and the run record, then cx.spawn threw: the chat showed Re-entering… for ever.
+test("a tab's chat: a click whose task could not start leaves no run and no lock", async () => {
+  const { v, reenterRuns, reentering } = await chatWithHandoff();
+  v.startReenter(Object.assign(fakeCx(), { write_to_clipboard: () => {}, spawn() { throw new Error("no spawn"); } }));
+  assert.equal(reenterRuns.has("t1"), false); assert.equal(reentering.has("t1"), false);
 });

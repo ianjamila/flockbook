@@ -17,7 +17,7 @@ import { markdownView, codeBlockAt } from "./mdblocks.js";
 import { reentryPrompt, replyHandoff, handoffFile, askBefore } from "./blocks.js";
 import { readFullPrompt } from "./where.js";
 import { readHandoff } from "./handoff-read.js";
-import { begin, reenter, canReenterRead, HelperCan } from "./reenter-run.js";
+import { begin, reenter, release, canReenterRead, dropStale, HelperCan } from "./reenter-run.js";
 import { textScale } from "./config.js";
 
 // Herdr's zoom: line heights round in zoomed px (estimate.js lineHeight).
@@ -358,22 +358,27 @@ export class ChatView {
   }
   // From the tick: the helper is asked (once, again after a no) while a hand-off shows; a run's change repaints.
   reenterTick(cx) {
-    if (this.address && this.newestRead()) this.reenterHelper.poke(cx);
+    const read = this.address ? this.newestRead() : null;
+    if (read) this.reenterHelper.poke(cx);
+    // A run that ended is about another reply than the newest one now: its record goes (the button is back).
+    if (read && dropStale(this.address, read.prompt)) cx.notify?.();
     const run = this.address ? reenterRuns.get(this.address) : null;
     const sig = run ? `${run.id}|${run.state}|${run.result ?? ""}` : "";
     if (sig !== this.runSig) { this.runSig = sig; cx.notify?.(); }
   }
   startReenter(cx) {
     const address = this.address, read = this.newestRead();
-    if (!address || !canReenterRead(read, reenterRuns.get(address), this.reenterHelper.value)) return;
+    if (!address || currentAgent()?.status === "working" || !canReenterRead(read, reenterRuns.get(address), this.reenterHelper.value)) return;
     if (typeof cx?.write_to_clipboard !== "function") { notify({ title: "Couldn't re-enter: no clipboard here. Use Copy all and paste it after /clear.", level: "warning", timeout: 3000 }); return; }
     const started = begin(address, read);
     if (!started) return;
     cx.notify?.();
-    cx.spawn((cx2) => reenter(cx2, address, started, typeof cx2?.write_to_clipboard === "function" ? cx2 : cx, {
-      reader: (a) => this.reader(a),
-      reenterer: (...args) => this.reenterer(...args),
-    }));
+    try {
+      cx.spawn((cx2) => reenter(cx2, address, started, typeof cx2?.write_to_clipboard === "function" ? cx2 : cx, {
+        reader: (a) => this.reader(a),
+        reenterer: (...args) => this.reenterer(...args),
+      }));
+    } catch { release(address, started.id); cx.notify?.(); }   // the task never started: nothing was typed, the tab is free again
   }
   // The strip over the reply box: the button for the newest reply's hand-off, "Re-entering…" while a run is on in this tab
   // (wherever it started), and the run's note after it. null when there is nothing to show.
@@ -381,7 +386,8 @@ export class ChatView {
     const address = this.address;
     if (!address) return null;
     const run = reenterRuns.get(address), busy = run?.state === "running";
-    const allowed = canReenterRead(this.newestRead(), run, this.reenterHelper.value);
+    // Not while the tab works: /clear would go into a running turn.
+    const allowed = currentAgent()?.status !== "working" && canReenterRead(this.newestRead(), run, this.reenterHelper.value);
     const note = run?.state === "done" && run.note ? run : null;
     if (!busy && !allowed && !note) return null;
     return h_flex().w_full().px(16).pt(8).justify_center().on_mouse_down("left", stop)
