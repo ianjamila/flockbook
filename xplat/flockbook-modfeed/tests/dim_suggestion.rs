@@ -11,12 +11,14 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 fn send(sock: &str) -> Value {
+    let locks = tempfile::tempdir().unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_flockbook-modfeed"))
         .args(["send", "--terminal", "t1", "--text", "hello"])
         .env_clear()
         .env("HC_SOCKET", sock)
         // No settings there: prompt suggestions are on, Claude Code's default.
         .env("HOME", "/nonexistent-home")
+        .env("FLOCKBOOK_KEYLOCK_DIR", locks.path())
         .output()
         .unwrap();
     String::from_utf8(out.stdout).unwrap().lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).find(|l| l["type"] == "done").unwrap()
@@ -93,7 +95,8 @@ fn an_agent_change_during_the_look_is_refused() {
 }
 
 fn send_args(sock: &str, args: &[&str]) -> Value {
-    let out = Command::new(env!("CARGO_BIN_EXE_flockbook-modfeed")).args(args).env_clear().env("HC_SOCKET", sock).env("HOME", "/nonexistent-home").output().unwrap();
+    let locks = tempfile::tempdir().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_flockbook-modfeed")).args(args).env_clear().env("HC_SOCKET", sock).env("HOME", "/nonexistent-home").env("FLOCKBOOK_KEYLOCK_DIR", locks.path()).output().unwrap();
     let lines: Vec<Value> = String::from_utf8(out.stdout).unwrap().lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).collect();
     lines.iter().find(|l| l["type"] == "done" || l["type"] == "error").cloned().unwrap()
 }

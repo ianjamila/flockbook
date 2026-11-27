@@ -9,6 +9,8 @@ use std::os::unix::net::UnixListener;
 use std::sync::{Arc, Mutex};
 
 pub type OnKeys = Arc<dyn Fn(&str, &[String], &mut State) + Send + Sync>;
+/// Called as a `terminal.send` is delivered, before it answers: (address, text).
+pub type OnSend = Arc<dyn Fn(&str, &str, &mut State) + Send + Sync>;
 
 #[derive(Default)]
 pub struct State {
@@ -16,6 +18,7 @@ pub struct State {
     pub screens: HashMap<String, String>,
     pub calls: Vec<(String, Value)>,
     pub on_keys: Option<OnKeys>,
+    pub on_send: Option<OnSend>,
     /// Seconds `terminal.send` takes before it answers (0: at once; negative: never).
     pub send_delay: f64,
     /// Seconds `terminal.keys` takes before it answers (hc's typing-quiet rule can hold keys this long).
@@ -104,6 +107,9 @@ impl FakeHc {
     }
     pub fn on_keys(&self, f: Option<OnKeys>) {
         self.state.lock().unwrap().on_keys = f;
+    }
+    pub fn on_send(&self, f: Option<OnSend>) {
+        self.state.lock().unwrap().on_send = f;
     }
     pub fn keys(&self) -> Vec<Vec<String>> {
         self.state
@@ -268,6 +274,9 @@ fn serve(mut s: std::os::unix::net::UnixStream, st: Arc<Mutex<State>>) {
                     if d < 0.0 {
                         None
                     } else {
+                        if let Some(cb) = g.on_send.clone() {
+                            cb(&a, p["text"].as_str().unwrap_or(""), &mut g);
+                        }
                         drop(g);
                         if d > 0.0 {
                             std::thread::sleep(std::time::Duration::from_secs_f64(d));

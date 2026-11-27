@@ -24,7 +24,7 @@
 //! A terminal `m/tN` on another machine: the command runs there, in the helper there (`remote`). Rust only.
 
 use crate::protocol::{JsonLines, ABILITIES, PROTOCOL_VERSION, SIDECAR_VERSION};
-use crate::{awake, cards, config, feed, locate, paste, phone, queue, remote, status, update, usage};
+use crate::{awake, cards, config, feed, keylock, locate, paste, phone, queue, remote, status, update, usage};
 use herdr_core::hc::{HcClient, HcSession};
 use herdr_core::PaneScreen;
 use herdr_core::resolver::SessionResolver;
@@ -237,9 +237,31 @@ pub fn run(argv: &[String]) -> String {
                 Ok(None) => {}
             }
             // A send looks the log up again: the chat's log may be a conversation the agent left (`/clear`).
-            let (found, was, client) = match find(&terminal, cache_url, cmd == "send") {
-                Ok(x) => x,
-                Err((code, message)) => return r.fail(code, &message),
+            // Every keyed command takes the tab's keys lock BEFORE its identity read and holds it (`_held`, dropped at
+            // return) until after its last key. A busy `card --all` gives the plain card instead (no picker walk).
+            let keyed = matches!(cmd.as_str(), "approve" | "answer" | "send") || (cmd == "card" && has("--all"));
+            let mut all = has("--all");
+            let (found, was, client, _held) = if keyed {
+                match locked_find(&terminal, cache_url, cmd == "send") {
+                    Ok((h, f, w, c)) => (f, w, c, Some(h)),
+                    Err(Gate::Done(_)) if cmd == "card" => {
+                        all = false;
+                        match find(&terminal, cache_url, false) {
+                            Ok((f, w, c)) => (f, w, c, None),
+                            Err((code, message)) => return r.fail(code, &message),
+                        }
+                    }
+                    Err(Gate::Done(d)) => {
+                        r.out.emit(&d);
+                        return r.finish(true);
+                    }
+                    Err(Gate::Error(code, message)) => return r.fail(code, &message),
+                }
+            } else {
+                match find(&terminal, cache_url, false) {
+                    Ok((f, w, c)) => (f, w, c, None),
+                    Err((code, message)) => return r.fail(code, &message),
+                }
             };
             let kind = found.pane.agent.as_ref().map(|a| a.kind.clone()).unwrap_or_else(|| "agent".into());
             let url = found.path.as_ref().map(PathBuf::from);
@@ -272,7 +294,7 @@ pub fn run(argv: &[String]) -> String {
                 "card" => {
                     // `--answers` (optional): the picks and own answers so far, for `blocked`. Unreadable: the labels only.
                     let answers = opt("--answers").and_then(|a| cards::parse_answers(&a)).unwrap_or_default();
-                    let c = cards::card_with(&found.pane, &client, log, has("--all"), cache_url, &answers);
+                    let c = cards::card_with(&found.pane, &client, log, all, cache_url, &answers);
                     r.out.emit(&c);
                     return r.finish(true);
                 }
@@ -367,6 +389,34 @@ fn find(terminal: &str, cache: Option<&Path>, recheck: bool) -> Result<(locate::
     }
 }
 
+/// Why a keyed command did not get to type: the `done` it answers with (busy, no_lock, changed), or an error line.
+pub enum Gate {
+    Done(cards::Done),
+    Error(&'static str, String),
+}
+
+/// The keys lock of the terminal at `terminal` (this machine), then `find` (the identity read) under it. The lock
+/// is keyed by the pane's canonical `terminal_id` (`t1` and `hc:t1` are one pane), mapped from a first snapshot;
+/// `find` reads a fresh one and must give the same terminal, else `changed`. Nothing is typed on any refusal.
+/// The returned `Held` must live until after the last key.
+pub fn locked_find(terminal: &str, cache: Option<&Path>, recheck: bool) -> Result<(keylock::Held, locate::Found, Option<locate::Entry>, HcClient), Gate> {
+    let session = HcSession::resolve_env();
+    if !session.is_available() {
+        return Err(Gate::Error("no-core", "herdr-core is not running".into()));
+    }
+    let client = HcClient::new(session, 8, 22);
+    let ws = client.snapshot().map_err(|e| Gate::Error("core", format!("herdr-core: {e}")))?;
+    let Some(id) = locate::pane(&ws, terminal).map(|p| p.terminal_id.clone()) else {
+        return Err(Gate::Error("no-terminal", locate::Failure::NoTerminal(terminal.to_string()).to_string()));
+    };
+    let held = keylock::take_default(&id).map_err(|why| Gate::Done(keylock::refusal(why, false)))?;
+    let (found, was, client) = find(terminal, cache, recheck).map_err(|(code, message)| Gate::Error(code, message))?;
+    if found.pane.terminal_id != id {
+        return Err(Gate::Done(cards::agent_changed()));
+    }
+    Ok((held, found, was, client))
+}
+
 /// A key command with its values typed, never parsed from arguments: `serve` passes the page's values here, so a
 /// prompt id, an answer or a text can never be read as an option (`--allow`, `--terminal`).
 pub enum Keys {
@@ -385,9 +435,10 @@ pub fn keys(terminal: &str, cache: Option<&Path>, home: Option<&str>, keys: Keys
         Ok(Some((machine, there))) => return remote_keys(&machine, &there, cache, home, keys).unwrap_or_else(|(c, m)| error(c, &m)),
         Ok(None) => {}
     }
-    let (found, was, client) = match find(terminal, cache, matches!(keys, Keys::Send { .. })) {
+    let (_held, found, was, client) = match locked_find(terminal, cache, matches!(keys, Keys::Send { .. })) {
         Ok(x) => x,
-        Err((code, message)) => return json!({"type": "error", "code": code, "message": message}),
+        Err(Gate::Done(d)) => return serde_json::to_value(&d).unwrap_or_else(|_| json!({"type": "done", "result": "failed"})),
+        Err(Gate::Error(code, message)) => return json!({"type": "error", "code": code, "message": message}),
     };
     let log = found.path.as_ref().map(PathBuf::from);
     let log = log.as_deref();
@@ -458,7 +509,11 @@ pub fn pull(terminal: &str, cache: Option<&Path>, keep: &mut dyn FnMut(&str) -> 
         }
         Ok(None) => {}
     }
-    let (found, _, client) = find(terminal, cache, false)?;
+    let (_held, found, _, client) = match locked_find(terminal, cache, false) {
+        Ok(x) => x,
+        Err(Gate::Done(d)) => return Ok(queue::Outcome::Refused(d.message.unwrap_or_default())),
+        Err(Gate::Error(code, message)) => return Err((code, message)),
+    };
     let Some(agent) = found.pane.agent.clone() else { return Err(("not-agent", format!("terminal {terminal} runs no agent"))) };
     let log = queue::log_at(found.path.as_deref().map(Path::new));
     let mut io = queue::Live { client: &client, pane_id: found.pane.id.clone() };

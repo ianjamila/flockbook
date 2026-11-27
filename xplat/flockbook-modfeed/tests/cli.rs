@@ -7,11 +7,14 @@ use serde_json::Value;
 use std::process::Command;
 
 fn run(sock: &str, args: &[&str]) -> Vec<Value> {
+    // The keys lock folder (a keyed command refuses without one): a throwaway one.
+    let locks = tempfile::tempdir().unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_flockbook-modfeed"))
         .args(args)
         .env_clear()
         .env("HC_SOCKET", sock)
         .env("HOME", "/nonexistent-home")
+        .env("FLOCKBOOK_KEYLOCK_DIR", locks.path())
         .output()
         .unwrap();
     assert!(out.status.success(), "exit code 0 always");

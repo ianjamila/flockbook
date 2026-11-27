@@ -39,6 +39,7 @@ fn start_env(sock: &str, extra: &[&str], env: &[(&str, &str)]) -> Server {
         .env_clear()
         .env("HC_SOCKET", sock)
         .env("HOME", "/nonexistent-home")
+        .env("FLOCKBOOK_KEYLOCK_DIR", dir.path().join("keylocks"))
         .envs(env.iter().copied())
         .stderr(Stdio::piped())
         .spawn()

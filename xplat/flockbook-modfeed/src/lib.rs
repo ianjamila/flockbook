@@ -8,6 +8,7 @@ pub mod commands;
 pub mod config;
 pub mod feed;
 pub mod install;
+pub mod keylock;
 pub mod locate;
 pub mod models;
 pub mod parked;
