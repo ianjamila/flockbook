@@ -74,5 +74,23 @@ const agent = (address, status = "idle", title = "Webshop") => ({ address, statu
   eq("no helper on the PC: says to open its chat to install it", [r.sent, r.bad, /pc-wsl/.test(r.text) && /Open its chat/.test(r.text) && /install/i.test(r.text)], [false, true, true]);
 }
 
+// #6 (11-28): a reload cut off a running tick and left its lock: no tick ran for 5 minutes, so Needs you kept a fixed
+// tab. A lock older than this copy of the module is free at once; one taken after it still keeps other ticks out.
+{
+  const { m, st, reads } = await setup({ list: [agent("t1")], screens: { t1: screen("All done.") } });
+  st.setShared("flockbook.asks.busy", Date.now() - 60_000);   // left by the copy before the reload (old number shape)
+  await m.asksTick();
+  eq("a lock left from before the reload: the tick runs at once", reads, ["t1"]);
+  eq("and its own lock is cleared after", st.data["flockbook.asks.busy"] ?? null, null);
+}
+{
+  const { m, st, reads } = await setup({ list: [agent("t1")], screens: { t1: screen("All done.") } });
+  st.setShared("flockbook.asks.busy", { at: Date.now() + 1000, token: "other" });   // a live tick, started after this load
+  await m.asksTick();
+  eq("a live tick's lock still keeps this copy out", reads, []);
+  eq("and is left in place", st.data["flockbook.asks.busy"]?.token, "other");
+  eq("a lock older than BUSY_MS is free (cut-off tick, same load)", m.asksLockFree({ at: 0 }, 5 * 60_000, -1), true);
+}
+
 console.log(bad ? `${bad} FAILED` : "all passed");
 process.exit(bad ? 1 : 0);

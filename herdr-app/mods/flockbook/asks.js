@@ -537,15 +537,26 @@ const hasMergeMark = (a) => (a?.title ?? "").includes("🔀");
 
 // One tick at a time across every copy: a tick still running (GitHub lookups can take 20 s each) keeps the
 // next copies out for up to BUSY_MS, so ticks don't pile up (11-12: a pending extra round never reached Needs you).
+// A lock taken before this copy of the module loaded was left by a tick the reload cut off: it is free at once
+// (#6, 11-28: a reload left it set and Needs you kept a fixed tab for 5 minutes). A lock is { at, token }; a bare
+// number is the old shape.
 const KEY_BUSY = "flockbook.asks.busy";
 const BUSY_MS = 5 * 60_000;
+const LOADED_AT = Date.now();
+export function asksLockFree(busy, now, loadedAt = LOADED_AT) {
+  if (!busy) return true;
+  const at = typeof busy === "number" ? busy : Number(busy.at);
+  return !Number.isFinite(at) || at < loadedAt || now - at >= BUSY_MS;
+}
 export async function asksTick() {
-  const now = Date.now(), at = shared(KEY_AT), busy = shared(KEY_BUSY);
+  const now = Date.now(), at = shared(KEY_AT);
   if (at && now - at < TICK_MS - 2000) return;
-  if (busy && now - busy < BUSY_MS) return;
+  if (!asksLockFree(shared(KEY_BUSY), now)) return;
+  const token = `${now}-${Math.random().toString(36).slice(2, 10)}`;
   setShared(KEY_AT, now);
-  setShared(KEY_BUSY, now);
-  try { await tickOnce(); } finally { setShared(KEY_BUSY, null); }
+  setShared(KEY_BUSY, { at: now, token });
+  // Only this tick's own lock is cleared (a copy loaded later may hold a newer one).
+  try { await tickOnce(); } finally { if (shared(KEY_BUSY)?.token === token) setShared(KEY_BUSY, null); }
 }
 async function tickOnce() {
   const out = {};

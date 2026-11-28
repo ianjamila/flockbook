@@ -38,7 +38,7 @@ export function readAnswer(answer) {
   const message = String(line.message ?? "").trim();
   if (keys === "none") {
     // Some refusals already say it (cards::refused: "Nothing was sent."): one such sentence is enough.
-    const lead = /nothing was (sent|typed)/i.test(message) ? message : `${message} Nothing was typed.`.trim();
+    const lead = /nothing was (sent|typed)/i.test(message) ? message : message ? `${sentence(message)} Nothing was typed.` : "Nothing was typed.";
     return { keys, result, lead, tail: null };
   }
   if (result === "sent") return { keys, result, lead: SENT, tail: null };
@@ -49,10 +49,12 @@ export function readAnswer(answer) {
 
 // A lead and its tail as one note: a period between them when the message has no closing punctuation (a forward's
 // "pc did not answer in 21 s"), and, for an unconfirmed prompt, that it is on the clipboard (only once it was copied).
+const sentence = (s) => (/[.!?]$/.test(s) ? s : `${s}.`);
 export function joinNote(lead, tail, result) {
-  const l = /[.!?]$/.test(lead) ? lead : `${lead}.`;
-  return `${l} ${tail}${result === "prompt_unconfirmed" ? ` ${ON_CLIPBOARD}` : ""}`;
+  return `${sentence(lead)} ${tail}${result === "prompt_unconfirmed" ? ` ${ON_CLIPBOARD}` : ""}`;
 }
+// A lead and the clipboard failure, with the same period fix.
+export const failNote = (lead) => `${sentence(lead)} ${COPY_FAILED}`;
 
 let runs = 0;   // run ids: only the run with the matching id may change or clear its record
 
@@ -81,7 +83,8 @@ export function begin(address, read) {
   if (!r?.prompt || !r.seen?.path) return null;
   const id = ++runs;
   const shown = { prompt: r.prompt, path: r.seen.path };
-  reenterRuns.set(address, { id, state: "running", prompt: shown.prompt, seen: r.seen, at: Date.now() });
+  // `file`: the full-prompt file that prompt names, for Copy full once the tab shows its new conversation (#5).
+  reenterRuns.set(address, { id, state: "running", prompt: shown.prompt, file: r.file ?? null, seen: r.seen, at: Date.now() });
   reentering.add(address);
   return { id, shown, seen: r.seen };
 }
@@ -137,7 +140,7 @@ export async function reenter(cx, address, started, clip, o) {
     if (a.tail) {
       // A key may have gone: the prompt goes on the clipboard whatever else happens (the owner pastes it).
       try { clip.write_to_clipboard(shown.prompt); text = joinNote(a.lead, a.tail, a.result); }
-      catch { copyFailed = true; text = `${a.lead} ${COPY_FAILED}`; }
+      catch { copyFailed = true; text = failNote(a.lead); }
     }
     const line = (answer?.lines ?? []).find((l) => l?.type === "done") ?? answer?.error ?? null;
     if (own()) Object.assign(reenterRuns.get(address), { state: "done", result: a.result, keys: a.keys, message: line?.message ?? null, at: Date.now(), lead: a.lead, tail: a.tail, note: text, bad: a.result !== "sent", copyFailed });

@@ -298,13 +298,13 @@ const errorLine = (code, o = {}) => ({ lines: [], error: { type: "error", code, 
 // A cx that can write to the clipboard (the button needs one at render time).
 const clipCx = () => { const cx = fakeCx(); cx.clip = []; cx.write_to_clipboard = (t) => { cx.clip.push(t); }; return cx; };
 // A view with the button available: a Claude tab t4 with prompt "P4.", `answer` the helper's reply (or a function).
-async function reenterView(answer, { prompt = "P4.", seen = SEEN, addrs = ["t4"] } = {}) {
+async function reenterView(answer, { prompt = "P4.", seen = SEEN, addrs = ["t4"], file = null } = {}) {
   finishedSetup(addrs);
   const boot = fakeCx();
   const v = new FinishedView(boot);
   await boot.settle();
   v.canReenter = true;
-  v.reader = async () => ({ prompt, file: null, seen, problem: null });
+  v.reader = async () => ({ prompt, file, seen, problem: null });
   v.calls = [];
   v.reenterer = async (addr, text, s) => { v.calls.push([addr, text, s]); return typeof answer === "function" ? answer() : answer; };
   await load(v);
@@ -654,6 +654,42 @@ test("finished screen: ffw_a_period_joins_a_bare_message_and_its_tail", async ()
   const v = await reenterView(doneLine("cleared_not_sent", { cleared: true, message: "pc did not answer in 21 s" }));
   await press(v, cx);
   assert.equal(textOf(byId(paintWith(v, cx), "fin-note")), `pc did not answer in 21 s. ${TAIL}`);
+});
+
+// Catches (#5): after a run that typed keys, Copy full re-read the chat (now the new conversation) and copied that
+// conversation's hand-off file, or none, instead of the one the owner saw.
+test("finished screen: copy_full_after_a_cleared_run_copies_the_file_its_own_prompt_named", async () => {
+  const cx = clipCx();
+  let v = await reenterView(doneLine("cleared_not_sent", { cleared: true }), { file: "~/claude-notes/handoffs/old.md" });
+  await press(v, cx);
+  cx.clip.length = 0;
+  const asked = [];
+  v.reader = async () => { throw new Error("must not re-read"); };
+  v.fullReader = async (_a, file) => { asked.push(file); return { text: `FULL ${file}` }; };
+  await press(v, cx, "fin-full");
+  assert.deepEqual([asked, cx.clip], [["~/claude-notes/handoffs/old.md"], ["FULL ~/claude-notes/handoffs/old.md"]]);
+  reenterRuns.clear(); reentering.clear();
+  v = await reenterView(doneLine("tab_busy", { keys: "none" }), { file: "~/claude-notes/handoffs/old.md" });
+  await press(v, cx);
+  cx.clip.length = 0; asked.length = 0;
+  v.reader = async () => ({ prompt: "P4 NEWER.", file: "~/claude-notes/handoffs/new.md", seen: SEEN, problem: null });
+  v.fullReader = async (_a, file) => { asked.push(file); return { text: `FULL ${file}` }; };
+  await press(v, cx, "fin-full");
+  assert.deepEqual(asked, ["~/claude-notes/handoffs/new.md"], "nothing typed: the newest read, as before");
+});
+
+// Catches (#5): the clipboard-failure and nothing-typed notes joined a bare message with no period.
+test("finished screen: a_period_joins_a_bare_message_to_the_copy_failed_and_nothing_typed_notes", async () => {
+  const cx = clipCx();
+  cx.write_to_clipboard = () => { throw new Error("no clipboard"); };
+  let v = await reenterView(doneLine("cleared_not_sent", { cleared: true, message: "pc did not answer in 21 s" }));
+  await press(v, cx);
+  assert.equal(textOf(byId(paintWith(v, cx), "fin-note")), "pc did not answer in 21 s. Couldn't put the prompt on your clipboard: use Copy again.");
+  reenterRuns.clear(); reentering.clear();
+  const cx2 = clipCx();
+  v = await reenterView(errorLine("remote_helper_outdated", { keys: "none", message: "The helper on box is older" }));
+  await press(v, cx2);
+  assert.equal(textOf(byId(paintWith(v, cx2), "fin-note")), "The helper on box is older. Nothing was typed.");
 });
 
 // Catches (M5): a re-read that finds no prompt kept the old prompt and the button, so every press said "changed".

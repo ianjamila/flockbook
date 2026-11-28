@@ -154,11 +154,15 @@ export class FinishedView {
     if (typeof cx?.write_to_clipboard !== "function") { notify({ title: "Couldn't copy: no clipboard here. Open the tab and use Copy full prompt.", level: "warning", timeout: 3000 }); return; }
     if (this.busy?.address === address) return;
     const mine = this.busy = { address, what: "full" }; cx.notify?.();
-    const n = this.startRead(address);
+    // A tab whose run typed keys shows the new conversation now: the file its own prompt named is read, never a re-read
+    // of the chat (#5).
+    const run = this.runs.get(address);
+    const typed = run?.state === "done" && run.keys !== "none" && run.prompt;
+    const n = typed ? null : this.startRead(address);
     let text = null, problem = null;
     try {
-      const h = await this.reader(address);
-      if (h.prompt) this.store(address, n, h);
+      const h = typed ? { prompt: run.prompt, file: run.file ?? null, problem: null } : await this.reader(address);
+      if (h.prompt && !typed) this.store(address, n, h);
       if (h.problem) problem = `Couldn't read its chat: ${h.problem}`;
       else if (!h.prompt) problem = "No re-entry prompt in its last reply. Open the tab to see it.";
       else if (!h.file) problem = "Its re-entry prompt names no full-prompt file (~/claude-notes/handoffs/…). Copy prompt copies it.";
