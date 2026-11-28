@@ -12,6 +12,19 @@ import { Cards } from "./cards.js";
 import { startTop, overBar, barOver, barRoom, noteScreenHeight } from "./top.js";
 import { withSnapshot } from "./parked.js";
 
+// "What it's about": the tab's auto-written About text (ai.js, Haiku: the long "More" form, else the one-line form) with
+// its age, and "may be out of date" once the tab's title moved on. Null while the tab has none. Needs you and Finished
+// (owner 11-28: "in the finished tab, add summary details of what the PR is about") both show it.
+export function aboutBox(id, a, t) {
+  const e = aboutEntry(a?.address);
+  if (!e?.text) return null;
+  const stale = isStale(e, sessionTopic(a) ?? a.title ?? "");
+  return v_flex().id(id).gap(3).p(12).rounded(8).bg(t.raised).border(1).border_color(t.border)
+    .child(div().text_size(11.5).font_semibold().text_color(t.muted)
+      .child(`What it's about · auto-written${e.wroteAt ? ` ${agoText(e.wroteAt, Date.now())}` : ""}${stale ? " · may be out of date" : ""}`))
+    .child(div().whitespace_normal().text_size(13).line_height("19px").text_color(t.foreground).child(e.more || e.text));
+}
+
 export class NeedsView {
   constructor(cx) {
     this.picked = null;
@@ -83,6 +96,7 @@ export class NeedsView {
         .when(Boolean(flash), (el) => el.child(flash));
     }
     const cur = list.find((a) => a.address === this.picked) ?? list[0];
+    const about = aboutBox("needs-about", cur, t);
     const item = (a) => {
       const on = a.address === cur.address;
       const p = a.program;
@@ -107,14 +121,7 @@ export class NeedsView {
         .child(div().text_size(13).text_color(t.muted).child(cur.title || `${cur.space_name} · ${cur.tab_name}`))
         // What the work is for (M3, owner 11-12): context beside the decision, labelled as a Haiku guess with its age;
         // the decision itself still comes from the screen (sendAsk reads it again before anything is sent).
-        .when(Boolean(aboutEntry(cur.address)?.text), (el) => {
-          const e = aboutEntry(cur.address);
-          const stale = isStale(e, sessionTopic(cur) ?? cur.title ?? "");
-          return el.child(v_flex().id("needs-about").gap(3).p(12).rounded(8).bg(t.raised).border(1).border_color(t.border)
-            .child(div().text_size(11.5).font_semibold().text_color(t.muted)
-              .child(`What it's about · auto-written${e.wroteAt ? ` ${agoText(e.wroteAt, Date.now())}` : ""}${stale ? " · may be out of date" : ""}`))
-            .child(div().whitespace_normal().text_size(13).line_height("19px").text_color(t.foreground).child(e.more || e.text)));
-        })
+        .when(Boolean(about), (el) => el.child(about))
         .child(needReason(cur) !== "question"
           ? div().id("needs-ask").text_size(13.5).text_color(t.foreground).child(askDetail(askOf(cur.address)) ?? "Its turn ended handing you a merge decision. Say “merge” in its chat when you're happy with it.")
           : this.cards.view(cur.address, t, "needs-card") ?? this.cards.helperCard(cur.address, t) ?? div().text_size(13).text_color(t.muted)

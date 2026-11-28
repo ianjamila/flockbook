@@ -48,7 +48,7 @@ eq("dance: loop periods at least 100 ms (the API floor)", [R.DANCE.hop.period, R
 
 // Owner 11-14 s29 ("when im in overview, it should show all running sessions in all workspaces … instead of just the
 // last workspace i visited"): on the Overview the list shows every workspace's tabs, each workspace under its name.
-const R2 = new Function(pure + "; return { listMode, allRows, allHeadText };")();
+const R2 = new Function(pure + "; return { listMode, allRows, allHeadText, kindHeadText, kindEmptyText };")();
 eq("mode: Overview → all", R2.listMode("overview"), "all");
 eq("mode: chat / tab / none → space", ["chat", "tab", null, undefined].map(R2.listMode), ["space", "space", "space", "space"]);
 const SPACES = [
@@ -66,7 +66,11 @@ eq("all rows: a workspace without a tabs list → skipped", R2.allRows([{ id: "x
 eq("all head: count of every tab", R2.allHeadText(3), "All workspaces · 3");
 // Owner 11-14 s29 ("i want to do your suggestions"): Needs you spans every workspace too; tabs waiting on you lead their
 // workspace's group (in tab order among themselves); a heading knows the tab to open (the workspace's shown tab, else its first).
-eq("mode: Needs you → all", R2.listMode("needs"), "all");
+eq("mode: Needs you / Finished → their own kind (owner 11-28: only their tabs; everything on the Overview)", ["needs", "finished"].map(R2.listMode), ["needs", "finished"]);
+eq("kind head / empty lines", [R2.kindHeadText("needs", 2), R2.kindHeadText("finished", 1), R2.kindEmptyText("needs"), R2.kindEmptyText("finished")],
+  ["Needs you · 2", "Finished · 1", "Nothing waits for you", "Nothing finished"]);
+eq("kind rows: only the kept tabs; a workspace left with none gets no heading",
+  R2.allRows(SPACES, title, undefined, (tab) => tab.id === "d").map((r) => (r.kind === "space" ? `# ${r.text}` : r.tab.id)), ["# api on pc-wsl · 1", "d"]);
 const W = [{ id: "w", name: "w", tabs: [{ id: "p", index: 1 }, { id: "q", index: 2, active: true }, { id: "r", index: 3 }, { id: "s", index: 4 }] }];
 const waits = (tab) => tab.id === "r" || tab.id === "s";
 eq("all rows: tabs waiting on you first, each part in tab order", R2.allRows(W, title, waits).filter((r) => r.kind === "tab").map((r) => r.tab.id), ["r", "s", "p", "q"]);

@@ -13,6 +13,7 @@ import { readHandoff, readFull } from "./handoff-read.js";
 import { readAnswer, joinNote, begin, runPrompt, reenter, canReenterRead, DROP_MS, CHANGED, COPY_FAILED } from "./reenter-run.js";
 import { startTop, overBar, barOver, barRoom, noteScreenHeight } from "./top.js";
 import { withSnapshot } from "./parked.js";
+import { aboutBox } from "./needs.js";
 
 // A read that gave no prompt (the helper failed, or the reply was not logged yet) is tried again after this long.
 export const RETRY_MS = 5000;
@@ -282,6 +283,8 @@ export class FinishedView {
     else body = div().id("fin-prompt").whitespace_normal().p(12).rounded(8).bg(t.raised).border(1).border_color(t.border)
       .text_size(13).line_height("19px").text_color(t.foreground).child(r.prompt);
     const hasPrompt = Boolean(r?.prompt);
+    // What the work (the PR) is about, as on Needs you (owner 11-28): above the prompt, so the owner sees what they re-enter.
+    const about = aboutBox("fin-about", cur, t);
     return watchEdge(h_flex().id("finished-root").size_full().min_h(0).items_start())
       .child(v_flex().id("finished-list").w(340).flex_none().h_full().p(10).gap(2).border_r(1).border_color(t.border)
         .overflow_y_scrollbar()
@@ -290,6 +293,7 @@ export class FinishedView {
       .child(v_flex().id("finished-detail").flex_1().min_w(0).h_full().overflow_y_scrollbar().p(24).gap(12)
         .child(div().text_size(18).font_semibold().text_color(t.foreground).child(agentName(cur)))
         .child(div().text_size(13).text_color(t.muted).child(cur.title || `${cur.space_name} · ${cur.tab_name}`))
+        .when(Boolean(about), (el) => el.child(about))
         .child(body)
         .child(h_flex().gap(8).items_center()
           .when(canRe, (el) => el.child(this.button("fin-reenter", run?.state === "running" ? "Re-entering…" : "Clear & re-enter", true, t,

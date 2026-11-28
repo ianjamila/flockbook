@@ -7,6 +7,7 @@ import { agent, space, passBlockGrace } from "./fixtures.mjs";
 import { SideView, tabMarks, monogram } from "../mods/flockbook/side.js";
 import { NeedsView } from "../mods/flockbook/needs.js";
 import { FinishedView, RETRY_MS } from "../mods/flockbook/finished.js";
+import { TabsView } from "../mods/flockbook/tabs.js";
 import { KEY_AGENT, reentering, reenterRuns } from "../mods/flockbook/state.js";
 import { replyHandoff } from "../mods/flockbook/blocks.js";
 
@@ -70,7 +71,7 @@ test("finished: only hand-off-given tabs — never a working, blocked, asking or
   fake.shared["flockbook.asks"] = { t5: { kind: "merge", pr: 5 } };
   fake.shared["flockbook.background"] = { t6: { shells: 0, agents: 1 } };
   assert.deepEqual(finished().map((a) => a.address), ["t4"]);
-  assert.equal(listMode("finished"), "all", "Finished spans every workspace, as Needs you does");
+  assert.equal(listMode("finished"), "finished", "Finished lists only its own tabs (from every workspace)");
 });
 
 // The Finished screen: the hand-off tabs on the left, the picked one's re-entry prompt and Copy buttons on the right.
@@ -113,6 +114,45 @@ test("finished screen: the hand-off tabs, the picked one's prompt, Copy full onl
   assert.ok(!byId(el, "fin-copy") && !byId(el, "fin-full") && byId(el, "fin-open"), "no prompt: Open tab only");
   byId(el, "fin-open")._h.on_click({}, fakeCx());
   assert.equal(fake.shared[KEY_AGENT], "t6");
+});
+
+// Owner 11-28: "in the finished tab, add summary details of what the PR is about" — the tab's About text (as on Needs
+// you) above its prompt; none written yet → no box.
+test("finished screen: what the picked tab's work is about, above its prompt", async () => {
+  finishedSetup();
+  fake.shared["flockbook.about"] = { t4: { text: "Unlinked users table", more: "PR #2725 adds a table of users with no employee link.", wroteAt: Date.now(), wroteTitle: "" } };
+  const v = new FinishedView(fakeCx());
+  feedOf(v, { t4: "Re-entry prompt:\n\n> P4.", t6: "Re-entry prompt:\n\n> P6." });
+  let el = (await load(v), paint(v));
+  assert.match(textOf(byId(el, "fin-about")), /What it's about · auto-written/);
+  assert.match(textOf(byId(el, "fin-about")), /PR #2725 adds a table of users with no employee link\./);
+  byId(el, "fin-t6")._h.on_click({}, fakeCx());
+  el = (await load(v), paint(v));
+  assert.ok(!byId(el, "fin-about"), "t6 has no About text yet: no box");
+  assert.match(textOf(byId(el, "finished-detail")), /P6\./);
+});
+
+// Owner 11-28: "on the finished tab and needs you tab show only the terminals/tabs for those categories not everything.
+// everything will just be shown on the overview" — the tab list on the right follows the screen.
+test("tab list: Finished and Needs you list only their own tabs; the Overview lists every tab", () => {
+  finishedSetup();
+  fake.agents.push(agent("t9", "working"));
+  fake.spaces = [space("sp1", { tabs: ["t1", "t4", "t6", "t9"].map((a, i) => ({ id: `tb-${a}`, index: i + 1 })) })];
+  fake.shared["flockbook.handoff"] = marks;
+  const shownRows = () => ["t1", "t4", "t6", "t9"].filter((a) => byId(new TabsView(fakeCx()).render(fakeCx()), `vtab-tb-${a}`));
+  const headLine = () => { fake.props = { part: "head" }; const h = textOf(new TabsView(fakeCx()).render(fakeCx())); fake.props = {}; return h; };
+  fake.shared["flockbook.screen"] = "finished";
+  assert.deepEqual(shownRows(), ["t4", "t6"]);
+  assert.match(headLine(), /Finished · 2/);
+  fake.shared["flockbook.screen"] = "needs";
+  assert.deepEqual(shownRows(), ["t1"]);
+  assert.match(headLine(), /Needs you · 1/);
+  fake.shared["flockbook.screen"] = "overview";
+  assert.deepEqual(shownRows(), ["t1", "t4", "t6", "t9"]);
+  assert.match(headLine(), /All workspaces · 4/);
+  fake.shared["flockbook.screen"] = "finished";
+  fake.shared["flockbook.handoff"] = {};
+  assert.match(textOf(new TabsView(fakeCx()).render(fakeCx())), /Nothing finished/);
 });
 
 test("finished screen: the picked tab leaves (it re-entered) → the first one shows; none left → Nothing finished", async () => {

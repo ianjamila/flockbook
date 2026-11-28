@@ -4,14 +4,15 @@
 // Hide; window_drag like the top bar) and "list" (one row per tab). Per row: the program's icon, the status
 // mark, the tab's name (background work in words on a second line), then a bell when the session waits for you, the "moved here" badge, and × on the
 // shown tab (else a faint ⌘1–⌘9 hint). The shown tab scrolls into sight. Click shows the tab, a double-click keeps its topic as its name (or renames), right-click is
-// the tab menu, and press-and-drag reorders. While the list shows, the top bar hides its own strip.
+// the tab menu, and press-and-drag reorders. While the list shows, the top bar hides its own strip. On the Overview it
+// lists every workspace's tabs; on Needs you and Finished only the tabs those screens list (owner 11-28).
 import { div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
 import { theme, run, openOverlay, props } from "herdr";
 import { spaces, withSnapshot } from "./parked.js";
 import { spaceTitle } from "./machines.js";
 import { openMenu, tabItems, suggestBadge } from "./menu.js";
-import { watchGrace, spaceTabs, shownScreen, openTab, tabAgents, tabLabel, sessionTitle, subStatus, tabStatus, needReason, keepOrRename, showTab, closeTab, icon, toggleTablist, answerInTerminal, noteWidth, KEY_LIST_W } from "./state.js";
+import { watchGrace, spaceTabs, shownScreen, openTab, tabAgents, tabLabel, sessionTitle, subStatus, tabStatus, needReason, keepOrRename, showTab, closeTab, icon, toggleTablist, answerInTerminal, noteWidth, KEY_LIST_W, needing, finished } from "./state.js";
 import { elicitOf } from "./asks.js";
 import { withHover } from "./hover.js";
 import { statusMark, BAR_H } from "./top.js";
@@ -55,19 +56,31 @@ export function headText(spaceName, n) {
 }
 // What the list shows on `screen` (shownScreen): "all" on the Overview, every workspace's tabs (owner 11-14 s29: "when
 // im in overview, it should show all running sessions in all workspaces … instead of just the last workspace i
-// visited"), and on Needs you, which spans every workspace too; else "space", the shown workspace's.
+// visited"); "needs" / "finished" on those screens, only their own tabs from every workspace (owner 11-28: "on the
+// finished tab and needs you tab show only the terminals/tabs for those categories not everything. everything will just
+// be shown on the overview"); else "space", the shown workspace's.
 export function listMode(screen) {
-  return screen === "overview" || screen === "needs" || screen === "finished" ? "all" : "space";
+  if (screen === "overview") return "all";
+  if (screen === "needs" || screen === "finished") return screen;
+  return "space";
+}
+// The head's line on a screen that lists one kind of tab ("Needs you · 2"); and the line when it has none.
+export function kindHeadText(mode, n) {
+  return `${mode === "needs" ? "Needs you" : "Finished"} · ${n}`;
+}
+export function kindEmptyText(mode) {
+  return mode === "needs" ? "Nothing waits for you" : "Nothing finished";
 }
 // The rows of the "all" list: per workspace with tabs (in the sidebar's order), a heading { kind: "space", space,
 // text: "eaglewatch · 5 · 2 waiting", open: the tab a click on it shows (the workspace's shown tab, else its first) },
 // then its tabs { kind: "tab", space, tab, waits }; put-away tabs (tab.settle) left out, as in the Overview. Tabs that
 // wait on you (`waits(tab)`: a question, an ask, results to read) lead their workspace's group, each part in tab order.
-// `title(space)`: the workspace's name (machines.js spaceTitle, "api on pc-wsl").
-export function allRows(spaceList, title, waits = () => false) {
+// `title(space)`: the workspace's name (machines.js spaceTitle, "api on pc-wsl"). `keep(tab)`: only the tabs it keeps
+// (Needs you / Finished list only theirs); a workspace left with none gets no heading.
+export function allRows(spaceList, title, waits = () => false, keep = () => true) {
   const out = [];
   for (const s of spaceList ?? []) {
-    const tabs = (s.tabs ?? []).filter((t) => !t.settled);
+    const tabs = (s.tabs ?? []).filter((t) => !t.settled && keep(t));
     if (!tabs.length) continue;
     const marked = tabs.map((tab) => ({ kind: "tab", space: s, tab, waits: Boolean(waits(tab)) }));
     const n = marked.filter((r) => r.waits).length;
@@ -104,16 +117,23 @@ function programMark(a, t, color, dance = null) {
 // A tab that waits on you: a question / ask (needReason, the row's bell) or results / a merge to see (subStatus owner).
 const waitsOnYou = (tab) => { const a = tabAgents(tab.id)[0]; return Boolean((a && needReason(a)) || subStatus(tab)?.owner); };
 
+// On Needs you / Finished: whether a tab is one that screen lists (its agent is in needing() / finished()); else null.
+function keepFor(mode) {
+  if (mode !== "needs" && mode !== "finished") return null;
+  const listed = new Set((mode === "needs" ? needing() : finished()).map((a) => a.address));
+  return (tab) => tabAgents(tab.id).some((a) => listed.has(a.address));
+}
+
 function head(t) {
   const space = spaces().find((s) => s.active);
-  const all = listMode(shownScreen()) === "all";
-  const n = all ? allRows(spaces(), spaceTitle).filter((r) => r.kind === "tab").length : spaceTabs().length;
+  const mode = listMode(shownScreen()), keep = keepFor(mode), all = mode !== "space";
+  const n = all ? allRows(spaces(), spaceTitle, undefined, keep ?? undefined).filter((r) => r.kind === "tab").length : spaceTabs().length;
   const stop = (_e, cx) => cx.stop_propagation();
   const button = (id, child, action, tip) => div().id(id).tooltip(tip).size(26).flex_none().flex().items_center().justify_center().rounded(13)
     .text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
     .on_mouse_down("left", stop).on_click(action).child(child);
   return h_flex().id("tabs-head").size_full().h(BAR_H).pl(14).pr(8).gap(4).items_center().bg(t.chrome).border_l(1).border_color(t.border)
-    .child(div().flex_1().min_w(0).truncate().text_size(12).font_weight(600).text_color(t.muted).child(all ? allHeadText(n) : headText(spaceTitle(space), n)))
+    .child(div().flex_1().min_w(0).truncate().text_size(12).font_weight(600).text_color(t.muted).child(keep ? kindHeadText(mode, n) : all ? allHeadText(n) : headText(spaceTitle(space), n)))
     .child(button("tabs-new", svg(icon("plus")).size(15), () => openOverlay(newMenuSpec()), "New tab (⌘T)"))
     .child(button("tabs-hide", svg(icon("tablist")).size(15), () => toggleTablist(), "Hide the tab list (⌥⌘B)"));
 }
@@ -121,9 +141,10 @@ function head(t) {
 function list(t, view) {
   // On the Overview: every workspace's tabs, each workspace under its name (allRows). No tab is "shown" there, so no
   // row is picked, none has ×, the ⌘1–⌘9 hints (they select the shown workspace's tabs) are left out, a click opens the
-  // tab in its workspace (as an Overview card does), and rows do not drag (reordering is per workspace).
-  const all = listMode(shownScreen()) === "all";
-  const rows = all ? allRows(spaces(), spaceTitle, waitsOnYou) : null;
+  // tab in its workspace (as an Overview card does), and rows do not drag (reordering is per workspace). Needs you and
+  // Finished show the same, with only their own tabs (every Needs you tab waits on you: no "waiting" split there).
+  const mode = listMode(shownScreen()), keep = keepFor(mode), all = mode !== "space";
+  const rows = all ? (keep ? allRows(spaces(), spaceTitle, undefined, keep) : allRows(spaces(), spaceTitle, waitsOnYou)) : null;
   const tabs = all ? rows.filter((r) => r.kind === "tab").map((r) => r.tab) : spaceTabs();
   // A newly shown tab scrolls into sight (rows already in sight stay put).
   const at = all ? -1 : tabs.findIndex((x) => x.active), shownId = at >= 0 ? tabs[at].id : null;
@@ -214,7 +235,7 @@ function list(t, view) {
       ? v_flex().id("tabs-scroll").when(Boolean(view.scroll), (el) => el.track_scroll(view.scroll)).flex_1().min_h(0).px(6).pb(8).gap(2).overflow_y_scroll()
         .when(Boolean(dragging), (el) => el.cursor_grabbing())
         .children(all ? rows.map((r, i) => (r.kind === "space" ? spaceHead(r, i) : row(r.tab, r.space))) : tabs.map((x) => row(x)))
-      : div().px(14).py(6).text_size(12.5).text_color(t.muted).child(all ? "No tabs open" : "No tabs in this space"));
+      : div().px(14).py(6).text_size(12.5).text_color(t.muted).child(keep ? kindEmptyText(mode) : all ? "No tabs open" : "No tabs in this space"));
 }
 
 export class TabsView {
