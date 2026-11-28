@@ -1,7 +1,7 @@
 // Weekly usage left at the bottom of the side bar (owner 11-15 s35): per Claude account (the "accounts" setting) and
 // Codex, the freshest reading from this computer or any connected machine, polled by the mod and drawn from one shared
 // key. Render calls no helper (s33: Herdr cuts off slow renders).
-import { test, beforeEach } from "node:test";
+import { test, beforeEach, afterEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import { fake, log, reset } from "./stub/herdr.mjs";
 import { textOf, byId } from "./stub/ui.mjs";
@@ -23,7 +23,10 @@ const data = (sources) => ({ sources: Object.fromEntries(Object.entries(sources)
 const answer = (lines) => ({ code: 0, stdout: [{ type: "header", protocol: 1, sidecar: "0.1.0", cmd: "usage" }, ...lines, { type: "end", ok: true, ms: 1 }].map((l) => JSON.stringify(l)).join("\n"), stderr: "" });
 const failure = (code) => answer([{ type: "error", code, message: code }]);
 
+// The clock is pinned to NOW: the readings and reset times below are fixed dates, so a real clock past the reset
+// (Sun 22 Nov) made every row say "the weekly limit has reset" (flockbook#7, 11-28).
 beforeEach(() => {
+  mock.timers.enable({ apis: ["Date"], now: NOW });
   reset();
   fake.props = undefined;
   fake.settings = { zoom: 1 };                           // dark (some tests switch to light)
@@ -34,6 +37,8 @@ beforeEach(() => {
   fake.shared[KEY_CONFIG] = { file: { accounts: [PERSONAL, WORK] } };
   fake.exec = () => ({ code: 127, stdout: "", stderr: "" });
 });
+
+afterEach(() => { mock.timers.reset(); });
 
 const draw = (d) => {
   if (d) fake.shared[KEY_USAGE] = d;
